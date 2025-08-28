@@ -49,4 +49,4 @@ CUDA_VISIBLE_DEVICES=1 python tools/train.py     --config_file configs/omnire.ya
   - 0828_1cams_chery_dist_lidar: pixel.source.undistort=False  downscale_when_loading=2   load_lidar=True
   - 0828_1cams_chery_dist1_lidar：pixel.source.undistort=True  downscale_when_loading=1   load_lidar=True
   - 0828_1cams_chery_dist1：pixel.source.undistort=True  downscale_when_loading=2   load_lidar=False
-    ps：所有 downscale_when_loading=2 是因为修改了datasets/dataset_meta.py 的waymo 0的分辨率
+  - ps：所有 downscale_when_loading=2 是因为修改了datasets/dataset_meta.py 的waymo 0的分辨率
