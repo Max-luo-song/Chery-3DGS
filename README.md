@@ -39,3 +39,14 @@ CUDA_VISIBLE_DEVICES=1 python tools/train.py     --config_file configs/omnire.ya
   - drivestudio/datasets/waymo/waymo_sourceloader.py中429-454 中增加is_chery判断，chery数据初始化雷达14维数据
   - drivestudio/datasets/driving_dataset.py中290-296中增加self.lidar_source != None判断，随机初始化点云
   - drivestudio/utils/camera.py中增加多车道视觉变换渲染函数
+### update in 20250828
+- config_file修改内容
+  - 0828omnire_chery_dist 视觉版本无变化
+  - 0828omnire_chery_dist_60000 视觉版本训练改为60000次
+  - 0828omnire_chery_dist_lidar 视觉+雷达版本 无变化
+- dataset修改内容
+  - 0828_1cams_chery_dist：pixel.source.undistort=False  downscale_when_loading=2   load_lidar=False
+  - 0828_1cams_chery_dist_lidar: pixel.source.undistort=False  downscale_when_loading=2   load_lidar=True
+  - 0828_1cams_chery_dist1_lidar：pixel.source.undistort=True  downscale_when_loading=1   load_lidar=True
+  - 0828_1cams_chery_dist1：pixel.source.undistort=True  downscale_when_loading=2   load_lidar=False
+    ps：所有 downscale_when_loading=2 是因为修改了datasets/dataset_meta.py 的waymo 0的分辨率
