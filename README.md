@@ -50,3 +50,12 @@ CUDA_VISIBLE_DEVICES=1 python tools/train.py     --config_file configs/omnire.ya
   - 0828_1cams_chery_dist1_lidar：pixel.source.undistort=True  downscale_when_loading=1   load_lidar=True
   - 0828_1cams_chery_dist1：pixel.source.undistort=True  downscale_when_loading=2   load_lidar=False
   - ps：所有 downscale_when_loading=2 是因为修改了datasets/dataset_meta.py 的waymo 0的分辨率
+### update in 20250829
+- dataset新增内容
+  - 0829_1cams_chery_undistort_w_scaled_w_lidar：use_intrinsics_scaled=True（新增）
+  - 0829_1cams_chery_undistort_wo_scaled_w_lidar：use_intrinsics_scaled=False（新增）
+- 当前核心代码修改部分
+  - datasets/base/pixel_source.py：在CameraData中新增use_intrinsics_scaled参数，用于设置是否在去畸变后使用新的内参，用作图像缩放
+  - datasets/base/pixel_source.py：所有cv2.undistort函数中增加设置新相机内参的功能（对于use_intrinsics_scaled=True的情况存在bug）
+  - datasets/waymo/waymo_sourceloader.py：在WaymoCameraData中增加intrinsics_scaled相关参数及处理，用于图像去畸变；并修复了畸变系数的读取
+  - chery/data_match.py：generate_intrinsics函数中修正了内参文件的数据格式
