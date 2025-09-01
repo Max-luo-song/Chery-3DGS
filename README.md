@@ -20,6 +20,14 @@ git branch -M main
 git push -uf origin main
 ```
 
+## ***开发规则***
+主分支：main
+NOTE：主分支设置为protected，不能直接推代码，***必须提交MR进行合入***
+MR示例：https://gitlab.mychery.com/zpilot4.0/scene_reconstruction/-/merge_requests/2
+***提交MR时需要选择模板并填写相应信息***
+![""](docker/images/20250901-140204.jpg)
+
+
 ## Integrate with your tools
 
 - [ ] [Set up project integrations](https://gitlab.mychery.com/zpilot4.0/scene_reconstruction/-/settings/integrations)
