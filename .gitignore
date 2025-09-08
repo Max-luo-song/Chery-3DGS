@@ -9,3 +9,8 @@ cmake-build*
 *.tar.gz
 tmp
 tmep
+temp
+output
+*.pyc
+__pycache__/
+docker/copy/opt/requirements.txt

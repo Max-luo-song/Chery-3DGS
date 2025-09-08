@@ -1,101 +1,182 @@
-# scene_reconstruction
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/media/logo.png">
+    <img alt="Logo" src="docs/media/logo_clipped.png" width="700">
+  </picture>
+</p>
+<p align="center">
+A 3DGS framework for omni urban scene reconstruction and simulation!
+</p>
 
+<p align="center">
+    <!-- project -->
+    <a href="https://ziyc.github.io/omnire/"><img src="https://img.shields.io/badge/Project-Page-FFFACD" height="28"/></a>
+    <!-- paper -->
+    <a href="https://arxiv.org/abs/2408.16760">
+        <img src='https://img.shields.io/badge/arXiv-Paper-E6E6FA' height="28"/>
+    </a>
+</p>
 
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/08e6c613-f61a-4d0d-a2a9-1538fcd4f5ff" width="49%" style="max-width: 100%; height: auto;" />
+  <img src="https://github.com/user-attachments/assets/d2a47e7d-2934-46de-94d6-85ea8a52aba6" width="49%" style="max-width: 100%; height: auto;" />
+</p>
 
-## Getting started
+## About
+DriveStudio is a 3DGS codebase for urban scene reconstruction/simulation. It offers a system with multiple Gaussian representations to jointly reconstruct backgrounds, vehicles, and non-rigid categories (pedestrians, cyclists, etc.) from driving logs. DriveStudio also provides a unified data system supporting various popular driving datasets, including [Waymo](https://waymo.com/open/), [PandaSet](https://pandaset.org/), [Argoverse2](https://www.argoverse.org/av2.html), [KITTI](http://www.cvlibs.net/datasets/kitti/), [NuScenes](https://www.nuscenes.org/), and [NuPlan](https://www.nuscenes.org/nuplan).
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+This codebase also contains the **official implementation** of:
+  > **OmniRe: Omni Urban Scene Reconstruction** <br> [Project Page](https://ziyc.github.io/omnire/) | [Paper](https://arxiv.org/abs/2408.16760) <br> [Ziyu Chen](https://ziyc.github.io/), [Jiawei Yang](https://jiawei-yang.github.io/), [Jiahui Huang](https://huangjh-pub.github.io/), [Riccardo de Lutio](https://riccardodelutio.github.io/), [Janick Martinez Esturo](https://www.jme.pub/), [Boris Ivanovic](https://www.borisivanovic.com/), [Or Litany](https://orlitany.github.io/), [Zan Gojcic](https://zgojcic.github.io/), [Sanja Fidler](https://www.cs.utoronto.ca/~fidler/), [Marco Pavone](https://stanford.edu/~pavone/), [Li Song](https://medialab.sjtu.edu.cn/author/li-song/), [Yue Wang](https://yuewang.xyz/)
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+# 🎉 Try your own projects/research on DriveStudio!
+### 🔥 Highlighted implementations
 
-## Add your files
+Our codebase supports two types of Gaussian trainers:
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+1. Single-Representation trainer (single Gaussian representation for the entire scene):
+   - Deformable Gaussians
+   - Periodic Vibration Gaussians
 
+2. Multi-Representation trainer (Gaussian scene graphs trainer):
+   - Background: Static Gaussians (Vanilla Gaussians)
+   - Vehicles: Static Gaussians
+   - Humans: SMPL-Gaussians, Deformable Gaussians
+   - Other non-rigid categories: Deformable Gaussians
+
+**Implemented methods:**
+
+| Method Name | Implementation | Trainer Type | Gaussian Representations |
+|-------------|----------------|--------------|--------------------------|
+| [OmniRe](https://ziyc.github.io/omnire/) | Official | Multi | • Static Gaussians: Background, Vehicles<br>• SMPL Gaussians: Pedestrians (majority)<br>• Deformable Gaussians: Cyclists, far-range pedestrians, other non-rigid categories |
+| [Deformable-GS](https://github.com/ingra14m/Deformable-3D-Gaussians) | Unofficial | Single | • Deformable Gaussians: Entire scene |
+| [PVG](https://github.com/fudan-zvg/PVG) | Unofficial | Single | • Periodic Vibration Gaussians: Entire scene |
+| [Street Gaussians](https://github.com/zju3dv/street_gaussians) | Unofficial | Multi | • Static Gaussians: Background, Vehicles |
+
+We extend our gratitude to the authors for their remarkable contributions. If you find these works useful, please consider citing them.
+
+### 🚗 Dataset Support
+This codebase provides support for popular driving datasets. We offer instructions and scripts on how to download and process these datasets:
+
+| Dataset | Instruction | Cameras | Sync Frequency | Object Annotation |
+|---------|-------------|---------|----------------|-------------------|
+| 奇瑞 | [数据预处理指南](docs/Chery.md) | 7 cameras | 10Hz | ✅ |
+| Waymo | [Data Process Instruction](docs/Waymo.md) | 5 cameras | 10Hz | ✅ |
+| NuScenes | [Data Process Instruction](docs/NuScenes.md) | 6 cameras | 2Hz (up to 10Hz*) | ✅ |
+| NuPlan | [Data Process Instruction](docs/Nuplan.md) | 8 cameras | 10Hz | ✅ |
+| ArgoVerse | [Data Process Instruction](docs/ArgoVerse.md) | 7 cameras | 10Hz | ✅ |
+| PandaSet | [Data Process Instruction](docs/Pandaset.md) | 6 cameras | 10Hz | ✅ |
+| KITTI | [Data Process Instruction](docs/KITTI.md) | 2 cameras | 10Hz | ✅ |
+
+*NOTE: For NuScenes data, LiDAR operates at 20Hz and cameras at 12Hz, but keyframes (with object annotations) are only at 2Hz. We provide a method to interpolate annotations up to 10Hz.
+
+### ✨ Functionality
+
+<details>
+<summary>Click to expand functionality details</summary>
+
+We have implemented interesting and useful functionalities:
+
+1. **Flexible multi-camera training:** Choose any combination of cameras for training - single, multiple, or all. You can set these up by **SIMPLY** configuring your selection in the config file.
+
+2. **Powered by gsplat** Integrated [gsplat](https://github.com/nerfstudio-project/gsplat) rasterization kernel with its advanced functions, e.g. absolute gradients, anti-aliasing, etc.
+
+3. **Camera Pose Refinement:** Recognizing that camera poses may not always be sufficiently accurate, we provide a method to refine and optimize these poses.
+
+4. **Objects' GT Bounding Box Refinement:** To address noise in ground truth boxes, we've added this feature to further improve accuracy and robustness.
+
+5. **Affine Transformation:** This feature handles camera exposure and other related issues, enhancing the quality of scene reconstruction. 
+
+6. ...
+
+These functionalities are designed to enhance the overall performance and flexibility of our system, allowing for more accurate and adaptable scene reconstruction across various datasets and conditions.
+</details>
+
+## 📢 Updates
+
+**[Aug 2024]**  Release code of DriveStudio.
+
+## 🔨 Installation
+
+Run the following commands to set up the environment:
+
+```shell
+# Clone the repository with submodules
+git clone --recursive https://github.com/ziyc/drivestudio.git
+cd drivestudio
+
+# Create the environment
+conda create -n drivestudio python=3.9 -y
+conda activate drivestudio
+pip install -r requirements.txt
+pip install git+https://github.com/nerfstudio-project/gsplat.git@v1.3.0
+pip install git+https://github.com/facebookresearch/pytorch3d.git
+pip install git+https://github.com/NVlabs/nvdiffrast
+
+# Set up for SMPL Gaussians
+cd third_party/smplx/
+pip install -e .
+cd ../..
 ```
-cd existing_repo
-git remote add origin https://gitlab.mychery.com/zpilot4.0/scene_reconstruction.git
-git branch -M main
-git push -uf origin main
+
+## 📊 Prepare Data
+We support Chery and most popular public driving datasets. Detailed instructions for downloading and processing each dataset are available in the following documents:
+
+- 奇瑞: [数据预处理指南](docs/Chery.md)
+- Waymo: [Data Process Instruction](docs/Waymo.md)
+- NuScenes: [Data Process Instruction](docs/NuScenes.md)
+- NuPlan: [Data Process Instruction](docs/Nuplan.md)
+- ArgoVerse: [Data Process Instruction](docs/ArgoVerse.md)
+- PandaSet: [Data Process Instruction](docs/Pandaset.md)
+- KITTI: [Data Process Instruction](docs/KITTI.md)
+
+## 🚀 Running
+### Training
+```shell
+export PYTHONPATH=$(pwd)
+start_timestep=0 # start frame index for training
+end_timestep=-1 # end frame index, -1 for the last frame
+
+python tools/train.py \
+    --config_file configs/omnire.yaml \
+    --output_root $output_root \
+    --project $project \
+    --run_name $expname \
+    dataset=waymo/3cams \
+    data.scene_idx=$scene_idx \
+    data.start_timestep=$start_timestep \
+    data.end_timestep=$end_timestep
 ```
 
-## ***开发规则***
-主分支：main
-NOTE：主分支设置为protected，不能直接推代码，***必须提交MR进行合入***
-MR示例：https://gitlab.mychery.com/zpilot4.0/scene_reconstruction/-/merge_requests/2
-***提交MR时需要选择模板并填写相应信息***
-![""](docker/images/20250901-140204.jpg)
+- To run other methods, change `--config_file`. See `configs/` for more options.
+- Specify dataset and number of cameras by setting `dataset`. Examples: `waymo/1cams`, `waymo/5cams`, `pandaset/6cams`, `argoverse/7cams`, etc.
+  You can set up arbitrary camera combinations for each dataset. See `configs/datasets/` for custom configuration details.
+- For over 3 cameras or 450+ images, we recommend using `omnire_extended_cam.yaml`. It works better in practice.
+### Evaluation
+```shell
+python tools/eval.py --resume_from $ckpt_path
+```
 
+## 👏 Contributions
+We're improving our project to develop a robust driving recom/sim system. Some areas we're focusing on:
 
-## Integrate with your tools
+- A real-time viewer for background and foreground visualization
+- Scene editing and simulation tools
+- Other Gaussian representations (e.g., 2DGS, surfels)
 
-- [ ] [Set up project integrations](https://gitlab.mychery.com/zpilot4.0/scene_reconstruction/-/settings/integrations)
+We welcome pull requests and collaborations. If you'd like to contribute or have questions, feel free to open an issue or contact [Ziyu Chen](https://github.com/ziyc) (ziyu.sjtu@gmail.com).
 
-## Collaborate with your team
+## 🙏 Acknowledgments
+We utilize the rasterization kernel from [gsplat](https://github.com/nerfstudio-project/gsplat). Parts of our implementation are based on work from [EmerNeRF](https://github.com/NVlabs/EmerNeRF), [NerfStudio](https://github.com/nerfstudio-project/nerfstudio), [GART](https://github.com/JiahuiLei/GART), and [Neuralsim](https://github.com/PJLab-ADG/neuralsim). We've also implemented unofficial versions of [Deformable-GS](https://github.com/ingra14m/Deformable-3D-Gaussians), [PVG](https://github.com/fudan-zvg/PVG), and [Street Gaussians](https://github.com/zju3dv/street_gaussians), with reference to their original codebases.
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+We extend our deepest gratitude to the authors for their contributions to the community, which have greatly supported our research.
 
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+## Citation
+```
+@article{chen2024omnire,
+    title={OmniRe: Omni Urban Scene Reconstruction},
+    author={Chen, Ziyu and Yang, Jiawei and Huang, Jiahui and Lutio, Riccardo de and Esturo, Janick Martinez and Ivanovic, Boris and Litany, Or and Gojcic, Zan and Fidler, Sanja and Pavone, Marco and Song, Li and Wang, Yue},
+    journal={arXiv preprint arXiv:2408.16760},
+    year={2024}
+}
+```
