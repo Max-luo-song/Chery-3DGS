@@ -1,39 +1,45 @@
-FROM pytorch/pytorch:2.8.0-cuda12.9-cudnn9-runtime
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
-ENV LANG="C.UTF-8"
+ARG MY_HTTP_PROXY
+ARG MY_HTTPS_PROXY
 
-ARG VIMRC="set nu\n\
-set hlsearch\n\
-set tabstop=4\n\
-set shiftwidth=4\n\
-set expandtab\n\
-autocmd FileType cpp,c,h,hpp setlocal tabstop=2 shiftwidth=2 softtabstop=2\n\
-autocmd FileType python setlocal tabstop=4 shiftwidth=4 softtabstop=4\n\
-syntax on\n\
-set autoindent\n\
-set smartindent\n\
-set cindent\n\
-set showmode\n\
-set showcmd\n\
-set encoding=utf-8\n\
-set fileencoding=utf-8\n\
-"
+ENV LANG="C.UTF-8" \
+    DEBIAN_FRONTEND=noninteractive \
+    CONDA_AUTO_UPDATE_CONDA=false \
+    PATH="${PATH}:/opt/conda/bin" \
+    CONDA_ALWAYS_YES=true \
+    CONDA_ACCEPT_LICENSES=yes
 
-ARG GIT_CONFIG="[core]\n\
-    editor = vim\n\
-"
+COPY copy/opt/ /opt/
+RUN cp /opt/configs/.gitconfig /opt/configs/.vimrc /root/ && \
+    cp /opt/configs/pip.conf /etc/ && \
+    cp /etc/apt/sources.list /etc/apt/sources.list.backup && \
+    cp /opt/configs/sources.list /etc/apt/ && \
+    apt clean && apt update && \
+    apt install -y software-properties-common && \
+    add-apt-repository "ppa:ubuntugis/ppa" && \
+    apt install -y aria2 wget clangd clang-format curl libgoogle-glog-dev libgflags-dev \
+        vim sudo git build-essential cmake gdb net-tools libgl1 iputils-ping iproute2
 
-ARG DEBIAN_FRONTEND=noninteractive
+RUN aria2c -x 16 -s 4 -m 3 -i /opt/downloads.txt --summary-interval=1
 
-RUN cp /etc/apt/sources.list /etc/apt/sources.list.backup \
-    && sed -i s@/archive.ubuntu.com/@/mirrors.aliyun.com/@g /etc/apt/sources.list \
-    && apt clean \
-    && apt update \
-    && apt install -y software-properties-common \
-    && add-apt-repository "ppa:ubuntugis/ppa" \
-    && apt install -y clangd clang-format curl libgoogle-glog-dev libgflags-dev vim sudo git build-essential cmake gdb net-tools \
-    && pip install yapf \
-    && echo ${VIMRC} > /root/.vimrc \
-    && echo ${GIT_CONFIG} > /root/.gitconfig
+RUN bash /opt/downloads/Miniconda3-py39_25.7.0-2-Linux-x86_64.sh -b -u -p /opt/conda && \
+    cp /opt/configs/.condarc /opt/conda && conda clean -i && \
+    conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
+    conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r && \
+    mkdir -p /opt/local-conda-channel/linux-64 && \
+    cp /opt/downloads/conda_pkgs/pytorch3d/* /opt/downloads/conda_pkgs/pytorch/* \
+        /opt/local-conda-channel/linux-64/ && \
+    conda install conda-build -y && conda index /opt/local-conda-channel
 
-COPY docker_start_user.sh /tmp/
+RUN /opt/retry.sh conda install pytorch=2.4.1 torchvision torchaudio pytorch-cuda=12.1 \
+        -c file:///opt/local-conda-channel -c pytorch -c nvidia -y
+RUN /opt/retry.sh conda install pytorch3d=0.7.8 -c file:///opt/local-conda-channel -c pytorch -y
+
+ENV http_proxy=$MY_HTTP_PROXY https_proxy=$MY_HTTPS_PROXY
+
+RUN pip install -U pip setuptools wheel && \
+    pip install -r /opt/requirements.txt
+RUN git clone https://github.com/NVlabs/SegFormer /opt/SegFormer && pip install /opt/SegFormer
+
+ENV http_proxy= https_proxy=

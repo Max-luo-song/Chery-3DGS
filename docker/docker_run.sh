@@ -12,7 +12,7 @@ DEV_INSIDE="in-scene-docker"
 function run_docker() {
   local local_host="$(hostname)"
   local display="${DISPLAY:-:0}"
-  local container_id=$(docker run -idt \
+  local container_id=$(${DOCKER_CMD} run -idt \
       --name ${DOCKER_NAME} \
       --runtime=nvidia \
       --gpus all \
@@ -45,18 +45,18 @@ function main() {
     Up*) echo "container is running..." ;;
     *)
       if [ "${container_id}" != "" ]; then
-        docker rm -f ${container_id}
+        ${DOCKER_CMD} rm -f ${container_id}
       fi
       container_id=$(run_docker)
       if [ "${container_id}" == "" ]; then
         echo "start docker error in workspace: ${WS_DIR}"
         exit 1
       fi
-      docker exec -u root "${container_id}" bash -c '/tmp/docker_start_user.sh'
+      ${DOCKER_CMD} exec -u root "${container_id}" bash -c '/opt/docker_start_user.sh && /opt/set_torch_cuda_arch.sh'
     ;;
   esac
 
-  docker exec -u "${DOCKER_USER}" -it ${container_id} /bin/bash 
+  ${DOCKER_CMD} exec -u "${DOCKER_USER}" -it ${container_id} /bin/bash -l
 }
 
 main

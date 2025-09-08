@@ -112,18 +112,80 @@ cd ${WORKSPACE}/docker
 bash build.sh
 # 构建成功后进入容器
 bash docker_run.sh
-# 停止容器（需要的话，一版退出运行的容器直接输入exit或者Ctrl-D即可）
+# 停止容器（需要的话，一般退出运行的容器直接输入exit或者Ctrl-D即可，
+# 但exit不会停止容器，会后台运行，下次运行docker_run.sh依然进去相同容器）
+bash docker_stop.sh  # 真正停止容器，下次docker_run.sh启动新容器
+```
+
+***关于镜像构建***
+正常运行build.sh通过Dockerfile构建镜像，会依赖一些外网的资源，构建时间很久。当前有两种方法
+##### 1. 翻墙后配置代理
+首先ifconfig在本地查看容器ip，一般是172.17.0.1，翻墙后一般会有一个代理端口可以在翻墙软件中查看，然后构建镜像的时候当作参数传进去。
+若配置生效构建时间在30分钟左右
+```shell
+# [port]因翻墙软件不同
+bash build.sh --http_proxy="socks5://172.17.0.1:[port]" --https_proxy="socks5://172.17.0.1:[port]"
+```
+![""](images/20250910-104708.jpg)
+##### 2. 将编译完成的镜像打包好，运行docker命令直接加载
+更适用于华为云GPU机器没有接入外网的场景
+```shell
+# 当前镜像构建完成后，叫做scene/cuda12.1_py39_pyt241:latest
+docker save scene/cuda12.1_py39_pyt241:latest | gzip > scene_cuda12.1_py39_pyt241.tar.gz
+
+# 如果只是使用从这一步开始就可以，不用关心打包镜像
+gunzip -c scene_cuda12.1_py39_pyt241.tar.gz | docker load
+# 加载成功后运行确认有scene/cuda12.1_py39_pyt241 tag的镜像
+docker images
+```
+后续使用和上述介绍相同
+```shell
+bash docker_run.sh
+# or
 bash docker_stop.sh
 ```
+
 ***NOTE***
 - 一个WORKSPACE对应一个容器，可以理解为一个代码目录使用docker_run.sh脚本只能启动一个运行的容器，多次执行只是进入这个容器，容器的名字对应代码目录
+
 ![""](images/20250901-103921.jpg)
+
 - 正常在容器中想要退出，直接输入exit即可（或Ctrl-D）
+
 ![""](images/20250901-105428.jpg)
+
 - 停止容器，需要使用docker_stop.sh，会根据目录索引到容器的NAME，停止掉你的WORKSPACE对应容器，不要使用原生的docker stop命令，容易误删别人目录对应的容器
 - ***容器启动后，会将WORKSPACE挂载在容器内部的/scene_reconstruction目录，即在宿主机WORKSPACE开发的内容，会和容器内/scene_reconstruction同步，反之亦然，谨慎删除操作***
 
 ***
+
+## 容器中运行训练脚本
+```shell
+cd /scene_reconstruction
+# 不同脚本参数可能不一致，跑不通请自行调试
+bash scripts/chery/experiments/0902_train_visual_front_main.sh
+```
+
+运行过程中pytorch会下载一些在线模型
+
+![""](images/20250910-110615.jpg)
+
+如果在测试GPU环境没有外网的情况下，可以在有网环境下载好远程拷贝到容器固定目录
+```shell
+# 在目标机器（这里是训练GPU资源）代码仓库中新建tmp文件夹，用于和容器的数据交互
+mkdir -p /path/to/scene_reconstruction/tmp
+
+# 在有网机器
+wget https://download.pytorch.org/models/alexnet-owt-7be5be79.pth
+scp alexnet-owt-7be5be79.pth {user}@172.26.254.12:/path/to/scene_reconstruction/tmp
+
+# 在目标机器上进入容器内部(bash docker_run.sh)
+# pwd is /scene_reconstruction
+mkdir -p ~/.cache/torch/hub/checkpoints/
+cp /path/to/scene_reconstruction/tmp/alexnet-owt-7be5be79.pth ~/.cache/torch/hub/checkpoints/
+
+bash scripts/chery/experiments/0902_train_visual_front_main.sh
+```
 
 ## VsCode连接Docker容器进行开发
 vscode用的不是很熟，辛苦大家自己也多尝试
@@ -142,5 +204,7 @@ cd ${WORKSPACE}/docker && bash docker_run.sh
 Ctrl-Shift-P选择Open Attached Container Configuration file，再选择scene/pytorch-v0.1会打开一份json文件
 在文件中加入"remoteUser": "llx"保存退出vscode，再次打开并重新attach
 注：llx仅示例，请修改为本地用户
+
 ![""](images/20250901-113241.jpg)
+
 ![""](images/20250901-113329.jpg)
