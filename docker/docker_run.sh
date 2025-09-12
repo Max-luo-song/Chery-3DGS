@@ -1,6 +1,18 @@
 #!/bin/bash
 
+set -e
+
 source ./docker_base.sh
+
+IMAGE_VERSION=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --imgv=*)
+      IMAGE_VERSION="${1#*=}"; shift ;;
+    *) shift ;;
+  esac
+done
 
 export DOCKER_USER="$(id -u -n)"
 export DOCKER_UID="$(id -u)"
@@ -12,6 +24,7 @@ DEV_INSIDE="in-scene-docker"
 function run_docker() {
   local local_host="$(hostname)"
   local display="${DISPLAY:-:0}"
+  local image_name=$(get_image_name "${IMAGE_VERSION}")
   local container_id=$(${DOCKER_CMD} run -idt \
       --name ${DOCKER_NAME} \
       --runtime=nvidia \
@@ -28,8 +41,9 @@ function run_docker() {
       -v ${WS_DIR}:${DOCKER_WS} \
       -v /tmp/.X11-unix:/tmp/.X11-unix \
       -v /etc/localtime:/etc/localtime:ro \
+      -v /data/sfs_turbo:/Data \
       -w ${DOCKER_WS} \
-      ${DOCKER_IMAGE_NAME} /bin/bash)
+      ${image_name} /bin/bash)
 
   echo ${container_id}
 }

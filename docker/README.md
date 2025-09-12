@@ -110,8 +110,8 @@ docker run --rm --gpus all nvidia/cuda:12.2.0-base nvidia-smi
 cd ${WORKSPACE}/docker
 # 首次需要构建镜像
 bash build.sh
-# 构建成功后进入容器
-bash docker_run.sh
+# 构建成功后进入容器，--imgv指定镜像的tag（版本），若不指定，默认取最新tag，使用多版本情况
+bash docker_run.sh  --imgv=20250912164159
 # 停止容器（需要的话，一般退出运行的容器直接输入exit或者Ctrl-D即可，
 # 但exit不会停止容器，会后台运行，下次运行docker_run.sh依然进去相同容器）
 bash docker_stop.sh  # 真正停止容器，下次docker_run.sh启动新容器
@@ -208,3 +208,28 @@ Ctrl-Shift-P选择Open Attached Container Configuration file，再选择scene/py
 ![""](images/20250901-113241.jpg)
 
 ![""](images/20250901-113329.jpg)
+
+***
+
+## Release Note
+
+### 20250912
+
+- 镜像构建时新增tag，tag默认是构建时间，单位到秒，构建成功后如下
+
+  ![](images/20250912-165357.jpg)
+
+- 运行docker_run.sh时，可指定tag，和不同版本镜像做区分，参数为--imgv=[tag]，若不指定，默认选最新
+
+  ```shell
+  bash docker_run.sh --imgv=20250912164159
+  ```
+- 挂载宿主机/data/sfs_turbo进容器的/Data目录
+- pip包改动
+  - numpy==1.26.4（新增）
+  - nuscenes-devkit==1.2.0（新增）
+  - opencv-python==4.11.0.86（原4.12.0.88，不兼容numpy2.0以下，降级）
+- 环境变量新增网络代理，以便在华为云gpu上可通过pip安装包
+  - http_proxy=http://172.26.255.17:3128
+  - https_proxy=http://172.26.255.17:3128
+  - ftp_proxy=http://172.26.255.17:3128
