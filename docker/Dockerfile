@@ -42,4 +42,6 @@ RUN pip install -U pip setuptools wheel && \
     pip install -r /opt/requirements.txt
 RUN git clone https://github.com/NVlabs/SegFormer /opt/SegFormer && pip install /opt/SegFormer
 
-ENV http_proxy= https_proxy=
+ENV http_proxy=http://172.26.255.17:3128 \
+    https_proxy=http://172.26.255.17:3128 \
+    ftp_proxy=http://172.26.255.17:3128
