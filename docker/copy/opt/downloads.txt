@@ -1,27 +1,14 @@
 https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/Miniconda3-py39_25.7.0-2-Linux-x86_64.sh
-  dir=/opt/downloads
+  dir=/opt/downloads/
 
-https://mirrors.sustech.edu.cn/anaconda-extra/cloud/nvidia/linux-64/libcusparse-12.0.2.55-0.tar.bz2
-  dir=/opt/downloads/conda_pkgs/pytorch
-https://mirrors.sustech.edu.cn/anaconda-extra/cloud/nvidia/linux-64/libnpp-12.0.2.50-0.tar.bz2
-  dir=/opt/downloads/conda_pkgs/pytorch
-https://mirrors.sustech.edu.cn/anaconda-extra/cloud/nvidia/linux-64/libcufft-11.0.2.4-0.tar.bz2
-  dir=/opt/downloads/conda_pkgs/pytorch
-https://mirrors.sustech.edu.cn/anaconda-extra/cloud/nvidia/linux-64/libcurand-10.3.10.19-0.conda
-  dir=/opt/downloads/conda_pkgs/pytorch
-https://mirrors.sustech.edu.cn/anaconda-extra/cloud/nvidia/linux-64/libcusolver-11.4.4.55-0.tar.bz2
-  dir=/opt/downloads/conda_pkgs/pytorch
-https://mirrors.sustech.edu.cn/anaconda-extra/cloud/nvidia/linux-64/libcublas-12.1.0.26-0.tar.bz2
-  dir=/opt/downloads/conda_pkgs/pytorch
-https://mirrors.sustech.edu.cn/anaconda/cloud/pytorch/linux-64/torchtriton-3.0.0-py39.tar.bz2
-  dir=/opt/downloads/conda_pkgs/pytorch
-https://mirrors.sustech.edu.cn/anaconda/cloud/pytorch/linux-64/pytorch-2.4.1-py3.9_cuda12.1_cudnn9.1.0_0.tar.bz2
-  dir=/opt/downloads/conda_pkgs/pytorch
+https://download.pytorch.org/models/alexnet-owt-7be5be79.pth
+  dir=/opt/downloads/
 
-https://mirrors.sustech.edu.cn/anaconda/cloud/pytorch3d/linux-64/pytorch3d-0.7.8-py39_cu121_pyt241.tar.bz2
-  dir=/opt/downloads/conda_pkgs/pytorch3d
+https://mirrors.sustech.edu.cn/anaconda/cloud/pytorch3d/linux-64/pytorch3d-0.7.8-py39_cu121_pyt231.tar.bz2
+  dir=/opt/local-conda-ch/main/linux-64/
 
-https://www.piwheels.org/simple/mmcv-full/mmcv_full-1.7.2-py2.py3-none-any.whl
-  dir=/opt/downloads/whls
-https://download.pytorch.org/whl/cu121/xformers-0.0.28-cp39-cp39-manylinux_2_28_x86_64.whl
-  dir=/opt/downloads/whls
+http://nexus.izdrive.ai:8081/repository/zark/scene/segformer.b5.1024x1024.city.160k.pth
+  dir=/opt/SegFormer/pretrained/
+
+https://download.openmmlab.com/mmsegmentation/v0.5/segformer/segformer_mit-b5_8x1_1024x1024_160k_cityscapes/segformer_mit-b5_8x1_1024x1024_160k_cityscapes_20211206_072934-87a052ec.pth
+  dir=/opt/mmsegmentation/checkpoints/

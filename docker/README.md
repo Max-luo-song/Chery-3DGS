@@ -233,3 +233,30 @@ Ctrl-Shift-P选择Open Attached Container Configuration file，再选择scene/py
   - http_proxy=http://172.26.255.17:3128
   - https_proxy=http://172.26.255.17:3128
   - ftp_proxy=http://172.26.255.17:3128
+
+### 20250919
+- ***cuda版本为12.1***，后续有需要再升级
+- 镜像中新增三个conda环境，进入容器默认激活main，各环境基本信息如下
+  - main
+    - 主要功能：运行预处理脚本与主程序（训练）
+    - python: 3.9
+    - pytorch: 2.3.1
+    - pytorch3d: 0.7.8
+    - 执行数据与处理：bash scripts/chery/preprocess_data.sh
+    - 执行主程序：bash scripts/chery/experiments/0902_train_visual_front_main.sh
+    - ***注意***：预处理与主程序之间还有sky_mask，需要在segformer或mmseg2中运行
+  - segformer（按照RADME中部署的版本）
+    - python: 3.8
+    - pytorch: 1.8.1
+    - mmcv-full: 1.2.7
+    - SegFormer：git最新版（4年前更新）
+    - 执行提取sky_mask脚本：bash scripts/chery/extract_sky_masks.sh
+    - ***注意***：segformer使用的pytorch不支持sm_90，即我们使用的H100，仅能在自己开发机运行，***segformer环境不推荐使用***
+  - mmseg2
+    - python: 3.9
+    - pytorch: 2.1.2
+    - mmcv: 2.1.0
+    - mmsegmentation: 1.2.2
+    - 执行提取sky_mask脚本：***bash scripts/chery/extract_sky_masks_mmseg2.sh***
+    - ***注意***： 此环境使用最新版mmsegmentation替换segformer（最新版集成了segformer），***建议使用此环境进行mask提取***
+
