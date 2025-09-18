@@ -9,7 +9,7 @@ function path_to_name() {
   echo "${name}"
 }
 
-DOCKER_REPO="scene/cuda12.1_py39_pyt241"
+DOCKER_REPO="scene/cuda12.1_py39_pyt231"
 DOCKER_WS=/scene_reconstruction
 
 WS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

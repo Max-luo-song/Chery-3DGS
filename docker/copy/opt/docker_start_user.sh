@@ -15,7 +15,10 @@ function _create_user_account() {
 
   local user_home="/home/${user_name}"
   cp /root/.bashrc /root/.vimrc /root/.gitconfig ${user_home}
+  local user_torch_ck_dir="${user_home}/.cache/torch/hub/checkpoints"
+  mkdir -p ${user_torch_ck_dir} && cp /opt/downloads/alexnet-owt-7be5be79.pth ${user_torch_ck_dir}/
   chown -R "${uid}:${gid}" ${user_home}/.*
+  echo "source /opt/conda/etc/profile.d/conda.sh && conda activate main" >> ${user_home}/.bashrc
 }
 
 function setup_user_account_if_not_exist() {

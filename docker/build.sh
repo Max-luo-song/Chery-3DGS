@@ -44,6 +44,6 @@ BEIJING_TIME=$(get_beijing_time)
 ${DOCKER_CMD} build \
   --build-arg MY_HTTP_PROXY=${my_http_proxy} \
   --build-arg MY_HTTPS_PROXY=${my_https_proxy} \
-  -t scene/cuda12.1_py39_pyt241:${BEIJING_TIME} .
+  -t ${DOCKER_REPO}:${BEIJING_TIME} .
 
 rm ./copy/opt/requirements.txt

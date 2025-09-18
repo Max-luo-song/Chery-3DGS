@@ -2,12 +2,13 @@
 
 # Usage: ./retry.sh <command>
 
+set +e
+
 max=3
 interval=5
-cmd="$@"
 
 n=0
-until $cmd; do
+until "$@"; do
   n=$((n+1))
   if [ $n -ge $max ]; then
     echo "Command failed after $max attempts."
