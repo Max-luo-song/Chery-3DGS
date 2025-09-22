@@ -1,6 +1,7 @@
 import argparse
 import numpy as np
-
+import sys 
+sys.path.append(".")
 if __name__ == "__main__":
     """
     Unified Dataset preprocessing script
@@ -13,7 +14,8 @@ if __name__ == "__main__":
     - KITTI
     - NUPlan
     - PandaSet
-
+    - Chery
+    
     Usage:
     ------
     python datasets/preprocess.py \
@@ -109,7 +111,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--scene_ids",
         default=None,
-        type=int,
+        # type=int,
         nargs="+",
         help="scene ids to be processed, a list of integers separated by space. Range: [0, 798] for training, [0, 202] for validation",
     )
@@ -173,7 +175,19 @@ if __name__ == "__main__":
     else:
         scene_ids_list = np.arange(args.start_idx, args.start_idx + args.num_scenes)
 
-    if args.dataset == "waymo":
+    if args.dataset == "chery":
+        from datasets.chery.chery_preprocess import CheryProcessor
+        
+        scene_ids_list = [str(scene_id) for scene_id in scene_ids_list]
+        dataset_processor = CheryProcessor(
+            load_dir=args.data_root,
+            save_dir=args.target_dir,
+            prefix=args.split,
+            process_keys=args.process_keys,
+            process_id_list=scene_ids_list,
+            workers=args.workers,
+        )
+    elif args.dataset == "waymo":
         from datasets.waymo.waymo_preprocess import WaymoProcessor
         
         scene_ids_list = [int(scene_id) for scene_id in scene_ids_list]

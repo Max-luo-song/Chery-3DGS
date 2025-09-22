@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Optional
 import torch
 import logging
 
@@ -150,7 +150,7 @@ class MultiTrainer(BasicTrainer):
                     sampled_pts = torch.cat([sampled_pts, valid_pts], dim=0)
                     sampled_color = torch.cat([sampled_color, torch.rand(valid_pts.shape, ).to(self.device)], dim=0)
                 
-                processed_init_pts = dataset.filter_pts_in_boxes( # gls
+                processed_init_pts = dataset.filter_pts_in_boxes(
                     seed_pts=sampled_pts,
                     seed_colors=sampled_color,
                     valid_instances_dict=allnode_pts_dict
@@ -160,7 +160,7 @@ class MultiTrainer(BasicTrainer):
                     init_means=processed_init_pts["pts"], init_colors=processed_init_pts["colors"]
                 )
                 
-            if class_name == 'RigidNodes':  # gls
+            if class_name == 'RigidNodes':
                 empty = self.safe_init_models(
                     model=model,
                     instance_pts_dict=rigidnode_pts_dict
@@ -197,7 +197,11 @@ class MultiTrainer(BasicTrainer):
         self, 
         image_infos: Dict[str, torch.Tensor],
         camera_infos: Dict[str, torch.Tensor],
-        novel_view: bool = False
+        novel_view: bool = False,
+        is_legend: Optional[bool] = False,
+        image_output_pth: Optional[str] = None,
+        rigid_id: Optional[int] = None,
+        edit_value: Optional[list] = None
     ) -> Dict[str, torch.Tensor]:
         """Forward pass of the model
 
@@ -222,10 +226,12 @@ class MultiTrainer(BasicTrainer):
                 model.in_test_set = self.in_test_set
 
         # assigne current frame to gaussian models
+
         for class_name in self.gaussian_classes.keys():
             model = self.models[class_name]
             if hasattr(model, 'set_cur_frame'):
                 model.set_cur_frame(self.cur_frame)
+                
         
         # prapare data
         processed_cam = self.process_camera(
@@ -235,7 +241,11 @@ class MultiTrainer(BasicTrainer):
         )
         gs = self.collect_gaussians(
             cam=processed_cam,
-            image_ids=image_infos["img_idx"].flatten()[0]
+            image_ids=image_infos["img_idx"].flatten()[0],
+            is_legend = is_legend,
+            image_output_pth=image_output_pth,
+            rigid_id=rigid_id,
+            edit_value=edit_value
         )
 
         # render gaussians
@@ -282,8 +292,9 @@ class MultiTrainer(BasicTrainer):
         outputs: Dict[str, torch.Tensor],
         image_infos: Dict[str, torch.Tensor],
         cam_infos: Dict[str, torch.Tensor],
+        has_lidar: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        loss_dict = super().compute_losses(outputs, image_infos, cam_infos)
+        loss_dict = super().compute_losses(outputs, image_infos, cam_infos, has_lidar)
         
         return loss_dict
     

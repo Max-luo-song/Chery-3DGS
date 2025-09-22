@@ -57,7 +57,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--scene_ids",
         default=None,
-        type=int,
         nargs="+",
         help="scene ids to be processed, a list of integers separated by space. Range: [0, 798] for training, [0, 202] for validation",
     )
@@ -106,7 +105,7 @@ if __name__ == "__main__":
         # parse the split file
         split_file = open(args.split_file, "r").readlines()[1:]
         # NOTE: small hack here, to be refined in the futher (TODO)
-        if "kitti" in args.split_file or "nuplan" in args.split_file:
+        if "chery" in args.split_file or "kitti" in args.split_file or "nuplan" in args.split_file:
             scene_ids_list = [line.strip().split(",")[0] for line in split_file]
         else:
             scene_ids_list = [int(line.strip().split(",")[0]) for line in split_file]

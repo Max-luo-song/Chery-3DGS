@@ -222,31 +222,7 @@ class WaymoPixelSource(ScenePixelSource):
         ego_to_world_start = np.loadtxt(
             os.path.join(self.data_path, "ego_pose", f"{self.start_timestep:03d}.txt")
         )
-        ### k最大有500+, 但instances_info只有119
-        for index, (k, v) in enumerate(instances_info.items()):
-            instances_model_types[int(index)] = OBJECT_CLASS_NODE_MAPPING[v["class_name"]]
-            for frame_idx, obj_to_world, box_size in zip(v["frame_annotations"]["frame_idx"], v["frame_annotations"]["obj_to_world"], v["frame_annotations"]["box_size"]):
-                # the first ego pose as the origin of the world coordinate system.
-                obj_to_world = np.array(obj_to_world).reshape(4, 4)
-                obj_to_world = np.linalg.inv(ego_to_world_start) @ obj_to_world
-                instances_pose[frame_idx, int(index)] = np.array(obj_to_world)
-                instances_size[frame_idx, int(index)] = np.array(box_size)
-        per_frame_instance_mask = np.zeros((num_full_frames, num_instances)) ### 实例个数
-        ## to do：把valid_instances里面的编号换成索引
-        for frame_idx, valid_instances in frame_instances.items():
-            temp_result = []
-            for i in range(len(valid_instances)):
-                for index, (k, v) in enumerate(instances_info.items()):
-                    if k == str(valid_instances[i]):
-                        temp_result.append(index)
-                        break
-            valid_instances = temp_result
-            # valid_instances = change_index(valid_instances, instances_info)
-            per_frame_instance_mask[int(frame_idx), valid_instances] = 1
-            
-        ### waymo origin
-        ''' waymo origin
-        for index, (k, v) in enumerate(instances_info.items()):
+        for k, v in instances_info.items():
             instances_model_types[int(k)] = OBJECT_CLASS_NODE_MAPPING[v["class_name"]]
             for frame_idx, obj_to_world, box_size in zip(v["frame_annotations"]["frame_idx"], v["frame_annotations"]["obj_to_world"], v["frame_annotations"]["box_size"]):
                 # the first ego pose as the origin of the world coordinate system.
@@ -254,13 +230,13 @@ class WaymoPixelSource(ScenePixelSource):
                 obj_to_world = np.linalg.inv(ego_to_world_start) @ obj_to_world
                 instances_pose[frame_idx, int(k)] = np.array(obj_to_world)
                 instances_size[frame_idx, int(k)] = np.array(box_size)
-                       
-        get frame valid instances
-        shape (num_frames, num_instances)
-        per_frame_instance_mask = np.zeros((num_full_frames, num_instances)) ### 实例个数
+        
+        # get frame valid instances
+        # shape (num_frames, num_instances)
+        per_frame_instance_mask = np.zeros((num_full_frames, num_instances))
         for frame_idx, valid_instances in frame_instances.items():
             per_frame_instance_mask[int(frame_idx), valid_instances] = 1
-        '''
+        
         # select the frames that are in the range of start_timestep and end_timestep
         instances_pose = torch.from_numpy(instances_pose[self.start_timestep:self.end_timestep]).float()
         instances_size = torch.from_numpy(instances_size[self.start_timestep:self.end_timestep]).float()
@@ -357,7 +333,7 @@ class WaymoLiDARSource(SceneLidarSource):
         self.start_timestep = start_timestep
         self.end_timestep = end_timestep
         self.create_all_filelist()
-        self.load_data()  # 父类函数，调用load_calibrations load_lidar
+        self.load_data()
 
     def create_all_filelist(self):
         """
@@ -416,42 +392,11 @@ class WaymoLiDARSource(SceneLidarSource):
             # from left to right:
             # origins: 3d, points: 3d, flows: 3d, flow_class: 1d,
             # ground_labels: 1d, intensities: 1d, elongations: 1d, laser_ids: 1d
-            '''
-            1-3. origins (3d): 雷达点的原点坐标，包含x、y、z三个维度的信息
-            4-6. points (3d): 雷达点的三维空间坐标，包含x、y、z三个维度的信息
-            7-9. flows (3d): 雷达点的三维流动向量，表示点的运动方向和速度
-            10. flow_class (1d): 流动类别，用于分类点的运动类型
-            11. ground_labels (1d): 地面标签，用于标识点是否属于地面
-            12. intensities (1d): 强度值，表示雷达反射信号的强度
-            13. elongations (1d): 延伸度，描述点的形状特征
-            14. laser_ids (1d): 激光束ID，标识点来自哪个激光束
-            '''
-            is_chery = True
-            if is_chery:
-                lidar_info = np.memmap(
-                    self.lidar_filepaths[t],
-                    dtype=np.float32,
-                    mode="r",
-                ).reshape(-1, 3)
-                
-                xyz_data = lidar_info[:, :3]
-                num_points = xyz_data.shape[0]
-                new_lidar_info = np.zeros((num_points, 14), dtype=np.float32)
-                
-                new_lidar_info[:, 0:3] = (1.4335938, 0.0078125, 2.184021)  # origin是固定的，应该和奇瑞适配
-                # 将原始的前3维数据放入新数组的第3:6维度
-                new_lidar_info[:, 3:6] = xyz_data  # 3:6表示索引3,4,5
-                new_lidar_info[:, 6:9] = -1
-                new_lidar_info[:, 9] = -1
-                new_lidar_info[:, 10] = 0
-                
-                lidar_info = new_lidar_info
-            else:
-                lidar_info = np.memmap(
-                    self.lidar_filepaths[t],
-                    dtype=np.float32,
-                    mode="r",
-                ).reshape(-1, 14)
+            lidar_info = np.memmap(
+                self.lidar_filepaths[t],
+                dtype=np.float32,
+                mode="r",
+            ).reshape(-1, 14)
             original_length = len(lidar_info)
             accumulated_num_original_rays += original_length
 
@@ -462,10 +407,10 @@ class WaymoLiDARSource(SceneLidarSource):
 
             lidar_origins = torch.from_numpy(lidar_info[:, :3]).float()
             lidar_points = torch.from_numpy(lidar_info[:, 3:6]).float()
-            lidar_ids = torch.from_numpy(lidar_info[:, 13]).float()  # 13全初始化为0
-            lidar_flows = torch.from_numpy(lidar_info[:, 6:9]).float() # 6-9都初始化为-1
-            lidar_flow_classes = torch.from_numpy(lidar_info[:, 9]).long() # 初始化为-1
-            ground_labels = torch.from_numpy(lidar_info[:, 10]).long() # 初始化为0
+            lidar_ids = torch.from_numpy(lidar_info[:, 13]).float()
+            lidar_flows = torch.from_numpy(lidar_info[:, 6:9]).float()
+            lidar_flow_classes = torch.from_numpy(lidar_info[:, 9]).long()
+            ground_labels = torch.from_numpy(lidar_info[:, 10]).long()
             # we don't collect intensities and elongations for now
 
             # select lidar points based on a truncated ego-forward-directional range

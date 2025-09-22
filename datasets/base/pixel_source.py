@@ -15,6 +15,7 @@ from datasets.dataset_meta import DATASETS_CONFIG
 
 logger = logging.getLogger()
 
+
 def idx_to_3d(idx, H, W):
     """
     Converts a 1D index to a 3D index (img_id, row_id, col_id)
@@ -74,22 +75,32 @@ def get_rays(
     viewdirs = directions / (direction_norm + 1e-8)
     return origins, viewdirs, direction_norm
 
+
 def sparse_lidar_map_downsampler(lidar_depth_map, downscale_factor):
-    # NOTE(ziyu): Important! 
-    # This is the correct way to downsample the sparse lidar depth map.  
-    raw_avg = torch.nn.functional.interpolate(
-        lidar_depth_map.unsqueeze(0).unsqueeze(0),
-        scale_factor=downscale_factor,
-        mode="area",
-    ).squeeze(0).squeeze(0)
-    raw_mask = torch.nn.functional.interpolate(
-        (lidar_depth_map > 1e-3).float().unsqueeze(0).unsqueeze(0),
-        scale_factor=downscale_factor,
-        mode="area",
-    ).squeeze(0).squeeze(0)
+    # NOTE(ziyu): Important!
+    # This is the correct way to downsample the sparse lidar depth map.
+    raw_avg = (
+        torch.nn.functional.interpolate(
+            lidar_depth_map.unsqueeze(0).unsqueeze(0),
+            scale_factor=downscale_factor,
+            mode="area",
+        )
+        .squeeze(0)
+        .squeeze(0)
+    )
+    raw_mask = (
+        torch.nn.functional.interpolate(
+            (lidar_depth_map > 1e-3).float().unsqueeze(0).unsqueeze(0),
+            scale_factor=downscale_factor,
+            mode="area",
+        )
+        .squeeze(0)
+        .squeeze(0)
+    )
     downsampled_lidar_map = torch.zeros_like(raw_avg)
     downsampled_lidar_map[raw_mask > 0] = raw_avg[raw_mask > 0] / raw_mask[raw_mask > 0]
     return downsampled_lidar_map
+
 
 class CameraData(object):
     def __init__(
@@ -122,14 +133,14 @@ class CameraData(object):
         self.undistort = undistort
         self.buffer_downscale = buffer_downscale
         self.device = device
-        
+
         self.cam_name = DATASETS_CONFIG[dataset_name][cam_id]["camera_name"]
         self.original_size = DATASETS_CONFIG[dataset_name][cam_id]["original_size"]
         self.load_size = [
             int(self.original_size[0] / downscale_when_loading),
             int(self.original_size[1] / downscale_when_loading),
         ]
-        
+
         # Load the images, dynamic masks, sky masks, etc.
         self.create_all_filelist()
         self.load_calibrations()
@@ -139,15 +150,17 @@ class CameraData(object):
             self.load_dynamic_masks()
         if load_sky_mask:
             self.load_sky_masks()
-        self.lidar_depth_maps = None # will be loaded by: self.load_depth()
-        self.image_error_maps = None # will be built by: self.build_image_error_buffer()
+        self.lidar_depth_maps = None  # will be loaded by: self.load_depth()
+        self.image_error_maps = (
+            None  # will be built by: self.build_image_error_buffer()
+        )
         self.to(self.device)
         self.downscale_factor = 1.0
-        
+
     @property
     def num_frames(self) -> int:
         return self.cam_to_worlds.shape[0]
-    
+
     @property
     def HEIGHT(self) -> int:
         return self.load_size[0]
@@ -155,13 +168,13 @@ class CameraData(object):
     @property
     def WIDTH(self) -> int:
         return self.load_size[1]
-    
+
     def __len__(self):
         return self.num_frames
-    
+
     def set_downscale_factor(self, downscale_factor: float):
         self.downscale_factor = downscale_factor
-        
+
     def set_unique_ids(self, unique_cam_idx: int, unique_img_idx: Tensor):
         """
         unique id is the compact order of the camera index and frame index
@@ -170,20 +183,22 @@ class CameraData(object):
         """
         self.unique_cam_idx = unique_cam_idx
         self.unique_img_idx = unique_img_idx.to(self.device)
-        
+
     def load_calibrations(
         self,
         unique_img_idx,
         cam_to_worlds,
         intrinsics,
         distortions,
+        # intrinsics_scaled,
     ):
         self.unique_img_idx = unique_img_idx
         # Load the camera intrinsics, extrinsics, timestamps, etc.
         # Compute the camera-to-world matrices, ego-to-world matrices, etc.
-        self.cam_to_worlds = cam_to_worlds # (num_frames, 4, 4)
-        self.intrinsics = intrinsics # (num_frames, 3, 3)
-        self.distortions = distortions # (num_frames, 5)
+        self.cam_to_worlds = cam_to_worlds  # (num_frames, 4, 4)
+        self.intrinsics = intrinsics  # (num_frames, 3, 3)
+        self.distortions = distortions  # (num_frames, 5)
+        # self.intrinsics_scaled = intrinsics_scaled  # (num_frames, 3, 3) | None
 
     def create_all_filelist(self):
         """
@@ -194,7 +209,7 @@ class CameraData(object):
         img_filepaths = []
         dynamic_mask_filepaths, sky_mask_filepaths = [], []
         human_mask_filepaths, vehicle_mask_filepaths = [], []
-        
+
         fine_mask_path = os.path.join(self.data_path, "fine_dynamic_masks")
         if os.path.exists(fine_mask_path):
             dynamic_mask_dir = "fine_dynamic_masks"
@@ -210,17 +225,26 @@ class CameraData(object):
             )
             dynamic_mask_filepaths.append(
                 os.path.join(
-                    self.data_path, dynamic_mask_dir, "all", f"{t:03d}_{self.cam_id}.png"
+                    self.data_path,
+                    dynamic_mask_dir,
+                    "all",
+                    f"{t:03d}_{self.cam_id}.png",
                 )
             )
             human_mask_filepaths.append(
                 os.path.join(
-                    self.data_path, dynamic_mask_dir, "human", f"{t:03d}_{self.cam_id}.png"
+                    self.data_path,
+                    dynamic_mask_dir,
+                    "human",
+                    f"{t:03d}_{self.cam_id}.png",
                 )
             )
             vehicle_mask_filepaths.append(
                 os.path.join(
-                    self.data_path, dynamic_mask_dir, "vehicle", f"{t:03d}_{self.cam_id}.png"
+                    self.data_path,
+                    dynamic_mask_dir,
+                    "vehicle",
+                    f"{t:03d}_{self.cam_id}.png",
                 )
             )
             sky_mask_filepaths.append(
@@ -231,7 +255,7 @@ class CameraData(object):
         self.human_mask_filepaths = np.array(human_mask_filepaths)
         self.vehicle_mask_filepaths = np.array(vehicle_mask_filepaths)
         self.sky_mask_filepaths = np.array(sky_mask_filepaths)
-        
+
     def load_images(self):
         images = []
         for ix, fname in tqdm(
@@ -242,9 +266,7 @@ class CameraData(object):
         ):
             rgb = Image.open(fname).convert("RGB")
             # resize them to the load_size
-            rgb = rgb.resize(
-                (self.load_size[1], self.load_size[0]), Image.BILINEAR
-            )
+            rgb = rgb.resize((self.load_size[1], self.load_size[0]), Image.BILINEAR)
             # undistort the images
             if self.undistort:
                 if ix == 0:
@@ -254,16 +276,19 @@ class CameraData(object):
                     self.intrinsics[ix].numpy(),
                     self.distortions[ix].numpy(),
                 )
+
             images.append(rgb)
         # normalize the images to [0, 1]
         self.images = images = torch.from_numpy(np.stack(images, axis=0)) / 255
-    
+
     def load_egocar_mask(self):
         """
         Since in some datasets, the ego car body is visible in the images,
         we need to load the ego car mask to mask out the ego car body.
         """
-        egocar_mask = os.path.join("data", "ego_masks", self.dataset_name, f"{self.cam_id}.png")
+        egocar_mask = os.path.join(
+            "data", "ego_masks", self.dataset_name, f"{self.cam_id}.png"
+        )
         if os.path.exists(egocar_mask):
             egocar_mask = Image.open(egocar_mask).convert("L")
             # resize them to the load_size
@@ -277,9 +302,11 @@ class CameraData(object):
                     self.distortions[0].numpy(),
                 )
             self.egocar_mask = torch.from_numpy(np.array(egocar_mask) > 0).float()
+            logger.info(f"Loaded ego car mask for camera {self.cam_id}.")
         else:
             self.egocar_mask = None
-        
+            logger.info(f"No ego car mask found for camera {self.cam_id}.")
+
     def load_dynamic_masks(self):
         dynamic_masks = []
         for ix, fname in tqdm(
@@ -287,7 +314,7 @@ class CameraData(object):
             desc="Loading dynamic masks",
             dynamic_ncols=True,
             total=len(self.dynamic_mask_filepaths),
-        ):  
+        ):
             dyn_mask = Image.open(fname).convert("L")
             # resize them to the load_size
             dyn_mask = dyn_mask.resize(
@@ -303,14 +330,14 @@ class CameraData(object):
                 )
             dynamic_masks.append(np.array(dyn_mask) > 0)
         self.dynamic_masks = torch.from_numpy(np.stack(dynamic_masks, axis=0)).float()
-        
+
         human_masks = []
         for ix, fname in tqdm(
             enumerate(self.human_mask_filepaths),
             desc="Loading human masks",
             dynamic_ncols=True,
             total=len(self.human_mask_filepaths),
-        ):  
+        ):
             human_mask = Image.open(fname).convert("L")
             # resize them to the load_size
             human_mask = human_mask.resize(
@@ -326,14 +353,14 @@ class CameraData(object):
                 )
             human_masks.append(np.array(human_mask) > 0)
         self.human_masks = torch.from_numpy(np.stack(human_masks, axis=0)).float()
-        
+
         vehicle_masks = []
         for ix, fname in tqdm(
             enumerate(self.vehicle_mask_filepaths),
             desc="Loading vehicle masks",
             dynamic_ncols=True,
             total=len(self.vehicle_mask_filepaths),
-        ):  
+        ):
             vehicle_mask = Image.open(fname).convert("L")
             # resize them to the load_size
             vehicle_mask = vehicle_mask.resize(
@@ -349,7 +376,7 @@ class CameraData(object):
                 )
             vehicle_masks.append(np.array(vehicle_mask) > 0)
         self.vehicle_masks = torch.from_numpy(np.stack(vehicle_masks, axis=0)).float()
-        
+
     def load_sky_masks(self):
         sky_masks = []
         for ix, fname in tqdm(
@@ -373,19 +400,19 @@ class CameraData(object):
                 )
             sky_masks.append(np.array(sky_mask) > 0)
         self.sky_masks = torch.from_numpy(np.stack(sky_masks, axis=0)).float()
-        
+
     def load_depth(
         self,
         lidar_depth_maps: Tensor,
     ):
         self.lidar_depth_maps = lidar_depth_maps.to(self.device)
-        
+
     def load_time(
         self,
         normalized_time: Tensor,
     ):
         self.normalized_time = normalized_time.to(self.device)
-        
+
     def build_image_error_buffer(self) -> None:
         """
         Build the image error buffer.
@@ -400,7 +427,7 @@ class CameraData(object):
             dtype=torch.float32,
             device=self.device,
         )
-        
+
     def get_image_error_video(self) -> List[np.ndarray]:
         """
         Get the pixel sample weights video.
@@ -409,10 +436,10 @@ class CameraData(object):
                 shape: (num_frames, H, W, 3)
         """
         # normalize the image error buffer to [0, 1]
-        image_error_maps = (
-            self.image_error_maps - self.image_error_maps.min()
-        ) / (self.image_error_maps.max() - self.image_error_maps.min())
-        
+        image_error_maps = (self.image_error_maps - self.image_error_maps.min()) / (
+            self.image_error_maps.max() - self.image_error_maps.min()
+        )
+
         maps = []
         loss_maps = (
             image_error_maps.detach()
@@ -427,7 +454,7 @@ class CameraData(object):
         for i in range(self.num_frames):
             maps.append(loss_maps[i])
         return maps
-    
+
     def update_image_error_maps(self, render_results: Dict[str, Tensor]) -> None:
         """
         Update the image error buffer with the given render results.
@@ -467,7 +494,7 @@ class CameraData(object):
             self.human_masks = self.human_masks.to(device)
         if self.vehicle_masks is not None:
             self.vehicle_masks = self.vehicle_masks.to(device)
-        if hasattr(self, 'sky_masks') and self.sky_masks is not None:
+        if hasattr(self, "sky_masks") and self.sky_masks is not None:
             self.sky_masks = self.sky_masks.to(device)
         else:
             self.sky_masks = None
@@ -475,7 +502,7 @@ class CameraData(object):
             self.lidar_depth_maps = self.lidar_depth_maps.to(device)
         if self.image_error_maps is not None:
             self.image_error_maps = self.image_error_maps.to(device)
-    
+
     def get_image(self, frame_idx: int) -> Dict[str, Tensor]:
         """
         Get the rays for rendering the given frame index.
@@ -488,7 +515,7 @@ class CameraData(object):
         dynamic_mask, human_mask, vehicle_mask = None, None, None
         pixel_coords, normalized_time = None, None
         egocar_mask = None
-        
+
         if self.images is not None:
             rgb = self.images[frame_idx]
             if self.downscale_factor != 1.0:
@@ -579,7 +606,7 @@ class CameraData(object):
                     .squeeze(0)
                     .squeeze(0)
                 )
-            
+
         lidar_depth_map = None
         if self.lidar_depth_maps is not None:
             lidar_depth_map = self.lidar_depth_maps[frame_idx]
@@ -588,7 +615,7 @@ class CameraData(object):
                 # if self.data_cfg.denser_lidar_times > 1:
                 #     lidar_supervision_downsample = 1 / self.data_cfg.denser_lidar_times * self.downscale_factor
                 #     lidar_depth_map = sparse_lidar_map_downsampler(lidar_depth_map, lidar_supervision_downsample)
-                    
+
                 #     # resize back
                 #     lidar_depth_map = (
                 #         torch.nn.functional.interpolate(
@@ -600,7 +627,9 @@ class CameraData(object):
                 #         .squeeze(0)
                 #     )
                 # else:
-                lidar_depth_map = sparse_lidar_map_downsampler(lidar_depth_map, self.downscale_factor)
+                lidar_depth_map = sparse_lidar_map_downsampler(
+                    lidar_depth_map, self.downscale_factor
+                )
 
         if self.normalized_time is not None:
             normalized_time = torch.full(
@@ -647,7 +676,7 @@ class CameraData(object):
             "lidar_depth_map": lidar_depth_map,
         }
         image_infos = {k: v for k, v in _image_infos.items() if v is not None}
-        
+
         cam_infos = {
             "cam_id": camera_id,
             "cam_name": self.cam_name,
@@ -658,10 +687,12 @@ class CameraData(object):
         }
         return image_infos, cam_infos
 
+
 class ScenePixelSource(abc.ABC):
     """
     The base class for all pixel sources of a scene.
     """
+
     # define a transformation matrix to convert the opencv camera coordinate system to the dataset camera coordinate system
     data_cfg: OmegaConf = None
     # the dataset name, choose from ["waymo", "kitti", "nuscenes", "pandaset", "argoverse"]
@@ -678,11 +709,11 @@ class ScenePixelSource(abc.ABC):
     image_error_buffered: bool = False
     # the downscale factor of the error buffer
     buffer_downscale: float = 1.0
-    
+
     # -------------- object annotations
     # (num_frame, num_instances, 4, 4)
     instances_pose: Tensor = None
-    # (num_instances, 3) 
+    # (num_instances, 3)
     instances_size: Tensor = None
     # (num_instances, )
     instances_true_id: Tensor = None
@@ -692,7 +723,10 @@ class ScenePixelSource(abc.ABC):
     per_frame_instance_mask: Tensor = None
 
     def __init__(
-        self, dataset_name, pixel_data_config: OmegaConf, device: torch.device = torch.device("cpu")
+        self,
+        dataset_name,
+        pixel_data_config: OmegaConf,
+        device: torch.device = torch.device("cpu"),
     ) -> None:
         # hold the config of the pixel data
         self.dataset_name = dataset_name
@@ -708,7 +742,7 @@ class ScenePixelSource(abc.ABC):
         Load the images, dynamic masks, sky masks, etc.
         """
         raise NotImplementedError
-    
+
     @abc.abstractmethod
     def load_objects(self) -> None:
         """
@@ -723,11 +757,11 @@ class ScenePixelSource(abc.ABC):
         self.load_cameras()
         self.build_image_error_buffer()
         logger.info("[Pixel] All Pixel Data loaded.")
-        
+
         if self.data_cfg.load_objects:
             self.load_objects()
             logger.info("[Pixel] All Object Annotations loaded.")
-        
+
         # set initial downscale factor
         for cam_id in self.camera_list:
             self.camera_data[cam_id].set_downscale_factor(self._downscale_factor)
@@ -785,19 +819,20 @@ class ScenePixelSource(abc.ABC):
         aabb = torch.tensor([*aabb_min, *aabb_max])
         logger.info(f"[Pixel] Auto AABB from camera: {aabb}")
         return aabb
-    
+
     @property
     def front_camera_trajectory(self) -> Tensor:
         """
         Returns:
             the front camera trajectory.
         """
-        front_camera = self.camera_data[0]
+        cam_idx = 0 if 0 in self.camera_list else self.camera_list[0]  # syc
+        front_camera = self.camera_data[cam_idx]
         assert (
             front_camera.cam_to_worlds is not None
         ), "Camera poses not loaded, cannot compute front camera trajectory."
         return front_camera.cam_to_worlds[:, :3, 3]
-    
+
     def parse_img_idx(self, img_idx: int) -> Tuple[int, int]:
         """
         Parse the image index to the camera index and frame index.
@@ -831,7 +866,7 @@ class ScenePixelSource(abc.ABC):
             the list of camera indices
         """
         return self.data_cfg.cameras
-    
+
     @property
     def num_cams(self) -> int:
         """
@@ -839,7 +874,7 @@ class ScenePixelSource(abc.ABC):
             the number of cameras in the dataset
         """
         return len(self.data_cfg.cameras)
-    
+
     @property
     def num_frames(self) -> int:
         """
@@ -847,7 +882,7 @@ class ScenePixelSource(abc.ABC):
             the number of frames in the dataset
         """
         return len(self._timesteps)
-    
+
     @property
     def num_timesteps(self) -> int:
         """
@@ -892,7 +927,7 @@ class ScenePixelSource(abc.ABC):
         normalized_time = (self._timesteps - self._timesteps.min()) / (
             self._timesteps.max() - self._timesteps.min()
         )
-        
+
         self._normalized_time = normalized_time.to(self.device)
         self._unique_normalized_timestamps = self._normalized_time.unique()
 
@@ -904,10 +939,8 @@ class ScenePixelSource(abc.ABC):
         Returns:
             the closest timestep to the given timestamp.
         """
-        return torch.argmin(
-            torch.abs(self._normalized_time - normed_timestamp)
-        )
-    
+        return torch.argmin(torch.abs(self._normalized_time - normed_timestamp))
+
     def propose_training_image(
         self,
         candidate_indices: Tensor = None,
@@ -915,28 +948,30 @@ class ScenePixelSource(abc.ABC):
         if random.random() < self.buffer_ratio and self.image_error_buffered:
             # sample according to the image error buffer
             image_mean_error = self.image_error_buffer[candidate_indices]
-            start_enhance_weight = self.data_cfg.sampler.get('start_enhance_weight', 1)
+            start_enhance_weight = self.data_cfg.sampler.get("start_enhance_weight", 1)
             if start_enhance_weight > 1:
                 # increase the error of the first 10% frames
                 frame_num = int(self.num_imgs / self.num_cams)
-                error_weight = torch.cat((
-                    torch.linspace(start_enhance_weight, 1, int(frame_num * 0.1)),
-                    torch.ones(frame_num - int(frame_num * 0.1))
-                ))
-                error_weight = error_weight[..., None].repeat(1, self.num_cams).reshape(-1)
+                error_weight = torch.cat(
+                    (
+                        torch.linspace(start_enhance_weight, 1, int(frame_num * 0.1)),
+                        torch.ones(frame_num - int(frame_num * 0.1)),
+                    )
+                )
+                error_weight = (
+                    error_weight[..., None].repeat(1, self.num_cams).reshape(-1)
+                )
                 error_weight = error_weight[candidate_indices].to(self.device)
-                
+
                 image_mean_error = image_mean_error * error_weight
-            idx = torch.multinomial(
-                image_mean_error, 1, replacement=False
-            ).item()
+            idx = torch.multinomial(image_mean_error, 1, replacement=False).item()
             img_idx = candidate_indices[idx]
         else:
             # random sample one from candidate_indices
             img_idx = random.choice(candidate_indices)
-            
+
         return img_idx
-        
+
     def build_image_error_buffer(self) -> None:
         """
         Build the image error buffer.
@@ -946,7 +981,7 @@ class ScenePixelSource(abc.ABC):
                 self.camera_data[cam_id].build_image_error_buffer()
         else:
             logger.info("Not building image error buffer because buffer_ratio <= 0.")
-        
+
     def update_image_error_maps(self, render_results: Dict[str, Tensor]) -> None:
         """
         Update the image error buffer with the given render results for each camera.
@@ -963,23 +998,23 @@ class ScenePixelSource(abc.ABC):
                     gt_rgbs.append(render_results["gt_rgbs"][img_idx])
                     pred_rgbs.append(render_results["rgbs"][img_idx])
                     if "Dynamic_opacities" in render_results:
-                        Dynamic_opacities.append(render_results["Dynamic_opacities"][img_idx])
-            
+                        Dynamic_opacities.append(
+                            render_results["Dynamic_opacities"][img_idx]
+                        )
+
             camera_results = {
                 "gt_rgbs": gt_rgbs,
                 "rgbs": pred_rgbs,
             }
             if len(Dynamic_opacities) > 0:
                 camera_results["Dynamic_opacities"] = Dynamic_opacities
-            self.camera_data[cam_id].update_image_error_maps(
-                camera_results
-            )
-            
+            self.camera_data[cam_id].update_image_error_maps(camera_results)
+
             # update the image error buffer
-            image_error_buffer[image_cam_id == cam_id] = \
-                self.camera_data[cam_id].image_error_maps.mean(dim=(1, 2))
-            
-                
+            image_error_buffer[image_cam_id == cam_id] = self.camera_data[
+                cam_id
+            ].image_error_maps.mean(dim=(1, 2))
+
         self.image_error_buffer = image_error_buffer
         self.image_error_buffered = True
         logger.info("Successfully updated image error buffer")
@@ -993,32 +1028,22 @@ class ScenePixelSource(abc.ABC):
         per_cam_video = {}
         for cam_id in self.camera_list:
             per_cam_video[cam_id] = self.camera_data[cam_id].get_image_error_video()
-        
+
         all_error_images = []
         all_cam_names = []
         for frame_id in range(self.num_frames):
             for cam_id in self.camera_list:
                 all_error_images.append(per_cam_video[cam_id][frame_id])
                 all_cam_names.append(self.camera_data[cam_id].cam_name)
-                
+
         merged_list = []
         for i in range(len(all_error_images) // self.num_cams):
-            frames = all_error_images[
-                i
-                * self.num_cams : (i + 1)
-                * self.num_cams
-            ]
-            frames = [
-                np.stack([frame, frame, frame], axis=-1) for frame in frames
-            ]
-            cam_names = all_cam_names[
-                i
-                * self.num_cams : (i + 1)
-                * self.num_cams
-            ]
+            frames = all_error_images[i * self.num_cams : (i + 1) * self.num_cams]
+            frames = [np.stack([frame, frame, frame], axis=-1) for frame in frames]
+            cam_names = all_cam_names[i * self.num_cams : (i + 1) * self.num_cams]
             tiled_img = layout(frames, cam_names)
             merged_list.append(tiled_img)
-        
+
         merged_video = np.stack(merged_list, axis=0)
         merged_video -= merged_video.min()
         merged_video /= merged_video.max()
@@ -1060,7 +1085,7 @@ class ScenePixelSource(abc.ABC):
             buffer_ratio: the ratio of the rays sampled from the image error buffer
         """
         return self.data_cfg.sampler.buffer_ratio
-    
+
     @property
     def buffer_downscale(self) -> float:
         """
@@ -1068,8 +1093,10 @@ class ScenePixelSource(abc.ABC):
             buffer_downscale: the downscale factor of the image error buffer
         """
         return self.data_cfg.sampler.buffer_downscale
-    
-    def prepare_novel_view_render_data(self, dataset_type: str, traj: torch.Tensor) -> list:
+
+    def prepare_novel_view_render_data(
+        self, dataset_type: str, traj: torch.Tensor, cam_id: int
+    ) -> list:
         """
         Prepare all necessary elements for novel view rendering.
 
@@ -1082,53 +1109,91 @@ class ScenePixelSource(abc.ABC):
                 - cam_infos: Camera information (extrinsics, intrinsics, image dimensions)
                 - image_infos: Image-related information (indices, normalized time, viewdirs, etc.)
         """
-        if dataset_type == "argoverse":
+        if dataset_type == "chery":
+            # 使用传入的 cam_id
+            pass
+        elif dataset_type == "argoverse":
             cam_id = 1  # Use cam_id 1 for Argoverse dataset
         else:
             cam_id = 0  # Use cam_id 0 for other datasets
-        
-        intrinsics = self.camera_data[cam_id].intrinsics[0]  # Assume intrinsics are constant across frames
+
+        intrinsics = self.camera_data[cam_id].intrinsics[
+            0
+        ]  # Assume intrinsics are constant across frames
         H, W = self.camera_data[cam_id].HEIGHT, self.camera_data[cam_id].WIDTH
-        
+
         original_frame_count = self.num_frames
         scaled_indices = torch.linspace(0, original_frame_count - 1, len(traj))
         normed_time = torch.linspace(0, 1, len(traj))
-        
+
         render_data = []
         for i in range(len(traj)):
             c2w = traj[i]
-            
+
             # Generate ray origins and directions
-            x, y = torch.meshgrid(torch.arange(W), torch.arange(H), indexing='xy')
+            x, y = torch.meshgrid(torch.arange(W), torch.arange(H), indexing="xy")
             x, y = x.to(self.device), y.to(self.device)
-            
-            origins, viewdirs, direction_norm = get_rays(x.flatten(), y.flatten(), c2w, intrinsics)
+
+            origins, viewdirs, direction_norm = get_rays(
+                x.flatten(), y.flatten(), c2w, intrinsics
+            )
             origins = origins.reshape(H, W, 3)
             viewdirs = viewdirs.reshape(H, W, 3)
             direction_norm = direction_norm.reshape(H, W, 1)
-            
+
             cam_infos = {
                 "camera_to_world": c2w,
                 "intrinsics": intrinsics,
                 "height": torch.tensor([H], dtype=torch.long, device=self.device),
                 "width": torch.tensor([W], dtype=torch.long, device=self.device),
             }
-            
+
             image_infos = {
                 "origins": origins,
                 "viewdirs": viewdirs,
                 "direction_norm": direction_norm,
                 "img_idx": torch.full((H, W), i, dtype=torch.long, device=self.device),
-                "frame_idx": torch.full((H, W), scaled_indices[i].round().long(), device=self.device),
-                "normed_time": torch.full((H, W), normed_time[i], dtype=torch.float32, device=self.device),
+                "frame_idx": torch.full(
+                    (H, W), scaled_indices[i].round().long(), device=self.device
+                ),
+                "normed_time": torch.full(
+                    (H, W), normed_time[i], dtype=torch.float32, device=self.device
+                ),
                 "pixel_coords": torch.stack(
                     [y.float() / H, x.float() / W], dim=-1
                 ),  # [H, W, 2]
             }
-            
-            render_data.append({
-                "cam_infos": cam_infos,
-                "image_infos": image_infos,
-            })
-        
+
+            render_data.append(
+                {
+                    "cam_infos": cam_infos,
+                    "image_infos": image_infos,
+                }
+            )
+
         return render_data
+
+    
+    ### Note(gls):为每个相机准备数据
+    def prepare_multicam_novel_view_render_data(
+        self, dataset_type: str, cam0_traj: torch.Tensor,
+    ) -> list:
+        render_data_list = []
+        
+        ref_cam_id = 0
+        T_cam0_to_world_start = self.camera_data[ref_cam_id].cam_to_worlds[0]  # 取第一帧的位姿作为参考
+
+        for cam_id in self.camera_list:
+            T_camX_to_world_start = self.camera_data[cam_id].cam_to_worlds[0]  # 取第一帧的位姿作为参考
+            T_camX_to_cam0 = torch.linalg.inv(T_cam0_to_world_start) @ T_camX_to_world_start
+
+            camX_traj = []
+            for pose_cam0 in cam0_traj:  # 前视相机的位姿 (T_cam0_to_world)
+                T_camX_to_cam0 = T_camX_to_cam0.to(pose_cam0.dtype)
+                pose_camX = pose_cam0 @ T_camX_to_cam0
+                camX_traj.append(pose_camX)
+            
+            render_data = self.prepare_novel_view_render_data(dataset_type, camX_traj, cam_id)
+            render_data_list.append(render_data)
+        
+        return render_data_list
