@@ -191,7 +191,6 @@ local_scripts
 
 output/
 deprecated/
-scripts/
 tmp/
 backup/
 third_party/SegFormer-master/
