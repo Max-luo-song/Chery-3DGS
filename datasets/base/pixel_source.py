@@ -754,6 +754,10 @@ class ScenePixelSource(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
+    def load_specified_cameras(self, cam_ids, downscale_when_loading) -> Dict[int, CameraData]:
+        raise NotImplementedError
+
+    @abc.abstractmethod
     def load_objects(self) -> None:
         """
         Load the object annotations.

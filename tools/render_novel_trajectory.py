@@ -81,7 +81,6 @@ def render_trajectory(
             pc_output_dir = os.path.join(output_dir, "lidar_point_clouds")
             os.makedirs(pc_output_dir, exist_ok=True)
 
-            # NOTE(syc): 这段代码只适用于奇瑞数据集
             pinhole_cam_ids = [id for id, cam in camera_data.items() if not cam.is_fisheye]
             intrinsics = {cam_id: camera_data[cam_id].intrinsics.cpu().numpy() for cam_id in pinhole_cam_ids}
             T_cam_to_lidars = {cam_id: camera_data[cam_id].cam_to_main_lidar for cam_id in pinhole_cam_ids}
@@ -115,11 +114,18 @@ def main(args):
     cfg = OmegaConf.merge(cfg, OmegaConf.from_cli(args.opts))
     args.enable_wandb = False
 
-    if args.cam_ids is not None:
-        args.cam_ids = sorted([int(x.strip()) for x in args.cam_ids.split(',')])
-        # FIXME(syc): 无法针对不同相机设置不同的 downscale
-        # downscales = [2] * len(args.cam_ids)
-        downscales = [cfg.data.pixel_source.downscale_when_loading[0]] * len(args.cam_ids)
+    if args.cam_ids is None:
+        specified_camera_ids = cfg.data.pixel_source.cameras
+    else:
+        specified_camera_ids = sorted([int(x.strip()) for x in args.cam_ids.split(',')])
+
+    # 使用第一个相机的 downscale 填充训练时未指定的相机
+    default_downscale = cfg.data.pixel_source.downscale_when_loading[0]
+    original_camera_dict = {
+        cam_id: downscale
+        for cam_id, downscale in zip(cfg.data.pixel_source.cameras, cfg.data.pixel_source.downscale_when_loading)
+    }
+    specified_camera_downscales = [original_camera_dict.get(cam_id, default_downscale) for cam_id in specified_camera_ids]
     
     if args.traj_types is not None:
         cfg.render.render_novel.traj_types = args.traj_types
@@ -164,8 +170,8 @@ def main(args):
         cfg=cfg,
         trainer=trainer,
         dataset=dataset,
-        cam_ids=args.cam_ids,
-        downscales=downscales,
+        cam_ids=specified_camera_ids,
+        downscales=specified_camera_downscales,
         render_rgb=args.render_rgb,
         render_depth=args.render_depth,
         generate_lidar_pc=args.generate_lidar_pc
