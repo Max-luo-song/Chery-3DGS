@@ -37,7 +37,11 @@ OPENCV2DATASET = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1
 # 4 : "right_front",
 # 5 : "right_rear",
 # 6 : "rear_main",
-AVAILABLE_CAM_LIST = [0, 1, 2, 3, 4, 5, 6]
+# 7 : "fisheye_left",
+# 8 : "fisheye_rear",
+# 9 : "fisheye_front",
+# 10 : "fisheye_right"
+AVAILABLE_CAM_LIST = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 
 class CheryCameraData(CameraData):
@@ -163,6 +167,7 @@ class CheryPixelSource(ScenePixelSource):
         self.end_timestep = end_timestep
         self.load_data()
 
+
     def load_cameras(self):
         self._timesteps = torch.arange(
             self.start_timestep, self.end_timestep
@@ -194,6 +199,36 @@ class CheryPixelSource(ScenePixelSource):
             camera.set_unique_ids(unique_cam_idx=idx, unique_img_idx=unique_img_idx)
             logger.info(f"Camera {camera.cam_name} loaded.")
             self.camera_data[cam_id] = camera
+    
+    # syc
+    def load_specified_cameras(self, cam_ids, downscale_when_loading):
+        camera_data = {}
+        for idx, cam_id in enumerate(cam_ids):
+            print(f"Loading specified camera {cam_id}")
+            camera = CheryCameraData(
+                dataset_name=self.dataset_name,
+                data_path=self.data_path,
+                cam_id=cam_id,
+                start_timestep=self.start_timestep,
+                end_timestep=self.end_timestep,
+                downscale_when_loading=downscale_when_loading[idx],
+                undistort=False,
+                buffer_downscale=self.buffer_downscale,
+                device=self.device,
+                calib_only=True,
+            )
+            camera.load_time(self.normalized_time)
+            unique_img_idx = (
+                torch.arange(len(camera), device=self.device) * len(cam_ids)
+                + idx
+            )
+            camera.set_unique_ids(unique_cam_idx=idx, unique_img_idx=unique_img_idx)
+            logger.info(f"Specified camera {camera.cam_name} loaded.")
+
+            camera_data[cam_id] = camera
+        
+        return camera_data
+
 
     def load_objects(self):
         """

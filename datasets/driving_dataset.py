@@ -40,7 +40,7 @@ class DrivingDataset(SceneDataset):
         super().__init__(data_cfg)
 
         # AVAILABLE DATASETS:
-        #   Chery:    7 cameras
+        #   Chery:    11 cameras
         #   Waymo:    5 Cameras
         #   KITTI:    2 Cameras
         #   NuScenes: 6 Cameras
@@ -799,6 +799,7 @@ class DrivingDataset(SceneDataset):
         novel_trajs = {}
         for traj_type in traj_types:
             if traj_type == "custom" and traj_dir is not None:
+                # TODO: 支持自定义轨迹
                 # novel_trajs[traj_type] = load_custom_trajectory(traj_dir)
                 pass
             else:
@@ -808,7 +809,7 @@ class DrivingDataset(SceneDataset):
 
         return novel_trajs
 
-    def prepare_novel_view_render_data(self, traj: torch.Tensor) -> list:
+    def prepare_novel_view_render_data(self, traj: torch.Tensor, camera_data) -> list:
         """
         Prepare all necessary elements for novel view rendering.
 
@@ -821,4 +822,4 @@ class DrivingDataset(SceneDataset):
                 - image_infos: Image-related information (indices, normalized time, viewdirs, etc.)
         """
         # Call the PixelSource's method
-        return self.pixel_source.prepare_multicam_novel_view_render_data(self.type, traj)
+        return self.pixel_source.prepare_multicam_novel_view_render_data(self.type, traj, camera_data)

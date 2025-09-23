@@ -189,9 +189,11 @@ cython_debug/
 #.idea/
 local_scripts
 
+output
 output/
 deprecated/
 tmp/
 backup/
+third_party/SegFormer-master
 third_party/SegFormer-master/
 third_party/SMPL_python_v.1.1.0/

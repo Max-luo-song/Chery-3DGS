@@ -64,9 +64,7 @@ def get_interp_novel_trajectories(
 ) -> torch.Tensor:
     original_frames = per_cam_poses[list(per_cam_poses.keys())[0]].shape[0]
     trajectory_generators = {
-        "front_center_interp": front_center_interp,
-        "s_curve": s_curve,
-        "three_key_poses": three_key_poses_trajectory,
+        "original_traj": original_traj,
         "left_shift_1m": left_shift_1m,
         "left_shift_3m": left_shift_3m,
         "left_shift_5m": left_shift_5m,
@@ -82,7 +80,12 @@ def get_interp_novel_trajectories(
         "change_lane_1m": change_lane_1m,
         "change_lane_2m": change_lane_2m,
         "change_lane_3.5m": change_lane_3_5m,
-        "up_shift_5m": up_shift_5m,
+
+        "front_center_interp": front_center_interp,
+        "s_curve": s_curve,
+        "three_key_poses": three_key_poses_trajectory,
+
+        # "up_shift_5m": up_shift_5m,
         # "right_move_trajectory": right_move_trajectory,
     }
     
@@ -90,6 +93,12 @@ def get_interp_novel_trajectories(
         raise ValueError(f"Unknown trajectory type: {traj_type}")
     
     return trajectory_generators[traj_type](dataset_type, per_cam_poses, original_frames, target_frames)
+
+def original_traj(
+    dataset_type: str, per_cam_poses: Dict[int, torch.Tensor], original_frames: int, target_frames: int,
+) -> torch.Tensor:
+    current_pose = per_cam_poses[list(per_cam_poses.keys())[0]]
+    return current_pose
 
 def front_center_interp(
     dataset_type: str, per_cam_poses: Dict[int, torch.Tensor], original_frames: int, target_frames: int, num_loops: int = 1

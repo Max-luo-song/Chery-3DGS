@@ -1,18 +1,18 @@
 # 参数设置
 ################################################################################
-cuda_device_id=4
+cuda_device_id=7
 
 lidar_type="mclidar"  # lidar（运动补偿前）/mclidar（运动补偿后）/visual（纯视觉）
 config_file="configs/0915omnire_chery_lidar_depth_loss.yaml"
-dataset_config="chery/3cams_lidar"
+dataset_config="chery/7cams_lidar"
 extra_config_info="+depth_loss"  # 额外信息，如 depth_loss
 
 scene_idx="clip_1746752396800"
 
-camera_ids=(0 1 2)  # camera IDs to use, e.g., (0), (0 2 4)
+camera_ids=(0 1 2 3 4 5 6)  # camera IDs to use, e.g., (0), (0 2 4)
 
 start_timestep=0 # start frame index for training
-end_timestep=-1 # end frame index, -1 for the last frame
+end_timestep=10 # end frame index, -1 for the last frame
 ################################################################################
 
 

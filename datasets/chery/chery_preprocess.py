@@ -68,6 +68,7 @@ class CheryProcessor(object):
         self.workers = int(workers)
 
         self.num_pinhole_cameras = 7
+        self.num_all_cameras = 11
 
         self.create_folder()
 
@@ -144,27 +145,24 @@ class CheryProcessor(object):
         for frame_index, sample_name in enumerate(sample_folders):
             sample_dir = os.path.join(clip_dir, sample_name)
 
-            # 选出经过畸变校正的相机图像
-            cam_names = [
-                cam_name
-                for cam_name in os.listdir(sample_dir)
-                if cam_name.startswith("camera")
-                and cam_name.split(".")[0].split("_")[-1] == "undist"
-            ]
-
-            for cam_name in cam_names:
-                src_img_path = os.path.join(
-                    sample_dir, cam_name
-                )  # camera0_1746752396953826_ae8a9af423443189bab574a9b3904cee_undist.jpg
-
-                # 跳过鱼眼相机
-                cam_idx = int(cam_name.split("_")[0][6:])  # 0
-                if cam_idx >= self.num_pinhole_cameras:
+            for img_name in os.listdir(sample_dir):
+                if not img_name.startswith("camera"):
                     continue
 
-                img_name = f"{frame_index:03}_{cam_idx}.jpg"  # 000_0, 000_1, ...
+                cam_idx = int(img_name.split("_")[0][6:])  # 0-10
+                assert 0 <= cam_idx < self.num_all_cameras, f"Invalid camera index: {cam_idx}"
+
+                # 针孔相机使用去畸变图像，鱼眼相机使用原始图像
+                if cam_idx < self.num_pinhole_cameras and "_undist" not in img_name:
+                    continue
+
+                src_img_path = os.path.join(
+                    sample_dir, img_name
+                )  # camera0_1746752396953826_ae8a9af423443189bab574a9b3904cee_undist.jpg
+
+                save_name = f"{frame_index:03}_{cam_idx}.jpg"  # 000_0, 000_1, ...
                 save_img_path = os.path.join(
-                    self.save_dir, clip_name, "images", img_name
+                    self.save_dir, clip_name, "images", save_name
                 )
                 image = Image.open(src_img_path)
                 image.save(save_img_path)
@@ -175,7 +173,7 @@ class CheryProcessor(object):
         extrinsics = self._parse_extrinsics(clip_name)  # cam2lidar
         intrinsics = self._parse_intrinsics(clip_name)
 
-        for cam_idx in range(self.num_pinhole_cameras):
+        for cam_idx in range(self.num_all_cameras):
             np.savetxt(
                 f"{self.save_dir}/{clip_name}/extrinsics/{cam_idx}.txt",
                 extrinsics[cam_idx],
@@ -321,13 +319,16 @@ class CheryProcessor(object):
             data = json.load(f)
 
         # 读取 lidar2camera
+        # NOTE(syc): 这里仅使用针孔相机    
         extrinsics = self._parse_extrinsics(clip_name)  # cam2lidar
+        # extrinsics = self._parse_extrinsics(clip_name, pinhole_only=True)  # cam2lidar
         lidar2cams = [np.linalg.inv(extrinsic) for extrinsic in extrinsics]
 
         # 读取相机内参
         intrinsics = [
             np.array(data["calibration"][f"camera{cam_idx}"]["intrinsic_scaled"])
-            for cam_idx in range(self.num_pinhole_cameras)
+            for cam_idx in range(self.num_all_cameras)
+            # for cam_idx in range(self.num_pinhole_cameras)
         ]
 
         # 创建保存目录
@@ -380,7 +381,8 @@ class CheryProcessor(object):
                 calib[f"camera{cam_idx}"]["height"],
                 calib[f"camera{cam_idx}"]["width"],
             )
-            for cam_idx in range(self.num_pinhole_cameras)
+            # for cam_idx in range(self.num_pinhole_cameras)
+            for cam_idx in range(self.num_all_cameras)
         ]
 
         # 处理每一帧
@@ -584,19 +586,38 @@ class CheryProcessor(object):
                     f"{self.save_dir}/{str(clip_name)}/instances", exist_ok=True
                 )
 
-    def _parse_extrinsics(self, clip_name):
+    def _parse_extrinsics(self, clip_name, pinhole_only=False):
         extrinsics_dir = os.path.join(
             self.load_dir, f"{clip_name}/extrinsics/lidar2camera"
         )
-        files = [
-            "lidar2frontwide.yaml",
-            "lidar2frontmain.yaml",
-            "lidar2leftfront.yaml",
-            "lidar2leftrear.yaml",
-            "lidar2rightfront.yaml",
-            "lidar2rightrear.yaml",
-            "lidar2rearmain.yaml",
-        ]
+        if pinhole_only:
+            files = [
+                # 针孔相机
+                "lidar2frontwide.yaml",
+                "lidar2frontmain.yaml",
+                "lidar2leftfront.yaml",
+                "lidar2leftrear.yaml",
+                "lidar2rightfront.yaml",
+                "lidar2rightrear.yaml",
+                "lidar2rearmain.yaml",
+            ]
+        else:
+            files = [
+                # 针孔相机
+                "lidar2frontwide.yaml",
+                "lidar2frontmain.yaml",
+                "lidar2leftfront.yaml",
+                "lidar2leftrear.yaml",
+                "lidar2rightfront.yaml",
+                "lidar2rightrear.yaml",
+                "lidar2rearmain.yaml",
+
+                # 鱼眼相机
+                "lidar2fisheyeleft.yaml",
+                "lidar2fisheyerear.yaml",
+                "lidar2fisheyefront.yaml",
+                "lidar2fisheyeright.yaml",
+            ]
 
         extrinsics = []
         for file in files:
@@ -619,7 +640,7 @@ class CheryProcessor(object):
 
         intrinsics = []
 
-        for cam_idx in range(self.num_pinhole_cameras):
+        for cam_idx in range(self.num_all_cameras):
             params = data["calibration"][f"camera{cam_idx}"]
 
             # # 原始相机内参

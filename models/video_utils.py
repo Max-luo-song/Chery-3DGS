@@ -17,6 +17,8 @@ from utils.visualization import (
     depth_visualizer,
 )
 
+from chery_tools.pinhole2fisheye.utils.pinhole2fisheye import pinhole2fisheye
+
 logger = logging.getLogger()
 
 def get_numpy(x: Tensor) -> np.ndarray:
@@ -1296,7 +1298,7 @@ def save_single_camera_video(
 def render_novel_views(
     trainer,
     render_data_list: list,
-    cam_ids,
+    camera_data: dict,
     video_output_pth: str,
     render_keys: list = ["rgbs", "depths"],
     fps: int = 30,
@@ -1313,6 +1315,10 @@ def render_novel_views(
     trainer.set_eval()  
 
     depths_per_cam = {}
+    cam_ids = camera_data.keys()
+
+    print(f"Render keys: {render_keys}")
+
     with torch.no_grad():
         for cam_id, render_data in zip(cam_ids, render_data_list):  # 单个相机的数据
             rgbs = []
@@ -1337,14 +1343,43 @@ def render_novel_views(
                 for k, v in outputs.items():
                     if isinstance(v, Tensor) and "rgb" in k:
                         outputs[k] = v.clamp(0., 1.)
-                    
-                rgbs.append(get_numpy(outputs["rgb"]))
-                depths.append(get_numpy(outputs["depth"]))
-
-                # ------------- mask ------------- #
-                if "opacity" in outputs:
-                    opacities.append(get_numpy(outputs["opacity"]))
                 
+                rgb = get_numpy(outputs["rgb"])
+                depth = get_numpy(outputs["depth"])
+                opacity = get_numpy(outputs["opacity"]) if "opacity" in outputs else None
+
+                # 模拟鱼眼相机
+                if camera_data[cam_id].is_fisheye:
+                    intrinsics = frame_data["cam_infos"]["intrinsics"].cpu().numpy()
+                    focal_length = intrinsics[0, 0]  # fx
+                    kb_coeffs = frame_data["cam_infos"]["kb_coeffs"].cpu().numpy().flatten()
+                    crop = False
+
+                    rgb = pinhole2fisheye(
+                        image=rgb,
+                        focal_length=focal_length,
+                        kb_coeffs=kb_coeffs,
+                        crop_valid=crop,
+                    )
+                    depth = pinhole2fisheye(
+                        image=depth,
+                        focal_length=focal_length,
+                        kb_coeffs=kb_coeffs,
+                        crop_valid=crop,
+                    )
+                    if opacity is not None:
+                        opacity = pinhole2fisheye(
+                            image=opacity,
+                            focal_length=focal_length,
+                            kb_coeffs=kb_coeffs,
+                            crop_valid=crop,
+                        )
+                    
+                rgbs.append(rgb)
+                depths.append(depth)
+                if opacity is not None:
+                    opacities.append(opacity)
+
             render_results = {}
             render_results["rgbs"] = rgbs
             render_results["depths"] = depths
@@ -1362,10 +1397,13 @@ def render_novel_views(
                 save_images=False,
             )
 
-            depths_per_cam[cam_id] = depths
+            # 鱼眼相机不保存 depth
+            if not camera_data[cam_id].is_fisheye:
+                depths_per_cam[cam_id] = depths
     
     depths_per_frame = [
-        {cam_id: depths_per_cam[cam_id][i] for cam_id in cam_ids} for i in range(len(depths))
+        {cam_id: depths_per_cam[cam_id][i] for cam_id in depths_per_cam}
+        for i in range(len(render_data_list[0]))
     ]
     return depths_per_frame
 

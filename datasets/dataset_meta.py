@@ -1,40 +1,76 @@
 DATASETS_CONFIG = {
     "chery": {
+        # Pinhole >>>
         0: {
             "camera_name": "front_wide",
             "original_size": (2160, 3840),
             "egocar_visible": True,
+            "is_fisheye": False
         },
         1: {
             "camera_name": "front_main",
             "original_size": (2160, 3840),
             "egocar_visible": False,
+            "is_fisheye": False
         },
         2: {
             "camera_name": "left_front",
             "original_size": (1280, 1920),
             "egocar_visible": False,
+            "is_fisheye": False
         },
         3: {
             "camera_name": "left_rear",
             "original_size": (1280, 1920),
             "egocar_visible": False,
+            "is_fisheye": False
         },
         4: {
             "camera_name": "right_front",
             "original_size": (1280, 1920),
             "egocar_visible": False,
+            "is_fisheye": False
         },
         5: {
             "camera_name": "right_rear",
             "original_size": (1280, 1920),
             "egocar_visible": False,
+            "is_fisheye": False
         },
         6: {
             "camera_name": "rear_main",
             "original_size": (1280, 1920),
             "egocar_visible": False,
+            "is_fisheye": False
         },
+        # <<<
+
+        # Fisheye >>>
+        7: {
+            "camera_name": "fisheye_left",
+            "original_size": (1536, 1920),
+            "egocar_visible": False,
+            "is_fisheye": True
+        },
+        8: {
+            "camera_name": "fisheye_rear",
+            "original_size": (1536, 1920),
+            "egocar_visible": False,
+            "is_fisheye": True
+        },
+        9: {
+            "camera_name": "fisheye_front",
+            "original_size": (1536, 1920),
+            "egocar_visible": False,
+            "is_fisheye": True
+        },
+        10: {
+            "camera_name": "fisheye_right",
+            "original_size": (1536, 1920),
+            "egocar_visible": False,
+            "is_fisheye": True
+        },
+        # <<<
     },
     "waymo": {
         0: {

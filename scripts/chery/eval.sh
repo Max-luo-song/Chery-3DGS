@@ -13,4 +13,4 @@ echo "Using checkpoint: $ckpt_path"
 export PYTHONPATH=$(pwd)
 CUDA_VISIBLE_DEVICES=$cuda_device_id python tools/eval.py \
     --resume_from $ckpt_path \
-    --enable_viewer
+    # --enable_viewer
