@@ -12,46 +12,18 @@ ln -s $PATH_TO_CHERY ./data/chery/raw
 
 ## 2. 数据预处理
 #### 运行预处理脚本
-对特定场景预处理：
-```shell
-export PYTHONPATH=\path\to\project
+`data/chery_scenes.txt` 存放了需要预处理的场景，运行 `scripts/chery/preprocess_data.sh` 进行预处理，预处理后的数据会存放在 `data/chery/processed` 目录下。
 
-python datasets/preprocess.py \
-    --data_root data/chery/raw/ \
-    --target_dir data/chery/processed \
-    --dataset chery \
-    --split training \
-    --scene_ids clip_1746752396800 \
-    --workers 8 \
-    --process_keys images lidar calib pose dynamic_masks objects
-```
-Alternatively, preprocess a batch of scenes by providing the split file:
-```shell
-export PYTHONPATH=\path\to\project
+## 3. 提取 Mask
+为了生成以下数据:
+- **sky masks** 
+- fine dynamic masks (可选)
 
-python datasets/preprocess.py \
-    --data_root data/chery/raw/ \
-    --target_dir data/chery/processed \
-    --dataset chery \
-    --split training \
-    --split_file data/chery_example_scenes.txt \
-    --workers 8 \
-    --process_keys images lidar calib pose dynamic_masks objects
-```
-The extracted data will be stored in the `data/chery/processed` directory.
+遵循以下步骤：
 
-## 3. Extract Masks
+#### 安装 `SegFormer`
 
-To generate:
-
-- **sky masks (required)** 
-- fine dynamic masks (optional)
-
-Follow these steps:
-
-#### Install `SegFormer` (Skip if already installed)
-
-:warning: SegFormer relies on `mmcv-full=1.2.7`, which relies on `pytorch=1.8` (pytorch<1.9). Hence, a seperate conda env is required.
+:警告：SegFormer 依赖于 `mmcv-full=1.2.7`, 其依赖于 `pytorch=1.8` (pytorch<1.9)。因此，需要创建另一个 conda 环境。
 
 ```shell
 #-- Set conda env
@@ -65,34 +37,19 @@ pip install timm==0.3.2 pylint debugpy opencv-python-headless attrs ipython tqdm
 pip install mmcv-full==1.2.7 --no-cache-dir
 
 #-- Clone and install segformer
+cd third_party
 git clone https://github.com/NVlabs/SegFormer
 cd SegFormer
 pip install .
 ```
 
-Download the pretrained model `segformer.b5.1024x1024.city.160k.pth` from the google_drive / one_drive links in https://github.com/NVlabs/SegFormer#evaluation .
+通过 https://github.com/NVlabs/SegFormer#evaluation 的 Google Drive / One Drive 链接下载预训练模型 `segformer.b5.1024x1024.city.160k.pth`。
 
-Remember the location where you download into, and pass it to the script in the next step with `--checkpoint` .
+在 SegFormer 项目目录下创建 `pretrained` 文件夹，放入预训练模型权重文件。
 
+#### 运行 Mask 提取脚本
 
-#### Run Mask Extraction Script
-
-```shell
-conda activate segformer
-segformer_path=/pathtosegformer
-
-python datasets/tools/extract_masks.py \
-    --data_root data/chery/processed/training \
-    --segformer_path=$segformer_path \
-    --checkpoint=$segformer_path/pretrained/segformer.b5.1024x1024.city.160k.pth \
-    --split_file data/chery_example_scenes.txt \
-    --process_dynamic_mask
-```
-Replace `/pathtosegformer` with the actual path to your Segformer installation.
-
-Note: The `--process_dynamic_mask` flag is included to process fine dynamic masks along with sky masks.
-
-This process will extract the required masks from your processed data.
+回到本项目根目录，运行 `scripts/chery/extract_masks.sh`
 
 ## 4. Human Body Pose Processing
 

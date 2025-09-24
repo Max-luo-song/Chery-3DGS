@@ -1,6 +1,7 @@
 import argparse
 import numpy as np
-
+import sys 
+sys.path.append(".")
 if __name__ == "__main__":
     """
     Unified Dataset preprocessing script
@@ -13,7 +14,8 @@ if __name__ == "__main__":
     - KITTI
     - NUPlan
     - PandaSet
-
+    - Chery
+    
     Usage:
     ------
     python datasets/preprocess.py \
@@ -109,7 +111,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--scene_ids",
         default=None,
-        type=int,
+        # type=int,
         nargs="+",
         help="scene ids to be processed, a list of integers separated by space. Range: [0, 798] for training, [0, 202] for validation",
     )

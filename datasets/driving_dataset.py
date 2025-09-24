@@ -40,6 +40,7 @@ class DrivingDataset(SceneDataset):
         super().__init__(data_cfg)
 
         # AVAILABLE DATASETS:
+        #   Chery:    11 cameras
         #   Waymo:    5 Cameras
         #   KITTI:    2 Cameras
         #   NuScenes: 6 Cameras
@@ -51,7 +52,7 @@ class DrivingDataset(SceneDataset):
             self.data_path = os.path.join(
                 self.data_cfg.data_root, f"{int(self.scene_idx):03d}"
             )
-        except:  # For KITTI, NuPlan
+        except:  # For Chery, KITTI, NuPlan
             self.data_path = os.path.join(self.data_cfg.data_root, self.scene_idx)
 
         assert os.path.exists(self.data_path), f"{self.data_path} does not exist"
@@ -80,8 +81,8 @@ class DrivingDataset(SceneDataset):
         self.pixel_source, self.lidar_source = self.build_data_source()
         # assert self.pixel_source is not None and self.lidar_source is not None, \
         #     "Must have both pixel source and lidar source"
-        if self.lidar_source != None:
-            self.project_lidar_pts_on_images(delete_out_of_view_points=True)  # gls
+        if self.lidar_source is not None:  # gls
+            self.project_lidar_pts_on_images(delete_out_of_view_points=True)
         self.aabb = self.get_aabb()
 
         # ---- define train and test indices ---- #
@@ -158,7 +159,7 @@ class DrivingDataset(SceneDataset):
 
         # ---- create lidar source ---- #
         lidar_source = None
-        if self.data_cfg.lidar_source.load_lidar:  # gls
+        if self.data_cfg.lidar_source.load_lidar:
             lidar_source = import_str(self.data_cfg.lidar_source.type)(
                 self.data_cfg.lidar_source,
                 self.data_path,
@@ -171,7 +172,6 @@ class DrivingDataset(SceneDataset):
                 pixel_source._unique_normalized_timestamps
                 - lidar_source._unique_normalized_timestamps
             ).abs().sum().item() == 0.0, "The timestamps of the pixel source and the lidar source are not synchronized"
-        # None
         return pixel_source, lidar_source
 
     ### 其实相当于从雷达数据中采样，设定一个采样值，采样值通常应该小于雷达点数，如果大于雷达点数采样值就是雷达点数
@@ -686,6 +686,8 @@ class DrivingDataset(SceneDataset):
             delete_out_of_view_points: bool
                 If True, the lidar points that are not visible from the camera will be removed.
         """
+        # os.makedirs("depths_gt", exist_ok=True)  # temp
+
         for cam in self.pixel_source.camera_data.values():
             lidar_depth_maps = []
             for frame_idx in tqdm(
@@ -739,12 +741,18 @@ class DrivingDataset(SceneDataset):
                     & (depth > 0)
                 )  # (num_pts, )
                 depth = depth[valid_mask]
+
                 _cam_points = cam_points[valid_mask]
                 depth_map = torch.zeros(cam.HEIGHT, cam.WIDTH).to(self.device)
                 depth_map[_cam_points[:, 1].long(), _cam_points[:, 0].long()] = (
                     depth.squeeze(-1)
                 )
                 lidar_depth_maps.append(depth_map)
+
+                # # 以图像形式保存深度 temp
+                # depth_img = depth_map.cpu().numpy()
+                # depth_img = (depth_img / np.max(depth_img) * 255).astype(np.uint8)
+                # cv2.imwrite(os.path.join("depths_gt", f"frame_{frame_idx}.png"), depth_img)
 
                 # used to filter out the lidar points that are visible from the camera
                 visible_indices = torch.arange(
@@ -765,17 +773,14 @@ class DrivingDataset(SceneDataset):
             self.lidar_source.delete_invisible_pts()
 
     def get_novel_render_traj(
-        self, traj_types: List[str] = ["front_center_interp"], target_frames: int = 100
+        self, traj_types: List[str] = ["front_center_interp"], target_frames: int = 100, traj_dir: str = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Get multiple novel trajectories of the scene for rendering.
 
         Args:
             traj_types: List[str]
-                A list of trajectory types to generate. Options for each type include:
-                - "front_center_interp": Interpolate key frames from the front center camera
-                - "s_curve": S-shaped trajectory using the front three cameras
-                - "three_key_poses": Creates a trajectory using three key poses from different cameras
+                A list of trajectory types to generate
             target_frames: int
                 The total number of frames for each novel trajectory
 
@@ -783,19 +788,28 @@ class DrivingDataset(SceneDataset):
             Dict[str, torch.Tensor]: A dictionary where keys are trajectory types and values
             are the generated novel trajectories, each of shape (target_frames, 4, 4)
         """
+        if self.type == "chery":
+            assert 0 in self.pixel_source.camera_list or 1 in self.pixel_source.camera_list, \
+                "For chery dataset, camera 0 and camera 1 are front cameras, at least one of them should be used for generating novel trajectory."
+
         per_cam_poses = {}
         for cam_id in self.pixel_source.camera_list:
             per_cam_poses[cam_id] = self.pixel_source.camera_data[cam_id].cam_to_worlds
 
         novel_trajs = {}
         for traj_type in traj_types:
-            novel_trajs[traj_type] = get_interp_novel_trajectories(
-                self.type, self.scene_idx, per_cam_poses, traj_type, target_frames
-            )
+            if traj_type == "custom" and traj_dir is not None:
+                # TODO: 支持自定义轨迹
+                # novel_trajs[traj_type] = load_custom_trajectory(traj_dir)
+                pass
+            else:
+                novel_trajs[traj_type] = get_interp_novel_trajectories(
+                    self.type, self.scene_idx, per_cam_poses, traj_type, target_frames
+                )
 
         return novel_trajs
 
-    def prepare_novel_view_render_data(self, traj: torch.Tensor) -> list:
+    def prepare_novel_view_render_data(self, traj: torch.Tensor, camera_data) -> list:
         """
         Prepare all necessary elements for novel view rendering.
 
@@ -808,4 +822,4 @@ class DrivingDataset(SceneDataset):
                 - image_infos: Image-related information (indices, normalized time, viewdirs, etc.)
         """
         # Call the PixelSource's method
-        return self.pixel_source.prepare_novel_view_render_data(self.type, traj)
+        return self.pixel_source.prepare_multicam_novel_view_render_data(self.type, traj, camera_data)

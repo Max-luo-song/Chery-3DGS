@@ -10,7 +10,7 @@ import argparse
 
 import torch
 import sys
-sys.path.append("/data4/gls/code/drivestudio")
+# sys.path.append("/data4/gls/code/drivestudio")
 from tools.eval import do_evaluation
 from utils.misc import import_str
 from utils.backup import backup_project
@@ -198,6 +198,7 @@ def main(args):
                 endpoint=False,
                 dtype=int,
             )[step // cfg.logging.vis_freq]
+
             with torch.no_grad():
                 render_results = render_images(
                     trainer=trainer,
@@ -209,6 +210,7 @@ def main(args):
                         for i in range(dataset.pixel_source.num_cams)
                     ],
                 )
+
             if args.enable_wandb:
                 wandb.log(
                     {
@@ -218,6 +220,7 @@ def main(args):
                         "image_metrics/occupied_ssim": render_results["occupied_ssim"],
                     }
                 )
+
             vis_frame_dict = save_videos(
                 render_results,
                 save_pth=os.path.join(
@@ -264,6 +267,7 @@ def main(args):
             outputs=outputs,
             image_infos=image_infos,
             cam_infos=cam_infos,
+            has_lidar=cfg.data.lidar_source.load_lidar
         )
         # check nan or inf
         for k, v in loss_dict.items():

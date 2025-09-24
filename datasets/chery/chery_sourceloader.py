@@ -37,7 +37,11 @@ OPENCV2DATASET = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1
 # 4 : "right_front",
 # 5 : "right_rear",
 # 6 : "rear_main",
-AVAILABLE_CAM_LIST = [0, 1, 2, 3, 4, 5, 6]
+# 7 : "fisheye_left",
+# 8 : "fisheye_rear",
+# 9 : "fisheye_front",
+# 10 : "fisheye_right"
+AVAILABLE_CAM_LIST = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 
 class CheryCameraData(CameraData):
@@ -69,11 +73,11 @@ class CheryCameraData(CameraData):
         _distortions = np.array(distortions)
 
         # load camera extrinsics
-        cam_to_lidar = np.loadtxt(
+        cam_to_main_lidar = np.loadtxt(
             os.path.join(self.data_path, "extrinsics", f"{self.cam_id}.txt")
         )
         # covnert rays from opencv coordinate system to chery coordinate system.
-        cam_to_lidar = cam_to_lidar @ OPENCV2DATASET
+        cam_to_main_lidar = cam_to_main_lidar @ OPENCV2DATASET
 
         # compute per-image poses and intrinsics
         cam_to_worlds, lidar_to_worlds = [], []
@@ -95,7 +99,7 @@ class CheryCameraData(CameraData):
             lidar_to_worlds.append(lidar_to_world)
             # transformation:
             #   (opencv_cam -> chery_cam -> chery_lidar) -> current_world
-            cam2world = lidar_to_world @ cam_to_lidar
+            cam2world = lidar_to_world @ cam_to_main_lidar
             cam_to_worlds.append(cam2world)
             intrinsics.append(_intrinsics)
             distortions.append(_distortions)
@@ -103,6 +107,8 @@ class CheryCameraData(CameraData):
         self.intrinsics = torch.from_numpy(np.stack(intrinsics, axis=0)).float()
         self.distortions = torch.from_numpy(np.stack(distortions, axis=0)).float()
         self.cam_to_worlds = torch.from_numpy(np.stack(cam_to_worlds, axis=0)).float()
+
+        self.cam_to_main_lidar = cam_to_main_lidar  # syc
 
     @classmethod
     def get_camera2worlds(
@@ -161,6 +167,7 @@ class CheryPixelSource(ScenePixelSource):
         self.end_timestep = end_timestep
         self.load_data()
 
+
     def load_cameras(self):
         self._timesteps = torch.arange(
             self.start_timestep, self.end_timestep
@@ -192,6 +199,36 @@ class CheryPixelSource(ScenePixelSource):
             camera.set_unique_ids(unique_cam_idx=idx, unique_img_idx=unique_img_idx)
             logger.info(f"Camera {camera.cam_name} loaded.")
             self.camera_data[cam_id] = camera
+    
+    # syc
+    def load_specified_cameras(self, cam_ids, downscale_when_loading):
+        camera_data = {}
+        for idx, cam_id in enumerate(cam_ids):
+            print(f"Loading specified camera {cam_id}")
+            camera = CheryCameraData(
+                dataset_name=self.dataset_name,
+                data_path=self.data_path,
+                cam_id=cam_id,
+                start_timestep=self.start_timestep,
+                end_timestep=self.end_timestep,
+                downscale_when_loading=downscale_when_loading[idx],
+                undistort=False,
+                buffer_downscale=self.buffer_downscale,
+                device=self.device,
+                calib_only=True,
+            )
+            camera.load_time(self.normalized_time)
+            unique_img_idx = (
+                torch.arange(len(camera), device=self.device) * len(cam_ids)
+                + idx
+            )
+            camera.set_unique_ids(unique_cam_idx=idx, unique_img_idx=unique_img_idx)
+            logger.info(f"Specified camera {camera.cam_name} loaded.")
+
+            camera_data[cam_id] = camera
+        
+        return camera_data
+
 
     def load_objects(self):
         """
@@ -419,11 +456,15 @@ class CheryLiDARSource(SceneLidarSource):
         Create a list of all the files in the dataset.
         e.g., a list of all the lidar scans in the dataset.
         """
+        lidar_type = self.data_cfg.lidar_type
+        assert lidar_type in ["lidar", "mclidar"]
+        logger.info(f"Using '{lidar_type}' for lidar data.")
+
         lidar_filepaths = []
         # lidar_pose_filepaths = []
         for t in range(self.start_timestep, self.end_timestep):
             lidar_filepaths.append(
-                os.path.join(self.data_path, "lidar", f"{t:03d}.bin")
+                os.path.join(self.data_path, lidar_type, f"{t:03d}.bin")
             )
             # lidar_pose_filepaths.append(
             #     os.path.join(self.data_path, "lidar_pose", f"{t:03d}.txt")
@@ -440,7 +481,7 @@ class CheryLiDARSource(SceneLidarSource):
 
         # we tranform the poses w.r.t. the first timestep to make the origin of the
         # first lidar pose as the origin of the world coordinate system.
-        ### 目的是将所有时间步的激光雷达(lidar)数据转换到以第一个时间步自车位置为原点的世界坐标系中
+        ### 将第一个时间步的 LiDAR 坐标作为世界坐标系的原点
         lidar_to_world_start = np.loadtxt(
             os.path.join(self.data_path, "lidar_pose", f"{self.start_timestep:03d}.txt")
         )
