@@ -342,7 +342,11 @@ class BasicTrainer(nn.Module):
     def collect_gaussians(
         self,
         cam: dataclass_camera,
-        image_ids: torch.Tensor # leave it here for future use
+        image_ids: torch.Tensor, # leave it here for future use
+        is_legend: Optional[bool] = False,
+        image_output_pth: Optional[str] = False,
+        rigid_id: Optional[int] = None,
+        edit_value: Optional[list] = None
     ) -> dataclass_gs:
         gs_dict = {
             "_means": [],
@@ -353,14 +357,21 @@ class BasicTrainer(nn.Module):
             "class_labels": [],
         }
         for class_name in self.gaussian_classes.keys():
-            gs = self.models[class_name].get_gaussians(cam)
+            if class_name == "RigidNodes" and is_legend:
+                gs = self.models[class_name].get_gaussians(cam=cam, is_legend=is_legend, image_output_pth=image_output_pth)
+            elif class_name == "RigidNodes" and rigid_id is not None:
+                gs = self.models[class_name].get_gaussians(cam=cam, rigid_id=rigid_id, edit_value=edit_value)
+            else:
+                gs = self.models[class_name].get_gaussians(cam)
+
             if gs is None:
                 continue
     
             # collect gaussians
             gs["class_labels"] = torch.full((gs["_means"].shape[0],), self.gaussian_classes[class_name], device=self.device)
             for k, _ in gs.items():
-                gs_dict[k].append(gs[k])
+                if k != "legend_img":
+                    gs_dict[k].append(gs[k])
         
         for k, v in gs_dict.items():
             gs_dict[k] = torch.cat(v, dim=0)
@@ -519,7 +530,8 @@ class BasicTrainer(nn.Module):
         self,
         outputs: Dict[str, torch.Tensor],
         image_infos: Dict[str, torch.Tensor],
-        cam_infos: Dict[str, torch.Tensor]
+        cam_infos: Dict[str, torch.Tensor],
+        has_lidar: bool = False,
     ) -> Dict[str, torch.Tensor]:
         # calculate loss
         loss_dict = {}
@@ -550,8 +562,7 @@ class BasicTrainer(nn.Module):
             loss_dict.update({"sky_loss_opacity": sky_loss_opacity})
         
         # depth loss
-        self.depth_loss_fn = None # gls
-        if self.depth_loss_fn is not None:
+        if has_lidar and self.depth_loss_fn is not None:
             gt_depth = image_infos["lidar_depth_map"] 
             lidar_hit_mask = (gt_depth > 0).float() * valid_loss_mask
             pred_depth = outputs["depth"]

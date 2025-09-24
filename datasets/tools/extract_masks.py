@@ -57,7 +57,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--scene_ids",
         default=None,
-        type=int,
         nargs="+",
         help="scene ids to be processed, a list of integers separated by space. Range: [0, 798] for training, [0, 202] for validation",
     )
@@ -166,6 +165,9 @@ if __name__ == "__main__":
             if args.process_dynamic_mask:
                 # save human masks
                 rough_human_mask_path = os.path.join(rough_human_mask_dir, f"{fbase}.png")
+                if not os.path.exists(rough_human_mask_path):
+                    continue
+
                 rough_human_mask = (imageio.imread(rough_human_mask_path) > 0)
                 huamn_mask = np.isin(mask, dataset_classes_in_sematic['human'])
                 valid_human_mask = np.logical_and(huamn_mask, rough_human_mask)

@@ -47,53 +47,71 @@ def layout_chery(imgs: List[np.array], cam_names: List[str]) -> np.array:
     """Combine cameras into a tiled image.
     Layout:
 
-        ###########################################################################################
-        # front_wide # front_main # left_front # left_rear # right_front # right_rear # rear_main #
-        ###########################################################################################
+        ###########################################
+        # left_front  # front_main  # right_front #
+        # left_rear   # front_wide  # right_rear  #
+        #             # rear_main   #             #
+        ###########################################
     """
     channel = imgs[0].shape[-1]
-    # main_cam_idx = cam_names.index("front_wide")
-    main_cam_idx = 0
-    front_img = imgs[main_cam_idx]
-    landscape_width, landscape_height = front_img.shape[1], front_img.shape[0]
 
-    height = landscape_height
-    width = landscape_width * 7
+    max_width = 0
+    max_height = 0
+    min_width = 1e10
+    min_height = 1e10
+
+    for img in imgs:
+        max_width = max(max_width, img.shape[1])
+        max_height = max(max_height, img.shape[0])
+        min_width = min(min_width, img.shape[1])
+        min_height = min(min_height, img.shape[0])
+
+    width = min_width + max_width + min_width
+    height = max_height * 2 + min_height
+
     tiled_img = np.zeros((height, width, channel), dtype=np.float32)
     filled_mask = np.zeros((height, width), dtype=np.uint8)
 
-    # 按顺序拼接每个视图
     for idx, cam_name in enumerate(cam_names):
         img = imgs[idx]
         img_height, img_width = img.shape[0], img.shape[1]
 
-        # TODO: 美化图像位置
-        if cam_name == "front_wide":
-            tiled_img[landscape_height - img.shape[0] :, :landscape_width] = img
-            filled_mask[landscape_height - img.shape[0] :, :landscape_width] = 1
+        if cam_name == "front_main":
+            tiled_img[:max_height, min_width : min_width + max_width] = img
+            filled_mask[:max_height, min_width : min_width + max_width] = 1
+        elif cam_name == "front_wide":
+            tiled_img[
+                max_height : max_height * 2, min_width : min_width + max_width
+            ] = img
+            filled_mask[
+                max_height : max_height * 2, min_width : min_width + max_width
+            ] = 1
         elif cam_name == "left_front":
-            tiled_img[:, landscape_width : 2 * landscape_width] = img
-            filled_mask[:, landscape_width : 2 * landscape_width] = 1
-        elif cam_name == "front_main":
-            tiled_img[:, 2 * landscape_width : 3 * landscape_width] = img
-            filled_mask[:, 2 * landscape_width : 3 * landscape_width] = 1
+            tiled_img[max_height - min_height : max_height, :min_width] = img
+            filled_mask[max_height - min_height : max_height, :min_width] = 1
         elif cam_name == "right_front":
-            tiled_img[:, 3 * landscape_width : 4 * landscape_width] = img
-            filled_mask[:, 3 * landscape_width : 4 * landscape_width] = 1
+            tiled_img[max_height - min_height : max_height, min_width + max_width :] = (
+                img
+            )
+            filled_mask[
+                max_height - min_height : max_height, min_width + max_width :
+            ] = 1
         elif cam_name == "left_rear":
-            tiled_img[:, 4 * landscape_width : 5 * landscape_width] = img
-            filled_mask[:, 4 * landscape_width : 5 * landscape_width] = 1
-        elif cam_name == "rear_main":
-            tiled_img[:, 5 * landscape_width : 6 * landscape_width] = img
-            filled_mask[:, 5 * landscape_width : 6 * landscape_width] = 1
+            tiled_img[max_height : max_height + min_height, :min_width] = img
+            filled_mask[max_height : max_height + min_height, :min_width] = 1
         elif cam_name == "right_rear":
-            tiled_img[landscape_height - img.shape[0] :, 6 * landscape_width :] = img
-            filled_mask[landscape_height - img.shape[0] :, 6 * landscape_width :] = 1
-        # print(f"filled_mask sum: {np.sum(filled_mask)}")
+            tiled_img[max_height : max_height + min_height, min_width + max_width :] = (
+                img
+            )
+            filled_mask[
+                max_height : max_height + min_height, min_width + max_width :
+            ] = 1
+        elif cam_name == "rear_main":
+            w_start = int((width - img_width) / 2)
+            w_end = w_start + min_width
 
-    # 检查 filled_mask 是否为空
-    if not np.any(filled_mask):
-        print("Warning: filled_mask is empty")
+            tiled_img[ max_height * 2 :, w_start:w_end ] = img
+            filled_mask[ max_height * 2 :, w_start:w_end ] = 1
 
     # crop the image according to the lagrest filled area
     min_y, max_y = np.where(filled_mask)[0].min(), np.where(filled_mask)[0].max()

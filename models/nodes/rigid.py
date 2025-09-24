@@ -9,6 +9,13 @@ from models.modules import ConditionalDeformNetwork
 from models.gaussians.basics import *
 from models.gaussians.vanilla import VanillaGaussians
 
+import numpy as np
+import cv2
+import matplotlib.cm as cm
+import os
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
 logger = logging.getLogger()
 
 class RigidNodes(VanillaGaussians):
@@ -70,16 +77,18 @@ class RigidNodes(VanillaGaussians):
             else:
                 num_pts = 10000  # 默认1000个点
                 v["pts"] = torch.randn(num_pts, 3)  # 创建随机点
+
             if "colors" in v:
-                    if isinstance(v["colors"], list):
-                        v["colors"] = torch.tensor(v["colors"], dtype=torch.float32)
-                    # 确保 colors 的数量与 pts 匹配
-                    if v["colors"].shape[0] != num_pts:
-                        # 如果不匹配，创建随机颜色
-                        v["colors"] = torch.rand(num_pts, 3)
-            else:
-                    # 如果没有 colors，创建随机颜色
+                if isinstance(v["colors"], list):
+                    v["colors"] = torch.tensor(v["colors"], dtype=torch.float32)
+                # 确保 colors 的数量与 pts 匹配
+                if v["colors"].shape[0] != num_pts:
+                    # 如果不匹配，创建随机颜色
                     v["colors"] = torch.rand(num_pts, 3)
+            else:
+                # 如果没有 colors，创建随机颜色
+                v["colors"] = torch.rand(num_pts, 3)
+
             init_means.append(v["pts"])
             init_colors.append(v["colors"])
             instances_pose.append(v["poses"].unsqueeze(1))
@@ -87,6 +96,7 @@ class RigidNodes(VanillaGaussians):
             instances_fv.append(v["frame_info"].unsqueeze(1))
             # point_ids.append(torch.full((v["num_pts"], 1), id_in_model, dtype=torch.long)) # gls
             point_ids.append(torch.full((num_pts, 1), id_in_model, dtype=torch.long))
+
         init_means = torch.cat(init_means, dim=0).to(self.device) # (N, 3)
         init_colors = torch.cat(init_colors, dim=0).to(self.device) # (N, 3)
         instances_pose = torch.cat(instances_pose, dim=1).to(self.device) # (num_frame, num_instances, 4, 4)
@@ -402,7 +412,14 @@ class RigidNodes(VanillaGaussians):
         _quats = self.quat_act(quats)
         return quat_mult(global_quats_per_pts, _quats)
 
-    def get_gaussians(self, cam: dataclass_camera) -> Dict[str, torch.Tensor]:
+    def get_gaussians(
+        self, cam: dataclass_camera, 
+        is_legend: Optional[bool] = False, 
+        image_output_pth: Optional[str]=None,
+        rigid_id: Optional[int]=None,
+        edit_value: Optional[list]=None,
+    ) -> Dict[str, torch.Tensor]:
+
         filter_mask = torch.ones_like(self._means[:, 0], dtype=torch.bool)
         self.filter_mask = filter_mask
         # NOTE: hack here, need to consider a gaussian filter for efficient rendering
@@ -447,6 +464,101 @@ class RigidNodes(VanillaGaussians):
         self._gs_cache = {
             "_scales": activated_scales[filter_mask],
         }
+
+        if is_legend:
+            gs_dict = self.edit_legned_gaussians(gs_dict, image_output_pth)
+        if rigid_id and edit_value is not None:
+            gs_dict = self.edit_legned_gaussians(gs_dict, image_output_pth)
+
+        return gs_dict
+
+    def edit_gaussians(
+        self,
+        gs_dict: Dict,
+        rigid_id: int,
+        edit_value: list
+    ) -> Dict[str, torch.Tensor]: 
+        unique_vals, counts = torch.unique(self.point_ids, return_counts=True)
+        if instance_idx not in unique_vals:
+            raise ValueError(f"Invalid instance id: {instance_idx}, the valid instance id include: {unique_vals}")
+
+        instance_mask = (self.point_ids.squeeze(-1) == instance_idx)
+
+        shift = torch.tensor(
+            edit_value, dtype=gs_dict["_means"].dtype, device=gs_dict["_means"].device
+        ).view(1, 3)                      
+
+        # 3. 直接平移
+        gs_dict["_means"][instance_mask] += shift
+        
+        return gs_dict
+
+    def generate_legend_image(
+        self,
+        ids: torch.Tensor,        # shape (N,)
+        colors: torch.Tensor,     # shape (N,3) float 0~1
+        image_output_pth: str
+    )    -> np.ndarray:
+        """
+        依据 ids 与 colors 生成 legend png，并返回 numpy(H,W,3,uint8)。
+
+        若 save_path 给定则落盘。
+        """
+        ids_np     = ids.to('cpu').numpy()
+        colors_np  = colors.to('cpu').numpy()
+        N          = len(ids_np)
+
+        fig_h = max(2, N * 0.35)              # 高度随类别数增
+        fig, ax = plt.subplots(figsize=(2.0, fig_h), dpi=100)
+
+        # 反向画让 0 在最下方（完全可按自己习惯）
+        for row, (idx, col) in enumerate(zip(ids_np[::-1], colors_np[::-1])):
+            # 左边色块
+            ax.add_patch(
+                patches.Rectangle(
+                    (0, row), width=1.0, height=1.0, facecolor=col, edgecolor="none"
+                )
+            )
+            # 右边文字
+            ax.text(
+                1.2, row + 0.5, str(int(idx)),
+                va="center", ha="left", fontsize=10, color="black"
+            )
+
+        ax.set_xlim(0, 3)
+        ax.set_ylim(0, N)
+        ax.axis("off")
+        fig.tight_layout(pad=0)
+
+        if image_output_pth is not None and not os.path.exists(image_output_pth):
+            fig.savefig(image_output_pth, bbox_inches="tight", pad_inches=0)
+            print(f"[legend] saved image -> {image_output_pth}")
+
+        plt.close(fig)
+
+    def edit_legned_gaussians(
+        self,
+        gs_dict: Dict,
+        image_output_pth: str
+    ) -> Dict[str, torch.Tensor]: 
+        unique_vals, counts = torch.unique(self.point_ids, return_counts=True)
+
+        # To find instance
+        N = len(unique_vals)
+        cmap = cm.get_cmap('gist_ncar')          # 连续调色板
+        colors_np = cmap(np.linspace(0, 1, N, endpoint=False))[:, :3]   # (N,3)  float 0~1
+        
+        colors = torch.from_numpy(colors_np).to(
+            dtype=gs_dict["_rgbs"].dtype,          # 通常是 torch.float32 或 float16
+            device=gs_dict["_rgbs"].device         # same GPU
+        )
+        
+        for unique_val in unique_vals:
+            instance_mask = (self.point_ids.squeeze(-1) == unique_val)
+            gs_dict["_rgbs"][instance_mask, :] = colors[unique_val]
+
+        self.generate_legend_image(unique_vals, colors, image_output_pth)
+        
         return gs_dict
 
     def get_instance_activated_gs_dict(self, ins_id: int) -> Dict[str, torch.Tensor]:

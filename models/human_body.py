@@ -16,9 +16,9 @@ from pytorch3d.transforms import (
 )
 
 from models.modules import VoxelDeformer
-from smplx import SMPLLayer
-from smplx.utils import SMPLOutput
-from smplx.lbs import vertices2joints, batch_rigid_transform
+from third_party.smplx.smplx import SMPLLayer
+from third_party.smplx.smplx.utils import SMPLOutput
+from third_party.smplx.smplx.lbs import vertices2joints, batch_rigid_transform
 
 def blockPrinting(func):
     def func_wrapper(*args, **kwargs):
