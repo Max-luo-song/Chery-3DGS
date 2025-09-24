@@ -41,6 +41,7 @@ class DrivingDataset(SceneDataset):
 
         # AVAILABLE DATASETS:
         #   Chery:    11 cameras
+        #   Qcraft:   13 cameras
         #   Waymo:    5 Cameras
         #   KITTI:    2 Cameras
         #   NuScenes: 6 Cameras
@@ -52,7 +53,7 @@ class DrivingDataset(SceneDataset):
             self.data_path = os.path.join(
                 self.data_cfg.data_root, f"{int(self.scene_idx):03d}"
             )
-        except:  # For Chery, KITTI, NuPlan
+        except:  # For Chery, Qcraft, KITTI, NuPlan
             self.data_path = os.path.join(self.data_cfg.data_root, self.scene_idx)
 
         assert os.path.exists(self.data_path), f"{self.data_path} does not exist"
@@ -773,7 +774,10 @@ class DrivingDataset(SceneDataset):
             self.lidar_source.delete_invisible_pts()
 
     def get_novel_render_traj(
-        self, traj_types: List[str] = ["front_center_interp"], target_frames: int = 100, traj_dir: str = None,
+        self,
+        traj_types: List[str] = ["front_center_interp"],
+        target_frames: int = 100,
+        traj_dir: str = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Get multiple novel trajectories of the scene for rendering.
@@ -788,9 +792,9 @@ class DrivingDataset(SceneDataset):
             Dict[str, torch.Tensor]: A dictionary where keys are trajectory types and values
             are the generated novel trajectories, each of shape (target_frames, 4, 4)
         """
-        if self.type == "chery":
-            assert 0 in self.pixel_source.camera_list or 1 in self.pixel_source.camera_list, \
-                "For chery dataset, camera 0 and camera 1 are front cameras, at least one of them should be used for generating novel trajectory."
+        # if self.type == "chery":
+        #     assert 0 in self.pixel_source.camera_list or 1 in self.pixel_source.camera_list, \
+        #         "For chery dataset, camera 0 and camera 1 are front cameras, at least one of them should be used for generating novel trajectory."
 
         per_cam_poses = {}
         for cam_id in self.pixel_source.camera_list:
@@ -822,4 +826,6 @@ class DrivingDataset(SceneDataset):
                 - image_infos: Image-related information (indices, normalized time, viewdirs, etc.)
         """
         # Call the PixelSource's method
-        return self.pixel_source.prepare_multicam_novel_view_render_data(self.type, traj, camera_data)
+        return self.pixel_source.prepare_multicam_novel_view_render_data(
+            self.type, traj, camera_data
+        )

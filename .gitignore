@@ -8,6 +8,7 @@ smpl_models/
 
 # self added
 data/chery
+data/qcraft
 data/waymo
 data/pandaset
 data/argoverse
@@ -190,10 +191,8 @@ cython_debug/
 local_scripts
 
 output
-output/
 deprecated/
 tmp/
 backup/
 third_party/SegFormer-master
-third_party/SegFormer-master/
-third_party/SMPL_python_v.1.1.0/
+third_party/SMPL_python_v.1.1.0
