@@ -19,7 +19,7 @@ CAMERA_PERSPECTIVE = [
 ]
 
 
-def euler2transform(chery_extrinsics: Dict) -> List:
+def euler2transform(chery_extrinsics: Dict, type) -> List:
     """
     "camera_to_vehicle_extrinsics": {
             "pitch": -0.0007114634499885142,
@@ -47,16 +47,18 @@ def euler2transform(chery_extrinsics: Dict) -> List:
     assert isinstance(chery_extrinsics, dict)
     # 欧拉角（单位：弧度），顺序可选 'xyz', 'zyx' 等
     R_mat = R.from_euler(
-        "xyz",
+        "ZYX",
         [
             chery_extrinsics.get("yaw"),
             chery_extrinsics.get("pitch"),
             chery_extrinsics.get("roll"),
         ],
-        degrees=True,
+        degrees=False,
     ).as_matrix()
 
     T = np.eye(4)
+    if type == "camera":
+        R_mat = np.array([[0, -1, 0], [0, 0, -1], [1, 0, 0]]).T @ R_mat
     T[:3, :3] = R_mat
     T[:3, 3] = [
         chery_extrinsics.get("x"),
@@ -118,14 +120,18 @@ def organize_calibs(args):
     lidar_ext = euler2transform(
         car_infos.get("lidar_params", False)[0]
         .get("installation", False)
-        .get("extrinsics", False)
+        .get("extrinsics", False),
+        "lidar",
     )
     # cal lidar to cam extrinsics
     lidar2cams = gen_lidar_to_cams(
         lidar_ext,
         [
             euler2transform(
-                cam_params.get(cam_id, False).get("camera_to_vehicle_extrinsics", False)
+                cam_params.get(cam_id, False).get(
+                    "camera_to_vehicle_extrinsics", False
+                ),
+                "camera",
             )
             for cam_id in CAMERA_PERSPECTIVE
         ],
@@ -196,5 +202,5 @@ if __name__ == "__main__":
     convert2sus(args)
 
 """
-python chery_to_sustechpoints.py --src ~/Downloads/场景重建/qcraft_0702/20250702_133223_Q2517_60_75 --dst ~/Tools/SUSTechPOINTS/data/qcraft_test_0918
+python datasets/chery/chery_to_sustechpoints.py --src ~/Downloads/场景重建/qcraft_0702/20250702_133223_Q2517_60_75 --dst ~/Tools/SUSTechPOINTS/data/qcraft_test_0918
 """
