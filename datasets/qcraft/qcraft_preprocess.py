@@ -4,10 +4,12 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 import yaml
+import google.protobuf.json_format as json_format
 
 from datasets.tools.multiprocess_utils import track_parallel_progress
+from chery_tools.convert_lidar_pcd import parse_lidar_pcd_file
 from .qcraft_utils import (
-    parse_lidar_pcd_file,
+    pose_to_transform_matrix,
     project_points_to_image,
     draw_and_fill_box,
     filter_points_in_box,
@@ -27,6 +29,22 @@ QCRAFT_CLASSES = ["unknown", "Vehicle", "Pedestrian", "Sign", "Cyclist"]
 QCRAFT_DYNAMIC_CLASSES = ["Vehicle", "Pedestrian", "Cyclist"]
 QCRAFT_HUMAN_CLASSES = ["Pedestrian", "Cyclist"]
 QCRAFT_VEHICLE_CLASSES = ["Vehicle"]
+
+QCRAFT_CAMERA_DICT = {  # 轻舟
+    "CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_H110": 0,  # 广角前视 FOV110
+    "CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_H60": 1,  # 广角前视 FOV60
+    "CAM_PBQ_FRONT_TELE_RESET_OPTICAL_H30": 2,  # 长焦前视 FOV30
+    "CAM_PBQ_FRONT_TELE_RESET_OPTICAL_H15": 3,  # 长焦前视 FOV15
+    "CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_LEFT_H60": 4,  # 广角左前 FOV60
+    "CAM_PBQ_FRONT_LEFT_RESET_OPTICAL_H99": 5,  # 左前 FOV99
+    "CAM_PBQ_REAR_LEFT_RESET_OPTICAL_H99": 6,  # 左后 FOV99
+    "CAM_PBQ_REAR_LEFT_RESET_OPTICAL_H30": 7,  # 左后 FOV30
+    "CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_RIGHT_H60": 8,  # 广角右前 FOV60
+    "CAM_PBQ_FRONT_RIGHT_RESET_OPTICAL_H99": 9,  # 右前 FOV99
+    "CAM_PBQ_REAR_RIGHT_RESET_OPTICAL_H99": 10,  # 右后 FOV99
+    "CAM_PBQ_REAR_RIGHT_RESET_OPTICAL_H30": 11,  # 右后 FOV30
+    "CAM_PBQ_REAR_RESET_OPTICAL_H50": 12,  # 后视 FOV50
+}
 
 
 class QcraftProcessor(object):
@@ -72,9 +90,7 @@ class QcraftProcessor(object):
         self.process_keys = process_keys
         print("will process keys: ", self.process_keys)
 
-        # NOTE(syc): 目前轻舟数据只有一个子目录
-        subdir = os.listdir(self.load_dir)[0]
-        self.load_dir = os.path.join(load_dir, subdir)
+        self.load_dir = load_dir
 
         self.save_dir = f"{save_dir}/{prefix}"
         self.workers = int(workers)
@@ -83,6 +99,13 @@ class QcraftProcessor(object):
         self.num_all_cameras = 13
 
         self.create_folder()
+
+    def _get_clip_dir(self, clip_name) -> str:
+        original_clip_dir = os.path.join(self.load_dir, clip_name)
+
+        # NOTE(syc): 轻舟数据下有一个子目录
+        subdirs = os.listdir(original_clip_dir)
+        return os.path.join(original_clip_dir, subdirs[0])
 
     def convert(self):
         """Convert action."""
@@ -142,145 +165,101 @@ class QcraftProcessor(object):
 
     def save_image(self, clip_name):
         """保存经过畸变校正的相机图像为 jpg 格式"""
-        clip_dir = os.path.join(self.load_dir, clip_name)
+        clip_dir = self._get_clip_dir(clip_name)
+        sample_names = self._read_sample_names(clip_dir)
 
-        sample_folders = [
-            sample_folder
-            for sample_folder in os.listdir(clip_dir)
-            if os.path.isdir(os.path.join(clip_dir, sample_folder))
-            and sample_folder.startswith("sample_")
-        ]
-        # 按帧的时间戳排序
-        sample_folders.sort(key=lambda x: int(x.split("_")[-1]))
-
-        for frame_index, sample_name in enumerate(sample_folders):
+        for frame_index, sample_name in enumerate(sample_names):
             sample_dir = os.path.join(clip_dir, sample_name)
 
-            for img_name in os.listdir(sample_dir):
-                if not img_name.startswith("camera"):
-                    continue
+            img_names = [
+                img_name  # img_name: 20250702_133223_Q2517-CAM_PBQ_FRONT_LEFT_RESET_OPTICAL_H99-1751434420.0459.jpg
+                for img_name in os.listdir(sample_dir)
+                if img_name.endswith(".jpg")
+            ]
 
-                cam_idx = int(img_name.split("_")[0][6:])  # 0-10
-                assert (
-                    0 <= cam_idx < self.num_all_cameras
-                ), f"Invalid camera index: {cam_idx}"
-
-                # 针孔相机使用去畸变图像，鱼眼相机使用原始图像
-                if cam_idx < self.num_pinhole_cameras and "_undist" not in img_name:
-                    continue
-
-                src_img_path = os.path.join(
-                    sample_dir, img_name
-                )  # camera0_1746752396953826_ae8a9af423443189bab574a9b3904cee_undist.jpg
+            for img_name in img_names:
+                # 求出相机编号
+                cam_idx = None
+                for cam_name in QCRAFT_CAMERA_DICT:
+                    if cam_name in img_name:
+                        cam_idx = QCRAFT_CAMERA_DICT[cam_name]
+                        break
+                assert cam_idx is not None, f"Unknown camera in {img_name}"
 
                 save_name = f"{frame_index:03}_{cam_idx}.jpg"  # 000_0, 000_1, ...
                 save_img_path = os.path.join(
                     self.save_dir, clip_name, "images", save_name
                 )
-                image = Image.open(src_img_path)
+                image = Image.open(os.path.join(sample_dir, img_name))
                 image.save(save_img_path)
 
     def save_calib(self, clip_name):
         # """解析并保存相机的外参（以LiDAR为参考系）和内参"""
-        extrinsics = self._parse_extrinsics(clip_name)  # cam2lidar
+        cam2lidars = self._parse_extrinsics(clip_name)
         intrinsics = self._parse_intrinsics(clip_name)
 
         for cam_idx in range(self.num_all_cameras):
             np.savetxt(
                 f"{self.save_dir}/{clip_name}/extrinsics/{cam_idx}.txt",
-                extrinsics[cam_idx],
+                cam2lidars[cam_idx],
             )
             np.savetxt(
                 f"{self.save_dir}/{clip_name}/intrinsics/{cam_idx}.txt",
                 intrinsics[cam_idx],
             )
-        pass
 
+    # FIXME: lidar点云看起来是ego坐标系下的？？？
     def save_lidar(self, clip_name):
-        # """
         # 将雷达数据从 pcd 格式转换到 bin 格式
+        clip_dir = self._get_clip_dir(clip_name)
+        sample_names = self._read_sample_names(clip_dir)
 
-        # 二进制文件中每个点包含 7 个 float32 字段：
-        #     x y z intensity timestamp ring lidar_id
-        # """
+        for frame_idx, sample_name in tqdm(enumerate(sample_names)):
+            sample_dir = os.path.join(clip_dir, sample_name)
 
-        # clip_dir = os.path.join(self.load_dir, clip_name)
+            lidar_names = [
+                lidar_name  # 20250702_133223_Q2517-LDR_FRONT-1751434420.2514-ego.pcd
+                for lidar_name in os.listdir(sample_dir)
+                if lidar_name.endswith(".pcd") and "LDR_FRONT" in lidar_name
+            ]
+            lidar_paths = [
+                os.path.join(sample_dir, lidar_name) for lidar_name in lidar_names
+            ]
 
-        # lidar_slam_info_path = os.path.join(
-        #     clip_dir, "static_obj/lidar_slam/lidar_slam_info.json"
-        # )
-        # if os.path.exists(lidar_slam_info_path):
-        #     print("Found mc_pcds for lidar 0")
+            def save_lidar_data_as_bin(lidar_paths, lidar_type):
+                point_clouds = [
+                    parse_lidar_pcd_file(lidar_path) for lidar_path in lidar_paths
+                ]  # x y z intensity
 
-        #     with open(lidar_slam_info_path, "r") as f:
-        #         lidar_slam_info = json.load(f)
+                def append_lidar_id(pc, lidar_id):
+                    new_dtype = np.dtype(pc.dtype.descr + [("lidar_id", np.uint32)])
+                    new_pc = np.empty(pc.shape, dtype=new_dtype)
 
-        #     mc_lidar_paths = {
-        #         info["frame_name"]: os.path.join(clip_dir, info["mc_lidar"])
-        #         for info in lidar_slam_info["lidar0"]["mc_pcds"]
-        #     }
-        # else:
-        #     print("No mc_pcds found for lidar 0")
-        #     mc_lidar_paths = None
+                    for field in pc.dtype.names:
+                        new_pc[field] = pc[field]
 
-        # sample_folders = [
-        #     sample_folder
-        #     for sample_folder in os.listdir(clip_dir)
-        #     if os.path.isdir(os.path.join(clip_dir, sample_folder))
-        #     and sample_folder.startswith("sample_")
-        # ]
-        # # 按帧的时间戳排序
-        # sample_folders.sort(key=lambda x: int(x.split("_")[-1]))
+                    new_pc["lidar_id"] = lidar_id
+                    return new_pc
 
-        # for frame_idx, sample_name in tqdm(enumerate(sample_folders)):
-        #     sample_dir = os.path.join(clip_dir, sample_name)
+                point_clouds = [
+                    append_lidar_id(pc, lidar_id)
+                    for lidar_id, pc in enumerate(point_clouds)
+                ]
 
-        #     lidar_names = [
-        #         lidar_name  # lidar0_1746752396900110_2e4bd97ab9d533658a28cfbe1581df57.pcd
-        #         for lidar_name in os.listdir(sample_dir)
-        #         if lidar_name.startswith("lidar")
-        #         and not lidar_name.startswith("lidar5")  # 排除5号雷达（m2雷达）
-        #     ]
-        #     lidar_names = sorted(lidar_names, key=lambda x: int(x.split("_")[0][5:]))
-        #     lidar_paths = [
-        #         os.path.join(sample_dir, lidar_name) for lidar_name in lidar_names
-        #     ]
+                # 点云数据合并
+                point_cloud = np.concatenate(point_clouds, axis=0)
 
-        #     def save_lidar_data_as_bin(lidar_paths, lidar_type):
-        #         point_clouds = [
-        #             parse_lidar_pcd_file(lidar_path) for lidar_path in lidar_paths
-        #         ]
+                # 提取所有字段并转换为 float32
+                fields = ["x", "y", "z", "intensity", "lidar_id"]
+                point_cloud = np.stack(
+                    [point_cloud[field] for field in fields], axis=1
+                ).astype(np.float32)
 
-        #         def append_lidar_id(pc, lidar_id):
-        #             new_dtype = np.dtype(pc.dtype.descr + [("lidar_id", np.uint32)])
-        #             new_pc = np.empty(pc.shape, dtype=new_dtype)
+                # 保存为二进制文件
+                pc_path = f"{self.save_dir}/{clip_name}/{lidar_type}/{str(frame_idx).zfill(3)}.bin"
+                point_cloud.astype(np.float32).tofile(pc_path)
 
-        #             for field in pc.dtype.names:
-        #                 new_pc[field] = pc[field]
-
-        #             new_pc["lidar_id"] = lidar_id
-        #             return new_pc
-
-        #         point_clouds = [
-        #             append_lidar_id(pc, lidar_id)
-        #             for lidar_id, pc in enumerate(point_clouds)
-        #         ]
-
-        #         # 点云数据合并
-        #         point_cloud = np.concatenate(point_clouds, axis=0)
-
-        #         # 提取所有字段并转换为 float32
-        #         fields = ["x", "y", "z", "intensity", "timestamp", "ring", "lidar_id"]
-        #         point_cloud = np.stack(
-        #             [point_cloud[field] for field in fields], axis=1
-        #         ).astype(np.float32)
-
-        #         # 保存为二进制文件
-        #         pc_path = f"{self.save_dir}/{clip_name}/{lidar_type}/{str(frame_idx).zfill(3)}.bin"
-        #         point_cloud.astype(np.float32).tofile(pc_path)
-
-        #     save_lidar_data_as_bin(lidar_paths, "lidar")
-        pass
+            save_lidar_data_as_bin(lidar_paths, "lidar")
 
     def save_pose(self, clip_name):
         """保存每一帧的位姿"""
@@ -589,64 +568,83 @@ class QcraftProcessor(object):
                     f"{self.save_dir}/{str(clip_name)}/instances", exist_ok=True
                 )
 
-    # def _parse_extrinsics(self, clip_name, pinhole_only=False):
-    #     extrinsics_dir = os.path.join(
-    #         self.load_dir, f"{clip_name}/extrinsics/lidar2camera"
-    #     )
-    #     files = [
-    #         "lidar2frontwide.yaml",
-    #         "lidar2frontmain.yaml",
-    #         "lidar2leftfront.yaml",
-    #         "lidar2leftrear.yaml",
-    #         "lidar2rightfront.yaml",
-    #         "lidar2rightrear.yaml",
-    #         "lidar2rearmain.yaml",
-    #     ]
-    #     extrinsics = []
-    #     for file in files:
-    #         with open(os.path.join(extrinsics_dir, file), "r", encoding="utf-8") as f:
-    #             extrinsic = yaml.safe_load(f)
+    def _parse_ego_poses(self, clip_name):
+        clip_dir = self._get_clip_dir(clip_name)
+        sample_names = self._read_sample_names(clip_dir)
 
-    #         lidar2cam = np.array(extrinsic["transform"])
-    #         cam2lidar = np.linalg.inv(lidar2cam)
+        ego_poses = []
+        for frame_index, sample_name in enumerate(sample_names):
+            sample_dir = os.path.join(clip_dir, sample_name)
+            frame_data_path = os.path.join(sample_dir, "data_frame.pb.txt")
+            with open(frame_data_path, "r", encoding="utf-8") as f:
+                frame_data = f.read()
+            frame_data = json_format.Parse(frame_data, None)
 
-    #         extrinsics.append(cam2lidar)
+    def _read_sample_names(self, clip_dir):
+        data_frame_seq_path = os.path.join(clip_dir, "data_frame_seq.json")
+        with open(data_frame_seq_path, "r") as f:
+            data_frame_seq = json.load(f)
+        sample_names = [
+            item["data_frame_path"] for item in data_frame_seq["data_frame_seq_items"]
+        ]
+        return sample_names
 
-    #     return extrinsics
+    def _read_camera_params(self, clip_dir):
+        camera_params_path = os.path.join(clip_dir, "camera_params.json")
+        with open(camera_params_path, "r") as f:
+            camera_params = json.load(f)
+        return camera_params
 
-    # def _parse_intrinsics(self, clip_name):
-    #     data_path = os.path.join(
-    #         self.load_dir, f"{clip_name}/dynamic_obj/autolabel_10hz/{clip_name}.json"
-    #     )
-    #     with open(data_path, "r") as f:
-    #         data = json.load(f)
+    def _parse_extrinsics(self, clip_name):
+        clip_dir = self._get_clip_dir(clip_name)
 
-    #     intrinsics = []
+        # 读取 lidar2ego
+        data_frame_car_info_path = os.path.join(clip_dir, "data_frame_car_info.json")
+        with open(data_frame_car_info_path, "r") as f:
+            data_frame_car_info = json.load(f)
 
-    #     for cam_idx in range(self.num_all_cameras):
-    #         params = data["calibration"][f"camera{cam_idx}"]
+        lidar2ego_raw = data_frame_car_info["lidar_params"][0]["installation"][
+            "extrinsics"
+        ]
+        lidar2ego = pose_to_transform_matrix(lidar2ego_raw["x"], lidar2ego_raw["y"], lidar2ego_raw["z"],
+                                            lidar2ego_raw["yaw"], lidar2ego_raw["pitch"], lidar2ego_raw["roll"])
 
-    #         # # 原始相机内参
-    #         # intrinsic = params["intrinsic"]
-    #         # fx = intrinsic[0][0]
-    #         # cx = intrinsic[0][2]
-    #         # fy = intrinsic[1][1]
-    #         # cy = intrinsic[1][2]
-    #         # intrinsic = [fx, fy, cx, cy]
+        # 读取 cam2egos
+        camera_params = self._read_camera_params(clip_dir)
+        extrinsics = []
+        for cam_name, _ in QCRAFT_CAMERA_DICT.items():
+            cam2ego = camera_params[cam_name]["camera_to_vehicle_extrinsics"]
+            cam2ego = pose_to_transform_matrix(cam2ego["x"], cam2ego["y"], cam2ego["z"],
+                                                cam2ego["yaw"], cam2ego["pitch"], cam2ego["roll"])
+            cam2lidar = np.linalg.inv(lidar2ego) @ cam2ego
+            extrinsics.append(cam2lidar)
 
-    #         # 8 个畸变参数
-    #         distcoeff = params["distcoeff"][0]
+        return extrinsics
 
-    #         # 去畸变后新的相机内参
-    #         intrinsic_scaled = params["intrinsic_scaled"]
-    #         fx_scaled = intrinsic_scaled[0][0]
-    #         cx_scaled = intrinsic_scaled[0][2]
-    #         fy_scaled = intrinsic_scaled[1][1]
-    #         cy_scaled = intrinsic_scaled[1][2]
-    #         intrinsic_scaled = [fx_scaled, fy_scaled, cx_scaled, cy_scaled]
+    def _parse_intrinsics(self, clip_name):
+        clip_dir = self._get_clip_dir(clip_name)
+        camera_params = self._read_camera_params(clip_dir)
 
-    #         # values = intrinsic + distcoeff + intrinsic_scaled
-    #         values = intrinsic_scaled + distcoeff
-    #         intrinsics.append(values)
+        intrinsics = []
+        for cam_name, _ in QCRAFT_CAMERA_DICT.items():
+            intrinsic_raw = camera_params[cam_name]["intrinsics"]
 
-    #     return intrinsics
+            fx = intrinsic_raw["fx"]
+            fy = intrinsic_raw["fy"]
+            cx = intrinsic_raw["cx"]
+            cy = intrinsic_raw["cy"]
+
+            # 8 个畸变参数
+            k1 = intrinsic_raw["k1"]
+            k2 = intrinsic_raw["k2"]
+            p1 = intrinsic_raw["p1"]
+            p2 = intrinsic_raw["p2"]
+            k3 = intrinsic_raw["k3"]
+            k4 = intrinsic_raw["k4"]
+            k5 = intrinsic_raw["k5"]
+            k6 = intrinsic_raw["k6"]
+
+            values = [fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6]
+            intrinsics.append(values)
+
+        return intrinsics

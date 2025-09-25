@@ -4,94 +4,33 @@ import cv2
 from scipy.spatial.transform import Rotation
 
 
-def parse_lidar_pcd_file(pcd_path):
-    """
-    头部信息示例:
+def euler_to_rotation_matrix(yaw, pitch, roll):
+    # 将角度转换为弧度
+    yaw = np.radians(yaw)
+    pitch = np.radians(pitch)
+    roll = np.radians(roll)
 
-    VERSION 0.7
-    FIELDS x y z intensity timestamp ring
-    SIZE 4 4 4 4 8 2
-    TYPE F F F U F U
-    COUNT 1 1 1 1 1 1
-    WIDTH 182342
-    HEIGHT 1
-    VIEWPOINT 0.0 0.0 0.0 1.0 0.0 0.0 0.0
-    POINTS 182342
-    DATA binary
-    """
-    with open(pcd_path, "rb") as f:
-        # 读取头部信息
-        header = []
-        while True:
-            line = f.readline().decode("utf-8").strip()
+    # Z 轴旋转（yaw）
+    R_z = np.array([[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]])
+    # Y 轴旋转（pitch）
+    R_y = np.array(
+        [[np.cos(pitch), 0, np.sin(pitch)], [0, 1, 0], [-np.sin(pitch), 0, np.cos(pitch)]]
+    )
+    # X 轴旋转（roll）
+    R_x = np.array([[1, 0, 0], [0, np.cos(roll), -np.sin(roll)], [0, np.sin(roll), np.cos(roll)]])
 
-            if line.startswith("DATA"):
-                data_type = line.split()[1]
-                if data_type != "binary":
-                    raise ValueError("仅支持 binary 数据格式")
-                break
+    R = R_z @ R_y @ R_x
+    return R
 
-            if line:
-                header.append(line)
 
-        # 解析头部信息
-        def get_header_value(key):
-            for h in header:
-                if h.startswith(key):
-                    return h.split()[1:]
-            return None
-
-        fields = get_header_value("FIELDS")
-        sizes = [int(s) for s in get_header_value("SIZE")]
-        types = get_header_value("TYPE")
-        counts = [int(c) for c in get_header_value("COUNT")]
-        points = int(get_header_value("POINTS")[0])
-
-        # 构建 dtype
-        dtype_list = []
-        for i, field in enumerate(fields):
-            count = counts[i]
-            size = sizes[i]
-            typ = types[i]
-
-            if typ == "F":
-                np_type = np.float32 if size == 4 else np.float64 if size == 8 else None
-            elif typ == "U":
-                np_type = (
-                    np.uint8
-                    if size == 1
-                    else (
-                        np.uint16
-                        if size == 2
-                        else (
-                            np.uint32 if size == 4 else np.uint64 if size == 8 else None
-                        )
-                    )
-                )
-            elif typ == "I":
-                np_type = (
-                    np.int8
-                    if size == 1
-                    else (
-                        np.int16
-                        if size == 2
-                        else np.int32 if size == 4 else np.int64 if size == 8 else None
-                    )
-                )
-            else:
-                raise ValueError(f"不支持的类型: {typ}")
-
-            if np_type is None:
-                raise ValueError(f"无效的大小 {size} 对于类型 {typ}")
-
-            for j in range(count):
-                field_name = f"{field}_{j}" if count > 1 else field
-                dtype_list.append((field_name, np_type))
-
-        dtype = np.dtype(dtype_list)
-        pc = np.fromfile(f, dtype=dtype, count=points)
-
-        return pc
+# 将欧拉角和位置转换为4x4变换矩阵
+def pose_to_transform_matrix(x, y, z, yaw, pitch, roll):
+    R = euler_to_rotation_matrix(yaw, pitch, roll)
+    T = np.array([x, y, z])
+    T_matrix = np.eye(4)
+    T_matrix[:3, :3] = R
+    T_matrix[:3, 3] = T
+    return T_matrix
 
 
 def project_points_to_image(points3d, intrinsic, img_shape):
