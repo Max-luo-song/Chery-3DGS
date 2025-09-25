@@ -5,11 +5,6 @@ from scipy.spatial.transform import Rotation
 
 
 def euler_to_rotation_matrix(yaw, pitch, roll):
-    # 将角度转换为弧度
-    yaw = np.radians(yaw)
-    pitch = np.radians(pitch)
-    roll = np.radians(roll)
-
     # Z 轴旋转（yaw）
     R_z = np.array([[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]])
     # Y 轴旋转（pitch）

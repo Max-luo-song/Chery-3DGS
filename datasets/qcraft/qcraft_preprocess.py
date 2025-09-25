@@ -7,7 +7,7 @@ import yaml
 import google.protobuf.json_format as json_format
 
 from datasets.tools.multiprocess_utils import track_parallel_progress
-from chery_tools.convert_lidar_pcd import parse_lidar_pcd_file
+from chery_tools.parse_lidar import parse_lidar_pcd_file
 from .qcraft_utils import (
     pose_to_transform_matrix,
     project_points_to_image,
@@ -45,6 +45,15 @@ QCRAFT_CAMERA_DICT = {  # 轻舟
     "CAM_PBQ_REAR_RIGHT_RESET_OPTICAL_H30": 11,  # 右后 FOV30
     "CAM_PBQ_REAR_RESET_OPTICAL_H50": 12,  # 后视 FOV50
 }
+
+OPENCV2DATASET = np.array(
+    [
+        [0.0, 0.0, 1.0, 0.0],
+        [-1.0, 0.0, 0.0, 0.0],
+        [0.0, -1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+)
 
 
 class QcraftProcessor(object):
@@ -132,10 +141,6 @@ class QcraftProcessor(object):
             self.save_calib(clip_name)
             print(f"Processed calib for {clip_name}")
 
-        # if "lidar_velocities" in self.process_keys:
-        #     self.save_lidar_velocities(clip_name)
-        #     print(f"Processed lidar velocities for {clip_name}")
-
         if "lidar" in self.process_keys:
             self.save_lidar(clip_name)
             print(f"Processed lidar for {clip_name}")
@@ -195,8 +200,9 @@ class QcraftProcessor(object):
 
     def save_calib(self, clip_name):
         # """解析并保存相机的外参（以LiDAR为参考系）和内参"""
-        cam2lidars = self._parse_extrinsics(clip_name)
-        intrinsics = self._parse_intrinsics(clip_name)
+        clip_dir = self._get_clip_dir(clip_name)
+        cam2lidars = self._get_extrinsics(clip_dir)
+        intrinsics = self._get_intrinsics(clip_dir)
 
         for cam_idx in range(self.num_all_cameras):
             np.savetxt(
@@ -208,7 +214,6 @@ class QcraftProcessor(object):
                 intrinsics[cam_idx],
             )
 
-    # FIXME: lidar点云看起来是ego坐标系下的？？？
     def save_lidar(self, clip_name):
         # 将雷达数据从 pcd 格式转换到 bin 格式
         clip_dir = self._get_clip_dir(clip_name)
@@ -225,11 +230,22 @@ class QcraftProcessor(object):
             lidar_paths = [
                 os.path.join(sample_dir, lidar_name) for lidar_name in lidar_names
             ]
+            lidar2ego = self._read_lidar2ego(clip_dir)
 
             def save_lidar_data_as_bin(lidar_paths, lidar_type):
                 point_clouds = [
                     parse_lidar_pcd_file(lidar_path) for lidar_path in lidar_paths
                 ]  # x y z intensity
+
+                # NOTE(syc): LiDAR点云可能是ego坐标系的，这里转换到LiDAR坐标系
+                for i in range(len(point_clouds)):
+                    pc = point_clouds[i]
+                    pc_xyz = np.vstack([pc["x"], pc["y"], pc["z"]]).T  # (N, 3)
+                    pc_hom = np.hstack([pc_xyz, np.ones((pc.shape[0], 1))])  # N x 4
+                    pc_lidar = (np.linalg.inv(lidar2ego) @ pc_hom.T).T  # N x 4
+                    point_clouds[i]["x"] = pc_lidar[:, 0]
+                    point_clouds[i]["y"] = pc_lidar[:, 1]
+                    point_clouds[i]["z"] = pc_lidar[:, 2]
 
                 def append_lidar_id(pc, lidar_id):
                     new_dtype = np.dtype(pc.dtype.descr + [("lidar_id", np.uint32)])
@@ -265,35 +281,16 @@ class QcraftProcessor(object):
         """保存每一帧的位姿"""
 
         # NOTE: 目前轻舟数据仿照的是奇瑞的数据预处理方式，因此保存的是 lidar pose 而非 ego pose
-        # data_path = os.path.join(
-        #     self.load_dir, f"{clip_name}/dynamic_obj/autolabel_10hz/{clip_name}.json"
-        # )
-        # with open(data_path, "r") as file:
-        #     data = json.load(file)
+        clip_dir = self._get_clip_dir(clip_name)
+        ego2worlds = self._read_ego_poses(clip_dir)
+        lidar2ego = self._read_lidar2ego(clip_dir)
 
-        # for frame_idx, params in enumerate(data["frames"]):
-        #     lidar_pose = params["lidar_pose"]
-        #     lidar_pose = np.array(lidar_pose)
-        #     np.savetxt(
-        #         f"{self.save_dir}/{clip_name}/lidar_pose/{str(frame_idx).zfill(3)}.txt",
-        #         lidar_pose,
-        #     )
-        pass
-
-    # def save_lidar_velocities(self, clip_name):
-    #     data_path = os.path.join(
-    #         self.load_dir, f"{clip_name}/dynamic_obj/autolabel_10hz/{clip_name}.json"
-    #     )
-    #     with open(data_path, "r") as file:
-    #         data = json.load(file)
-
-    #     for frame_idx, params in enumerate(data["frames"]):
-    #         lidar_velo = params["lidar_velo"]
-    #         lidar_velo = np.array(lidar_velo)
-    #         np.savetxt(
-    #             f"{self.save_dir}/{clip_name}/lidar_velocities/{str(frame_idx).zfill(3)}.txt",
-    #             lidar_velo,
-    #         )
+        lidar2worlds = [ego2world @ lidar2ego for ego2world in ego2worlds]
+        for frame_idx, lidar2world in enumerate(lidar2worlds):
+            np.savetxt(
+                f"{self.save_dir}/{clip_name}/lidar_pose/{str(frame_idx).zfill(3)}.txt",
+                lidar2world,
+            )
 
     def save_dynamic_mask(self, clip_name):
         # """需要雷达的 box 投影到图像平面上，获取 2D mask，包括all human vehicle三种"""
@@ -553,10 +550,6 @@ class QcraftProcessor(object):
                 os.makedirs(
                     f"{self.save_dir}/{str(clip_name)}/lidar_pose", exist_ok=True
                 )
-            # if "lidar_velocities" in self.process_keys:
-            #     os.makedirs(
-            #         f"{self.save_dir}/{str(clip_name)}/lidar_velocities", exist_ok=True
-            #     )
             if "lidar" in self.process_keys:
                 os.makedirs(f"{self.save_dir}/{str(clip_name)}/lidar", exist_ok=True)
             if "dynamic_masks" in self.process_keys:
@@ -568,17 +561,89 @@ class QcraftProcessor(object):
                     f"{self.save_dir}/{str(clip_name)}/instances", exist_ok=True
                 )
 
-    def _parse_ego_poses(self, clip_name):
-        clip_dir = self._get_clip_dir(clip_name)
+    def _read_lidar2ego(self, clip_dir):
+        data_frame_car_info_path = os.path.join(clip_dir, "data_frame_car_info.json")
+        with open(data_frame_car_info_path, "r") as f:
+            data_frame_car_info = json.load(f)
+
+        lidar2ego_raw = data_frame_car_info["lidar_params"][0]["installation"][
+            "extrinsics"
+        ]
+        lidar2ego = pose_to_transform_matrix(
+            lidar2ego_raw["x"],
+            lidar2ego_raw["y"],
+            lidar2ego_raw["z"],
+            lidar2ego_raw["yaw"],
+            lidar2ego_raw["pitch"],
+            lidar2ego_raw["roll"],
+        )
+        return lidar2ego
+
+    def _read_ego_pose_from_pbtxt(self, frame_data_path):
+        main_timestamp = None
+
+        image_infos = []
+        current_image_info = None
+
+        with open(frame_data_path, "r", encoding="utf-8") as f:
+            frame_data = f.read()
+
+        frame_data = frame_data.strip().split("\n")
+
+        for line in frame_data:
+            line = line.strip()
+            if not line:
+                continue
+
+            if line.startswith("main_timestamp") and main_timestamp is None:
+                main_timestamp = float(line.split(":")[1].strip())
+            elif line.startswith("image_infos"):
+                current_image_info = {
+                    "timestamp": None,
+                    "vehicle_pose": None,
+                }
+            elif current_image_info:
+                if line.startswith("timestamp:"):
+                    current_image_info["timestamp"] = float(line.split(":")[1].strip())
+                elif line.startswith("vehicle_pose"):
+                    current_image_info["vehicle_pose"] = {}
+                elif current_image_info["vehicle_pose"] is not None:
+                    if line.startswith("}"):
+                        image_infos.append(current_image_info)
+                        current_image_info = None
+                    else:
+                        key, value = line.split(":")
+                        key = key.strip()
+                        value = float(value.strip())
+                        current_image_info["vehicle_pose"][key] = value
+
+        for info in image_infos:
+            timestamp = info["timestamp"]
+            if timestamp == main_timestamp:
+                pose = info["vehicle_pose"]
+                pose_matrix = pose_to_transform_matrix(
+                    pose["x"],
+                    pose["y"],
+                    pose["z"],
+                    pose["yaw"],
+                    pose["pitch"],
+                    pose["roll"],
+                )
+                return pose_matrix
+
+        # HACK(syc): 是否有可能没有匹配的 timestamp
+        raise ValueError("No matching vehicle_pose found for main_timestamp")
+
+    def _read_ego_poses(self, clip_dir):
         sample_names = self._read_sample_names(clip_dir)
 
         ego_poses = []
         for frame_index, sample_name in enumerate(sample_names):
             sample_dir = os.path.join(clip_dir, sample_name)
             frame_data_path = os.path.join(sample_dir, "data_frame.pb.txt")
-            with open(frame_data_path, "r", encoding="utf-8") as f:
-                frame_data = f.read()
-            frame_data = json_format.Parse(frame_data, None)
+            ego_pose = self._read_ego_pose_from_pbtxt(frame_data_path)
+            ego_poses.append(ego_pose)
+        return ego_poses
 
     def _read_sample_names(self, clip_dir):
         data_frame_seq_path = os.path.join(clip_dir, "data_frame_seq.json")
@@ -595,34 +660,29 @@ class QcraftProcessor(object):
             camera_params = json.load(f)
         return camera_params
 
-    def _parse_extrinsics(self, clip_name):
-        clip_dir = self._get_clip_dir(clip_name)
+    def _get_extrinsics(self, clip_dir):
+        lidar2ego = self._read_lidar2ego(clip_dir)
 
-        # 读取 lidar2ego
-        data_frame_car_info_path = os.path.join(clip_dir, "data_frame_car_info.json")
-        with open(data_frame_car_info_path, "r") as f:
-            data_frame_car_info = json.load(f)
-
-        lidar2ego_raw = data_frame_car_info["lidar_params"][0]["installation"][
-            "extrinsics"
-        ]
-        lidar2ego = pose_to_transform_matrix(lidar2ego_raw["x"], lidar2ego_raw["y"], lidar2ego_raw["z"],
-                                            lidar2ego_raw["yaw"], lidar2ego_raw["pitch"], lidar2ego_raw["roll"])
-
-        # 读取 cam2egos
         camera_params = self._read_camera_params(clip_dir)
         extrinsics = []
         for cam_name, _ in QCRAFT_CAMERA_DICT.items():
             cam2ego = camera_params[cam_name]["camera_to_vehicle_extrinsics"]
-            cam2ego = pose_to_transform_matrix(cam2ego["x"], cam2ego["y"], cam2ego["z"],
-                                                cam2ego["yaw"], cam2ego["pitch"], cam2ego["roll"])
+            cam2ego = pose_to_transform_matrix(
+                cam2ego["x"],
+                cam2ego["y"],
+                cam2ego["z"],
+                cam2ego["yaw"],
+                cam2ego["pitch"],
+                cam2ego["roll"],
+            )
+            cam2ego = cam2ego @ OPENCV2DATASET
+
             cam2lidar = np.linalg.inv(lidar2ego) @ cam2ego
             extrinsics.append(cam2lidar)
 
         return extrinsics
 
-    def _parse_intrinsics(self, clip_name):
-        clip_dir = self._get_clip_dir(clip_name)
+    def _get_intrinsics(self, clip_dir):
         camera_params = self._read_camera_params(clip_dir)
 
         intrinsics = []
