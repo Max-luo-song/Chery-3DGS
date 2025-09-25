@@ -15,6 +15,7 @@ if __name__ == "__main__":
     - NUPlan
     - PandaSet
     - Chery
+    - Qcraft
     
     Usage:
     ------
@@ -180,6 +181,18 @@ if __name__ == "__main__":
         
         scene_ids_list = [str(scene_id) for scene_id in scene_ids_list]
         dataset_processor = CheryProcessor(
+            load_dir=args.data_root,
+            save_dir=args.target_dir,
+            prefix=args.split,
+            process_keys=args.process_keys,
+            process_id_list=scene_ids_list,
+            workers=args.workers,
+        )
+    elif args.dataset == "qcraft":
+        from datasets.qcraft.qcraft_preprocess import QcraftProcessor
+        
+        scene_ids_list = [str(scene_id) for scene_id in scene_ids_list]
+        dataset_processor = QcraftProcessor(
             load_dir=args.data_root,
             save_dir=args.target_dir,
             prefix=args.split,

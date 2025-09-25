@@ -24,21 +24,19 @@ def to8b(x):
 
 
 def get_layout(dataset_type: str):
-    if dataset_type == "waymo":
-        layout = layout_waymo
-    elif dataset_type == "pandaset":
-        layout = layout_pandaset
-    elif dataset_type == "argoverse":
-        layout = layout_argoverse
-    elif dataset_type == "nuscenes":
-        layout = layout_nuscenes
-    elif dataset_type == "kitti":
-        layout = layout_kitti
-    elif dataset_type == "nuplan":
-        layout = layout_nuplan
-    elif dataset_type == "chery":
-        layout = layout_chery
-    else:
+    """Get the layout function for a specific dataset type."""
+    layout_dict = {
+        "waymo": layout_waymo,
+        "pandaset": layout_pandaset,
+        "argoverse": layout_argoverse,
+        "nuscenes": layout_nuscenes,
+        "kitti": layout_kitti,
+        "nuplan": layout_nuplan,
+        "chery": layout_chery,
+        "qcraft": layout_qcraft,
+    }
+    layout = layout_dict.get(dataset_type, None)
+    if layout is None:
         raise ValueError(f"dataset_type {dataset_type} not supported")
     return layout
 
@@ -110,14 +108,19 @@ def layout_chery(imgs: List[np.array], cam_names: List[str]) -> np.array:
             w_start = int((width - img_width) / 2)
             w_end = w_start + min_width
 
-            tiled_img[ max_height * 2 :, w_start:w_end ] = img
-            filled_mask[ max_height * 2 :, w_start:w_end ] = 1
+            tiled_img[max_height * 2 :, w_start:w_end] = img
+            filled_mask[max_height * 2 :, w_start:w_end] = 1
 
     # crop the image according to the lagrest filled area
     min_y, max_y = np.where(filled_mask)[0].min(), np.where(filled_mask)[0].max()
     min_x, max_x = np.where(filled_mask)[1].min(), np.where(filled_mask)[1].max()
     tiled_img = tiled_img[min_y:max_y, min_x:max_x]
     return tiled_img
+
+
+def layout_qcraft(imgs: List[np.array], cam_names: List[str]) -> np.array:
+    # TODO
+    pass
 
 
 def layout_nuplan(imgs: List[np.array], cam_names: List[str]) -> np.array:
