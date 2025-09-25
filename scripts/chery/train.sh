@@ -1,7 +1,5 @@
 # 参数设置
 ################################################################################
-cuda_device_id=7
-
 lidar_type="mclidar"  # lidar（运动补偿前）/mclidar（运动补偿后）/visual（纯视觉）
 config_file="configs/0915omnire_chery_lidar_depth_loss.yaml"
 dataset_config="chery/7cams_lidar"
@@ -14,7 +12,14 @@ camera_ids=(0 1 2 3 4 5 6)  # camera IDs to use, e.g., (0), (0 2 4)
 start_timestep=0 # start frame index for training
 end_timestep=10 # end frame index, -1 for the last frame
 ################################################################################
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source ${SCRIPT_DIR}/utils.sh
 
+gpu=$(pick_gpu)
+if [ -z "${gpu}" ]; then
+  echo "no gpu found"
+  exit 1
+fi
 
 output_root="output"
 
@@ -39,7 +44,7 @@ cp "$0" "$backup_path"
 
 # 启动训练
 export PYTHONPATH=$(pwd)
-CUDA_VISIBLE_DEVICES=$cuda_device_id python tools/train.py \
+CUDA_VISIBLE_DEVICES=${gpu} python tools/train.py \
     --config_file $config_file \
     --output_root $output_root \
     --project $project_name \
