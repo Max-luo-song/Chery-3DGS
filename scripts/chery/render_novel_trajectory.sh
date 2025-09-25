@@ -1,7 +1,5 @@
 # 参数设置
 ################################################################################
-cuda_device_id=5
-
 clip_name="clip_1746752396800"
 run_name="20250915_mclidar+cam0123456+depth_loss"
 
@@ -30,8 +28,16 @@ render_rgb=true
 render_depth=false
 generate_lidar_pc=true
 ################################################################################
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source ${SCRIPT_DIR}/utils.sh
 
 export PYTHONPATH=$(pwd)
+
+gpu=$(pick_gpu)
+if [ -z "${gpu}" ]; then
+  echo "no gpu found"
+  exit 1
+fi
 
 project_name="chery_${clip_name}"
 
@@ -51,7 +57,7 @@ if [ "$generate_lidar_pc" = true ]; then
     bool_args="$bool_args --generate_lidar_pc"
 fi
 
-CUDA_VISIBLE_DEVICES=$cuda_device_id python tools/render_novel_trajectory.py \
+CUDA_VISIBLE_DEVICES=${gpu} python tools/render_novel_trajectory.py \
     --resume_from $ckpt_path \
     --traj_types $traj_types_str \
     --cam_ids $cam_ids \
