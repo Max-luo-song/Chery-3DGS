@@ -6,13 +6,21 @@ from scipy.spatial.transform import Rotation
 
 def euler_to_rotation_matrix(yaw, pitch, roll):
     # Z 轴旋转（yaw）
-    R_z = np.array([[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]])
+    R_z = np.array(
+        [[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]]
+    )
     # Y 轴旋转（pitch）
     R_y = np.array(
-        [[np.cos(pitch), 0, np.sin(pitch)], [0, 1, 0], [-np.sin(pitch), 0, np.cos(pitch)]]
+        [
+            [np.cos(pitch), 0, np.sin(pitch)],
+            [0, 1, 0],
+            [-np.sin(pitch), 0, np.cos(pitch)],
+        ]
     )
     # X 轴旋转（roll）
-    R_x = np.array([[1, 0, 0], [0, np.cos(roll), -np.sin(roll)], [0, np.sin(roll), np.cos(roll)]])
+    R_x = np.array(
+        [[1, 0, 0], [0, np.cos(roll), -np.sin(roll)], [0, np.sin(roll), np.cos(roll)]]
+    )
 
     R = R_z @ R_y @ R_x
     return R
@@ -97,83 +105,3 @@ def filter_points_in_box(pointcloud, obj_center_pos, size):
     )
 
     return pointcloud[mask]
-
-
-def find_track_id_frame(track_id, result):
-    frame_list = []
-    for frame, track_ids in result.items():
-        # print("track_id:", track_id)
-        # print("track_ids:", track_ids)
-        # print("frame:", frame)
-        # print(f"track_id: {track_id}, type: {type(track_id)}")
-        if int(track_id) in track_ids:
-            frame_list.append(int(frame))
-        # time.sleep(10000)
-    return frame_list
-
-
-def find_track_id_obj2world(track_id, data, frame_list, lidar2worlds):
-    obj2world_list = []
-
-    ### 每一个物体在每一个时间戳之内的obj2world
-    for frame_id in range(len(frame_list)):
-        frame_data = data["frames"][frame_id]
-        object_detection_anns_info = (
-            frame_data.get("annotated_info", {})
-            .get("3d_city_object_detection_annotated_info", {})
-            .get("annotated_info", {})
-            .get("3d_object_detection_info", {})
-            .get("3d_object_detection_anns_info", [])
-        )
-        ### frame_data中还是有很多track
-        for i in range(len(object_detection_anns_info)):
-            if object_detection_anns_info[i]["track_id"] == int(track_id):
-                each_object = object_detection_anns_info[i]
-                #### each_object是指定的track_id
-                l, w, h = each_object["size"]  # ann_box is one of dynamic objs
-
-                box2lidar = np.eye(4, dtype=np.float64)  ### box2lidar是每个实例的外参
-                box2lidar[:3, :3] = Rotation.from_quat(
-                    np.array(each_object["obj_rotation"])
-                ).as_matrix()  # xyzw
-                box2lidar[:3, 3] = np.array(each_object["obj_center_pos"])
-
-                obj2world = lidar2worlds[frame_id] @ box2lidar
-                obj2world_list.append(obj2world)
-
-    return obj2world_list
-
-
-def find_track_id_boxsize(track_id, data, frame_list):
-    box_size_list = []
-    for frame_id in range(len(frame_list)):
-        frame_data = data["frames"][frame_id]
-        object_detection_anns_info = (
-            frame_data.get("annotated_info", {})
-            .get("3d_city_object_detection_annotated_info", {})
-            .get("annotated_info", {})
-            .get("3d_object_detection_info", {})
-            .get("3d_object_detection_anns_info", [])
-        )
-        ### frame_data中还是有很多track
-        for i in range(len(object_detection_anns_info)):
-            if object_detection_anns_info[i]["track_id"] == int(track_id):
-                each_object = object_detection_anns_info[i]
-                box_size_list.append(each_object["size"])
-    return box_size_list
-
-
-def convert_ndarray_to_list(obj):
-    """
-    递归将数据结构中的所有ndarray转换为list
-    """
-    if isinstance(obj, dict):
-        return {key: convert_ndarray_to_list(value) for key, value in obj.items()}
-    elif isinstance(obj, list):
-        return [convert_ndarray_to_list(item) for item in obj]
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, (np.integer, np.floating)):
-        return obj.item()
-    else:
-        return obj

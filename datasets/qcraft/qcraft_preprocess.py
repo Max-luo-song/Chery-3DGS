@@ -4,19 +4,16 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 import yaml
-import google.protobuf.json_format as json_format
 
 from datasets.tools.multiprocess_utils import track_parallel_progress
+from datasets.dataset_meta import DATASETS_CONFIG
 from chery_tools.parse_lidar import parse_lidar_pcd_file
 from .qcraft_utils import (
+    euler_to_rotation_matrix,
     pose_to_transform_matrix,
     project_points_to_image,
     draw_and_fill_box,
     filter_points_in_box,
-    find_track_id_frame,
-    find_track_id_obj2world,
-    find_track_id_boxsize,
-    convert_ndarray_to_list,
 )
 
 import cv2
@@ -201,17 +198,22 @@ class QcraftProcessor(object):
     def save_calib(self, clip_name):
         # """解析并保存相机的外参（以LiDAR为参考系）和内参"""
         clip_dir = self._get_clip_dir(clip_name)
-        cam2lidars = self._get_extrinsics(clip_dir)
-        intrinsics = self._get_intrinsics(clip_dir)
+        camera_params = self._read_camera_params(clip_dir)
 
-        for cam_idx in range(self.num_all_cameras):
+        cam2egos = self._parse_extrinsics(camera_params)
+        lidar2ego = self._read_lidar2ego(clip_dir)
+        cam2lidars = [np.linalg.inv(lidar2ego) @ cam2ego for cam2ego in cam2egos]
+
+        intrinsics = self._parse_intrinsics(camera_params, as_matrix=False)
+
+        for cam_idx, (cam2lidar, intrinsic) in enumerate(zip(cam2lidars, intrinsics)):
             np.savetxt(
                 f"{self.save_dir}/{clip_name}/extrinsics/{cam_idx}.txt",
-                cam2lidars[cam_idx],
+                cam2lidar,
             )
             np.savetxt(
                 f"{self.save_dir}/{clip_name}/intrinsics/{cam_idx}.txt",
-                intrinsics[cam_idx],
+                intrinsic,
             )
 
     def save_lidar(self, clip_name):
@@ -292,148 +294,118 @@ class QcraftProcessor(object):
                 lidar2world,
             )
 
+    def _process_object(self, object, masks, ego2cams, intrinsics, img_shapes):
+        """处理单个动态物体，生成掩码并更新图像"""
+        scale = object["psr"]["scale"]
+        l, w, h = scale["x"], scale["y"], scale["z"]
+
+        rotation = object["psr"]["rotation"]
+        rotation = euler_to_rotation_matrix(rotation["z"], rotation["y"], rotation["x"])
+
+        position = object["psr"]["position"]
+        position = np.array([position["x"], position["y"], position["z"]])
+
+        # 动态物体位姿
+        box2ego = np.eye(4, dtype=np.float64)
+        box2ego[:3, :3] = rotation
+        box2ego[:3, 3] = position
+
+        for cam_idx, ego2cam in enumerate(ego2cams):
+            box2cam = ego2cam @ box2ego
+            qx, qy, qz, qw = Rotation.from_matrix(box2cam[:3, :3]).as_quat()
+            box = Box(
+                center=box2cam[:3, 3],
+                size=[w, l, h],
+                orientation=Quaternion([qw, qx, qy, qz]),
+            )
+            corners = box.corners().T.astype(np.float32)
+            # print("corners:", corners)
+            points2d = project_points_to_image(
+                corners,
+                intrinsics[cam_idx],
+                img_shapes[cam_idx],
+            )
+            masks[cam_idx] = draw_and_fill_box(masks[cam_idx], points2d)
+
+        return masks
+
     def save_dynamic_mask(self, clip_name):
         # """需要雷达的 box 投影到图像平面上，获取 2D mask，包括all human vehicle三种"""
+        clip_dir = self._get_clip_dir(clip_name)
+        camera_params = self._read_camera_params(clip_dir)
 
-        # data_path = os.path.join(
-        #     self.load_dir, f"{clip_name}/dynamic_obj/autolabel_10hz/{clip_name}.json"
-        # )
-        # with open(data_path, "r") as f:
-        #     data = json.load(f)
+        cam2egos = self._parse_extrinsics(camera_params)
+        ego2cams = [np.linalg.inv(m) for m in cam2egos]
 
-        # # 读取 lidar2camera
-        # extrinsics = self._parse_extrinsics(clip_name)  # cam2lidar
-        # # extrinsics = self._parse_extrinsics(clip_name, pinhole_only=True)  # cam2lidar
-        # lidar2cams = [np.linalg.inv(extrinsic) for extrinsic in extrinsics]
+        intrinsics = self._parse_intrinsics(camera_params, as_matrix=True)
 
-        # # 读取相机内参
-        # intrinsics = [
-        #     np.array(data["calibration"][f"camera{cam_idx}"]["intrinsic_scaled"])
-        #     for cam_idx in range(self.num_all_cameras)
-        #     # for cam_idx in range(self.num_pinhole_cameras)
-        # ]
+        # 创建保存目录
+        categories = ["all", "human", "vehicle"]
+        for category in categories:
+            mask_dir = f"{self.save_dir}/{clip_name}/dynamic_masks/{category}"
+            if not os.path.exists(mask_dir):
+                os.makedirs(mask_dir)
 
-        # # 创建保存目录
-        # categories = ["all", "human", "vehicle"]
-        # for category in categories:
-        #     mask_dir = f"{self.save_dir}/{clip_name}/dynamic_masks/{category}"
-        #     if not os.path.exists(mask_dir):
-        #         os.makedirs(mask_dir)
+        img_shapes = [
+            config["original_size"] for _, config in DATASETS_CONFIG["qcraft"].items()
+        ]
 
-        # def process_object(object, category, masks, lidar2cams, intrinsics, img_shapes):
-        #     """处理单个动态物体，生成掩码并更新图像"""
-        #     l, w, h = object["size"]
-        #     obj_rotation = np.array(object["obj_rotation"])
-        #     obj_center_pos = np.array(object["obj_center_pos"])
+        # 处理每一帧
+        sample_names = self._read_sample_names(clip_dir)
+        for frame_idx, sample_name in tqdm(
+            enumerate(sample_names), total=len(sample_names)
+        ):
+            label_path = os.path.join(clip_dir, "label", f"{sample_name}.json")
+            with open(label_path, "r") as f:
+                label_data = json.load(f)
 
-        #     # 读取物体的位姿
-        #     box2lidar = np.eye(4, dtype=np.float64)
-        #     box2lidar[:3, :3] = Rotation.from_quat(obj_rotation).as_matrix()
-        #     box2lidar[:3, 3] = obj_center_pos
+            # 初始化掩码图像
+            masks_vehicle = [
+                np.zeros((sz[0], sz[1], 3), dtype=np.uint8) for sz in img_shapes
+            ]
+            masks_human = [
+                np.zeros((sz[0], sz[1], 3), dtype=np.uint8) for sz in img_shapes
+            ]
+            masks_all = [
+                np.zeros((sz[0], sz[1], 3), dtype=np.uint8) for sz in img_shapes
+            ]
 
-        #     # # 1.对任何一个物体，先对应到激光雷达点云
-        #     # mask_pointcloud = filter_points_in_box(pointcloud, obj_center_pos, size)
-        #     # # 2.把激光点云向7个视角均投影得到 uv
-        #     # # 3.七个视角最终全部投影得到结果
-        #     for cam_idx, lidar2cam in enumerate(lidar2cams):
-        #         box2cam = lidar2cam @ box2lidar
-        #         qx, qy, qz, qw = Rotation.from_matrix(box2cam[:3, :3]).as_quat()
-        #         cam_box = Box(
-        #             center=box2cam[:3, 3],
-        #             size=[w, l, h],
-        #             orientation=Quaternion([qw, qx, qy, qz]),
-        #             name=category,
-        #         )
-        #         corners = cam_box.corners().T.astype(np.float32)
-        #         # print("corners:", corners)
-        #         points2d = project_points_to_image(
-        #             corners,
-        #             intrinsics[cam_idx],
-        #             img_shapes[cam_idx],
-        #         )
+            for obj in label_data:
+                category = obj["obj_type"]
+                if category == "person":
+                    masks_human = self._process_object(
+                        obj,
+                        masks_human,
+                        ego2cams,
+                        intrinsics,
+                        img_shapes,
+                    )
+                else:
+                    masks_vehicle = self._process_object(
+                        obj,
+                        masks_vehicle,
+                        ego2cams,
+                        intrinsics,
+                        img_shapes,
+                    )
 
-        #         # 生成 mask
-        #         masks[cam_idx] = draw_and_fill_box(masks[cam_idx], points2d)
+            for cam_idx in range(len(ego2cams)):
+                # 将 vehicle 和 human 掩码合并到 all 掩码中
+                masks_all[cam_idx] = np.maximum(
+                    masks_all[cam_idx], masks_vehicle[cam_idx]
+                )
 
-        #     return masks
-
-        # calib = data["calibration"]
-        # img_shapes = [
-        #     (
-        #         calib[f"camera{cam_idx}"]["height"],
-        #         calib[f"camera{cam_idx}"]["width"],
-        #     )
-        #     # for cam_idx in range(self.num_pinhole_cameras)
-        #     for cam_idx in range(self.num_all_cameras)
-        # ]
-
-        # # 处理每一帧
-        # for frame_idx, params in tqdm(
-        #     enumerate(data["frames"]), total=len(data["frames"])
-        # ):
-        #     # 初始化掩码图像
-        #     masks_vehicle = [
-        #         np.zeros((sz[0], sz[1], 3), dtype=np.uint8) for sz in img_shapes
-        #     ]
-        #     masks_human = [
-        #         np.zeros((sz[0], sz[1], 3), dtype=np.uint8) for sz in img_shapes
-        #     ]
-        #     masks_all = [
-        #         np.zeros((sz[0], sz[1], 3), dtype=np.uint8) for sz in img_shapes
-        #     ]
-
-        #     # 处理物体检测信息
-        #     object_anns = params["annotated_info"][
-        #         "3d_city_object_detection_annotated_info"
-        #     ]["annotated_info"]["3d_object_detection_info"][
-        #         "3d_object_detection_anns_info"
-        #     ]
-
-        #     for obj in object_anns:
-        #         category = obj["category"]
-
-        #         # 类别对应关系
-        #         # [Qcraft] -> [Waymo]
-        #         # "person" -> "human"
-        #         # 其余类别 -> "vehicle"
-
-        #         if category == "person":
-        #             masks_human = process_object(
-        #                 obj,
-        #                 category,
-        #                 masks_human,
-        #                 lidar2cams,
-        #                 intrinsics,
-        #                 img_shapes,
-        #             )
-        #         else:  # vehicle
-        #             masks_vehicle = process_object(
-        #                 obj,
-        #                 category,
-        #                 masks_vehicle,
-        #                 lidar2cams,
-        #                 intrinsics,
-        #                 img_shapes,
-        #             )
-
-        #     for cam_idx in range(len(lidar2cams)):
-        #         # 将 vehicle 和 human 掩码合并到 all 掩码中
-        #         masks_all[cam_idx] = np.maximum(
-        #             masks_all[cam_idx], masks_vehicle[cam_idx]
-        #         )
-
-        #     # 保存掩码图像
-        #     for category, masks in zip(
-        #         categories, [masks_all, masks_human, masks_vehicle]
-        #     ):
-        #         for cam_idx, mask in enumerate(masks):
-        #             mask_gray = Image.fromarray(mask).convert("L")
-        #             mask_path = os.path.join(
-        #                 f"{self.save_dir}/{clip_name}/dynamic_masks/{category}",
-        #                 f"{str(frame_idx).zfill(3)}_{str(cam_idx)}.png",
-        #             )
-        #             mask_gray.save(mask_path)
-        pass
+            # 保存掩码图像
+            for category, masks in zip(
+                categories, [masks_all, masks_human, masks_vehicle]
+            ):
+                for cam_idx, mask in enumerate(masks):
+                    mask_gray = Image.fromarray(mask).convert("L")
+                    mask_path = os.path.join(
+                        f"{self.save_dir}/{clip_name}/dynamic_masks/{category}",
+                        f"{str(frame_idx).zfill(3)}_{str(cam_idx)}.png",
+                    )
+                    mask_gray.save(mask_path)
 
     def save_objects(self, clip_name):
         # """
@@ -660,10 +632,7 @@ class QcraftProcessor(object):
             camera_params = json.load(f)
         return camera_params
 
-    def _get_extrinsics(self, clip_dir):
-        lidar2ego = self._read_lidar2ego(clip_dir)
-
-        camera_params = self._read_camera_params(clip_dir)
+    def _parse_extrinsics(self, camera_params):
         extrinsics = []
         for cam_name, _ in QCRAFT_CAMERA_DICT.items():
             cam2ego = camera_params[cam_name]["camera_to_vehicle_extrinsics"]
@@ -676,15 +645,11 @@ class QcraftProcessor(object):
                 cam2ego["roll"],
             )
             cam2ego = cam2ego @ OPENCV2DATASET
-
-            cam2lidar = np.linalg.inv(lidar2ego) @ cam2ego
-            extrinsics.append(cam2lidar)
+            extrinsics.append(cam2ego)
 
         return extrinsics
 
-    def _get_intrinsics(self, clip_dir):
-        camera_params = self._read_camera_params(clip_dir)
-
+    def _parse_intrinsics(self, camera_params, as_matrix):
         intrinsics = []
         for cam_name, _ in QCRAFT_CAMERA_DICT.items():
             intrinsic_raw = camera_params[cam_name]["intrinsics"]
@@ -704,7 +669,11 @@ class QcraftProcessor(object):
             k5 = intrinsic_raw["k5"]
             k6 = intrinsic_raw["k6"]
 
-            values = [fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6]
+            if as_matrix:
+                values = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+            else:
+                values = [fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6]
+
             intrinsics.append(values)
 
         return intrinsics
