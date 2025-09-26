@@ -9,5 +9,5 @@ CUDA_VISIBLE_DEVICES=6 python datasets/preprocess.py \
     --split training \
     --scene_ids $scene_ids \
     --workers 2 \
-    --process_keys calib
-    # --process_keys images lidar calib pose dynamic_masks objects lidar_velocities
+    --process_keys images lidar calib pose dynamic_masks 
+    # --process_keys images lidar calib pose dynamic_masks objects
