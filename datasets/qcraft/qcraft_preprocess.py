@@ -294,7 +294,7 @@ class QcraftProcessor(object):
                 lidar2world,
             )
 
-    def _process_object(self, object, masks, ego2cams, intrinsics, img_shapes):
+    def _generate_obj_masks(self, object, masks, ego2cams, intrinsics, img_shapes):
         """处理单个动态物体，生成掩码并更新图像"""
         scale = object["psr"]["scale"]
         l, w, h = scale["x"], scale["y"], scale["z"]
@@ -373,7 +373,7 @@ class QcraftProcessor(object):
             for obj in label_data:
                 category = obj["obj_type"]
                 if category == "person":
-                    masks_human = self._process_object(
+                    masks_human = self._generate_obj_masks(
                         obj,
                         masks_human,
                         ego2cams,
@@ -381,7 +381,7 @@ class QcraftProcessor(object):
                         img_shapes,
                     )
                 else:
-                    masks_vehicle = self._process_object(
+                    masks_vehicle = self._generate_obj_masks(
                         obj,
                         masks_vehicle,
                         ego2cams,
