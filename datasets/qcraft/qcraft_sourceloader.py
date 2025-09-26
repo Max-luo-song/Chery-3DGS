@@ -513,7 +513,7 @@ class QcraftLiDARSource(SceneLidarSource):
             0, len(self.lidar_filepaths), desc="Loading lidar", dynamic_ncols=True
         ):
             lidar_info = np.fromfile(self.lidar_filepaths[t], dtype=np.float32).reshape(
-                -1, 7
+                -1, 4
             )
 
             # select lidar points based on the laser id
