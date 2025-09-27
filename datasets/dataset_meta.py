@@ -121,7 +121,7 @@ DATASETS_CONFIG = {
         8: {
             "camera_name": "CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_RIGHT_H60",  # 广角右前 FOV60
             "original_size": (512, 1024),
-            "egocar_visible": False,
+            "egocar_visible": True,
             "is_fisheye": False,
         },
         9: {
