@@ -24,21 +24,19 @@ def to8b(x):
 
 
 def get_layout(dataset_type: str):
-    if dataset_type == "waymo":
-        layout = layout_waymo
-    elif dataset_type == "pandaset":
-        layout = layout_pandaset
-    elif dataset_type == "argoverse":
-        layout = layout_argoverse
-    elif dataset_type == "nuscenes":
-        layout = layout_nuscenes
-    elif dataset_type == "kitti":
-        layout = layout_kitti
-    elif dataset_type == "nuplan":
-        layout = layout_nuplan
-    elif dataset_type == "chery":
-        layout = layout_chery
-    else:
+    """Get the layout function for a specific dataset type."""
+    layout_dict = {
+        "waymo": layout_waymo,
+        "pandaset": layout_pandaset,
+        "argoverse": layout_argoverse,
+        "nuscenes": layout_nuscenes,
+        "kitti": layout_kitti,
+        "nuplan": layout_nuplan,
+        "chery": layout_chery,
+        "qcraft": layout_qcraft,
+    }
+    layout = layout_dict.get(dataset_type, None)
+    if layout is None:
         raise ValueError(f"dataset_type {dataset_type} not supported")
     return layout
 
@@ -110,8 +108,114 @@ def layout_chery(imgs: List[np.array], cam_names: List[str]) -> np.array:
             w_start = int((width - img_width) / 2)
             w_end = w_start + min_width
 
-            tiled_img[ max_height * 2 :, w_start:w_end ] = img
-            filled_mask[ max_height * 2 :, w_start:w_end ] = 1
+            tiled_img[max_height * 2 :, w_start:w_end] = img
+            filled_mask[max_height * 2 :, w_start:w_end] = 1
+
+    # crop the image according to the lagrest filled area
+    min_y, max_y = np.where(filled_mask)[0].min(), np.where(filled_mask)[0].max()
+    min_x, max_x = np.where(filled_mask)[1].min(), np.where(filled_mask)[1].max()
+    tiled_img = tiled_img[min_y:max_y, min_x:max_x]
+    return tiled_img
+
+
+def layout_qcraft(imgs: List[np.array], cam_names: List[str]) -> np.array:
+    """Combine cameras into a tiled image.
+    Layout:
+
+        ##########################################################################################################
+        #                   # front_tele_30         # front_wide_60     # front_tele_15                          #
+        # front_left_99     # front_wide_left_60    # front_wide_110    # front_wide_right_60   # front_right_99 #
+        # rear_left_30      # rear_left_99          # rear_50           # rear_right_99         # rear_right_30  #
+        ##########################################################################################################
+    """
+    channel = imgs[0].shape[-1]
+
+    max_width = 0
+    max_height = 0
+    min_width = 1e10
+    min_height = 1e10
+
+    for img in imgs:
+        max_width = max(max_width, img.shape[1])
+        max_height = max(max_height, img.shape[0])
+        min_width = min(min_width, img.shape[1])
+        min_height = min(min_height, img.shape[0])
+
+    width = 5 * max_width
+    height = 3 * max_height
+
+    tiled_img = np.zeros((height, width, channel), dtype=np.float32)
+    filled_mask = np.zeros((height, width), dtype=np.uint8)
+
+    for idx, cam_name in enumerate(cam_names):
+        img = imgs[idx]
+        # img_height, img_width = img.shape[0], img.shape[1]
+
+        if cam_name == "front_wide_110":
+            tiled_img[max_height : 2 * max_height, 2 * max_width : 3 * max_width] = img
+            filled_mask[max_height : 2 * max_height, 2 * max_width : 3 * max_width] = 1
+
+        elif cam_name == "front_wide_60":
+            tiled_img[:max_height, 2 * max_width : 3 * max_width] = img
+            filled_mask[:max_height, 2 * max_width : 3 * max_width] = 1
+
+        elif cam_name == "front_tele_30":
+            tiled_img[:max_height, max_width : 2 * max_width] = img
+            filled_mask[:max_height, max_width : 2 * max_width] = 1
+
+        elif cam_name == "front_tele_15":
+            tiled_img[:max_height, 3 * max_width : 4 * max_width] = img
+            filled_mask[:max_height, 3 * max_width : 4 * max_width] = 1
+
+        elif cam_name == "front_wide_left_60":
+            tiled_img[max_height : 2 * max_height, max_width : 2 * max_width] = img
+            filled_mask[max_height : 2 * max_height, max_width : 2 * max_width] = 1
+
+        elif cam_name == "front_left_99":
+            tiled_img[max_height : 2 * max_height, :max_width] = img
+            filled_mask[max_height : 2 * max_height, :max_width] = 1
+
+        elif cam_name == "rear_left_99":
+            tiled_img[2 * max_height :, max_width : 2 * max_width] = img
+            filled_mask[2 * max_height :, max_width : 2 * max_width] = 1
+
+        elif cam_name == "rear_left_30":
+            tiled_img[2 * max_height :, max_width - min_width : max_width] = img
+            filled_mask[2 * max_height :, max_width - min_width : max_width] = 1
+
+        elif cam_name == "front_wide_right_60":
+            tiled_img[max_height : 2 * max_height, 3 * max_width : 4 * max_width] = img
+            filled_mask[max_height : 2 * max_height, 3 * max_width : 4 * max_width] = 1
+
+        elif cam_name == "front_right_99":
+            tiled_img[max_height : 2 * max_height, 4 * max_width :] = img
+            filled_mask[max_height : 2 * max_height, 4 * max_width :] = 1
+
+        elif cam_name == "rear_right_99":
+            tiled_img[
+                2 * max_height : 3 * max_height, 3 * max_width : 4 * max_width
+            ] = img
+            filled_mask[
+                2 * max_height : 3 * max_height, 3 * max_width : 4 * max_width
+            ] = 1
+
+        elif cam_name == "rear_right_30":
+            tiled_img[
+                2 * max_height : 3 * max_height,
+                4 * max_width : 4 * max_width + min_width,
+            ] = img
+            filled_mask[
+                2 * max_height : 3 * max_height,
+                4 * max_width : 4 * max_width + min_width,
+            ] = 1
+
+        elif cam_name == "rear_50":
+            tiled_img[
+                2 * max_height : 3 * max_height, 2 * max_width : 3 * max_width
+            ] = img
+            filled_mask[
+                2 * max_height : 3 * max_height, 2 * max_width : 3 * max_width
+            ] = 1
 
     # crop the image according to the lagrest filled area
     min_y, max_y = np.where(filled_mask)[0].min(), np.where(filled_mask)[0].max()

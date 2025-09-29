@@ -3,21 +3,7 @@ import numpy as np
 import argparse
 
 
-def parse_lidar_pcd_file(pcd_path):
-    """
-    头部信息示例:
-
-    VERSION 0.7
-    FIELDS x y z intensity timestamp ring
-    SIZE 4 4 4 4 8 2
-    TYPE F F F U F U
-    COUNT 1 1 1 1 1 1
-    WIDTH 182342
-    HEIGHT 1
-    VIEWPOINT 0.0 0.0 0.0 1.0 0.0 0.0 0.0
-    POINTS 182342
-    DATA binary
-    """
+def parse_lidar_pcd_file(pcd_path, return_fields=False):
     with open(pcd_path, "rb") as f:
         # 读取头部信息
         header = []
@@ -92,17 +78,42 @@ def parse_lidar_pcd_file(pcd_path):
         # 读取数据
         data = np.fromfile(f, dtype=dtype, count=points)
 
-        # x y z intensity timestamp ring
-        with open(os.path.basename(pcd_path).replace(".pcd", ".csv"), "w") as csv_file:
-            csv_file.write(",".join(fields) + "\n")
-            for point in data:
-                line = ",".join(str(point[field]) for field in fields)
-                csv_file.write(line + "\n")
+        if return_fields:
+            return data, fields
+        return data
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Parse LIDAR PCD file and convert to CSV.")
-    parser.add_argument("--pcd_path", type=str, help="Path to the input PCD file.")
+def parse_lidar_bin_file(bin_path, return_fields=False):
+    fields = ["x", "y", "z", "intensity", "lidar_id"]
+
+    point_cloud = np.fromfile(bin_path, dtype=np.float32)
+    point_cloud = point_cloud.reshape(-1, len(fields))
+
+    if return_fields:
+        return point_cloud, fields
+    return point_cloud
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="将 LIDAR PCD 文件转换为 CSV 文件")
+    parser.add_argument("--path", type=str, help="Path to the input PCD file.")
     args = parser.parse_args()
 
-    parse_lidar_pcd_file(args.pcd_path)
+    if args.path.endswith(".pcd"):
+        parse_func = parse_lidar_pcd_file
+    elif args.path.endswith(".bin"):
+        parse_func = parse_lidar_bin_file
+        
+    data, fields = parse_func(args.path, return_fields=True)
+    
+    save_path = os.path.basename(args.path).replace(".pcd", ".csv").replace(".bin", ".csv")
+    with open(save_path, "w") as csv_file:
+        csv_file.write(",".join(fields) + "\n")
+        for point in data:
+            if point.ndim == 0:
+                line = ",".join(str(point[field]) for field in fields)
+                csv_file.write(line + "\n")
+            else:
+                line = ",".join(str(value) for value in point)
+                csv_file.write(line + "\n")
+                

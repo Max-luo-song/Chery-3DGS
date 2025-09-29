@@ -329,7 +329,7 @@ def change_lane_fn(
     per_cam_poses: Dict[int, torch.Tensor],
     target_frames: int
 ) -> torch.Tensor:
-    # NOTE(syc): 向前平移 2 米
+    # 向前平移
     shifted_trajectory = _shift_trajectory_fn(shift_distance, 0, 0, per_cam_poses, target_frames)
 
     # 使用原始轨迹作为基础
