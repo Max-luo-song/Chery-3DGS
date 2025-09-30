@@ -10,11 +10,10 @@ extra_config_info=""  # 额外信息，如 depth_loss
 
 scene_idx="20250702_133223_Q2517"
 
-# camera_ids=(0 1 2 3 4 5 6 8 9 10 12)  # camera IDs to use, e.g., (0), (0 2 4)
 camera_ids=(0 1 2 3 4 5 6 8 9 10 12)  # camera IDs to use, e.g., (0), (0 2 4)
 
 start_timestep=0 # start frame index for training
-end_timestep=10 # end frame index, -1 for the last frame
+end_timestep=-1 # end frame index, -1 for the last frame
 ################################################################################
 
 

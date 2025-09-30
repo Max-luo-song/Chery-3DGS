@@ -1,8 +1,6 @@
 import numpy as np
 import cv2
 
-from scipy.spatial.transform import Rotation
-
 
 def euler_to_rotation_matrix(yaw, pitch, roll):
     # Z 轴旋转（yaw）
@@ -105,3 +103,25 @@ def filter_points_in_box(pointcloud, obj_center_pos, size):
     )
 
     return pointcloud[mask]
+
+
+def preprocess_lidar_point_cloud(point_cloud: np.ndarray, lidar2ego: np.ndarray, lidar_id: int) -> np.ndarray:
+    # NOTE(syc): LiDAR点云可能是ego坐标系的，这里转换到LiDAR坐标系
+    pc_xyz = np.vstack([point_cloud["x"], point_cloud["y"], point_cloud["z"]]).T  # (N, 3)
+    pc_hom = np.hstack([pc_xyz, np.ones((point_cloud.shape[0], 1))])  # N x 4
+    pc_lidar = (np.linalg.inv(lidar2ego) @ pc_hom.T).T  # N x 4
+    point_cloud["x"] = pc_lidar[:, 0]
+    point_cloud["y"] = pc_lidar[:, 1]
+    point_cloud["z"] = pc_lidar[:, 2]
+
+    # 转换为 float32
+    point_cloud = np.stack(
+        [point_cloud[field].astype(np.float32) for field in point_cloud.dtype.names],
+        axis=1,
+    )
+
+    # 末尾增加 lidar_id 列
+    lidar_id_col = np.full((point_cloud.shape[0], 1), lidar_id, dtype=np.float32)
+    point_cloud = np.hstack([point_cloud, lidar_id_col])
+
+    return point_cloud
