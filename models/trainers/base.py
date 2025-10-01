@@ -540,6 +540,7 @@ class BasicTrainer(nn.Module):
             # in the case of egocar, we need to mask out the egocar region
             valid_loss_mask = (1.0 - image_infos["egocar_masks"]).float()
         else:
+            print("No ego mask")
             valid_loss_mask = torch.ones_like(image_infos["sky_masks"])
             
         gt_rgb = image_infos["pixels"] * valid_loss_mask[..., None]
