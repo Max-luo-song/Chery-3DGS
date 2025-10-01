@@ -314,7 +314,7 @@ class CameraData(object):
             self.egocar_mask = torch.from_numpy(np.array(egocar_mask) > 0).float()
             logger.info(f"Loaded ego car mask for camera {self.cam_id}.")
         else:
-            self.egocar_mask = None
+            self.egocar_mask = torch.zeros(self.load_size, dtype=torch.float32)
             logger.info(f"No ego car mask found for camera {self.cam_id}.")
 
     def load_dynamic_masks(self):
@@ -498,8 +498,7 @@ class CameraData(object):
 
         if not self.calib_only:
             self.images = self.images.to(device)
-            if self.egocar_mask is not None:
-                self.egocar_mask = self.egocar_mask.to(device)
+            self.egocar_mask = self.egocar_mask.to(device)
             if self.dynamic_masks is not None:
                 self.dynamic_masks = self.dynamic_masks.to(device)
             if self.human_masks is not None:
@@ -526,7 +525,6 @@ class CameraData(object):
         rgb, sky_mask = None, None
         dynamic_mask, human_mask, vehicle_mask = None, None, None
         pixel_coords, normalized_time = None, None
-        egocar_mask = None
 
         if self.images is not None:
             rgb = self.images[frame_idx]
@@ -558,18 +556,20 @@ class CameraData(object):
             .float()
             .reshape(img_height, img_width, 2)
         )
-        if self.egocar_mask is not None:
-            egocar_mask = self.egocar_mask
-            if self.downscale_factor != 1.0:
-                egocar_mask = (
-                    torch.nn.functional.interpolate(
-                        egocar_mask.unsqueeze(0).unsqueeze(0),
-                        scale_factor=self.downscale_factor,
-                        mode="nearest",
-                    )
-                    .squeeze(0)
-                    .squeeze(0)
+
+        # ego mask
+        egocar_mask = self.egocar_mask
+        if self.downscale_factor != 1.0:
+            egocar_mask = (
+                torch.nn.functional.interpolate(
+                    egocar_mask.unsqueeze(0).unsqueeze(0),
+                    scale_factor=self.downscale_factor,
+                    mode="nearest",
                 )
+                .squeeze(0)
+                .squeeze(0)
+            )
+
         if self.sky_masks is not None:
             sky_mask = self.sky_masks[frame_idx]
             if self.downscale_factor != 1.0:
@@ -1113,7 +1113,11 @@ class ScenePixelSource(abc.ABC):
         return self.data_cfg.sampler.buffer_downscale
 
     def prepare_novel_view_render_data(
-        self, dataset_type: str, traj: torch.Tensor, cam_id: int, camera_data=None
+        self,
+        dataset_type: str,
+        traj: torch.Tensor,
+        cam_id: int,
+        camera_data: CameraData = None,
     ) -> list:
         """
         Prepare all necessary elements for novel view rendering.
@@ -1188,6 +1192,7 @@ class ScenePixelSource(abc.ABC):
                 "pixel_coords": torch.stack(
                     [y.float() / H, x.float() / W], dim=-1
                 ),  # [H, W, 2]
+                # "egocar_masks": camera_data.egocar_mask,
             }
 
             render_data.append(
@@ -1201,7 +1206,7 @@ class ScenePixelSource(abc.ABC):
 
     ### Note(gls):为每个相机准备数据
     def prepare_multicam_novel_view_render_data(
-        self, dataset_type: str, cam0_traj: torch.Tensor, camera_data=None
+        self, dataset_type: str, cam0_traj: torch.Tensor, camera_data: CameraData = None
     ) -> list:
         render_data_list = []  # 存储每个相机的渲染数据
 
