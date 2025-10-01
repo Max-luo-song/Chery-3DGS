@@ -128,7 +128,10 @@ def layout_qcraft(imgs: List[np.array], cam_names: List[str]) -> np.array:
         # rear_left_30      # rear_left_99          # rear_50           # rear_right_99         # rear_right_30  #
         ##########################################################################################################
     """
+    device = "cuda"
+
     channel = imgs[0].shape[-1]
+    imgs = [torch.from_numpy(img).to(device, dtype=torch.float32) for img in imgs]
 
     max_width = 0
     max_height = 0
@@ -144,12 +147,13 @@ def layout_qcraft(imgs: List[np.array], cam_names: List[str]) -> np.array:
     width = 5 * max_width
     height = 3 * max_height
 
-    tiled_img = np.zeros((height, width, channel), dtype=np.float32)
-    filled_mask = np.zeros((height, width), dtype=np.uint8)
+    tiled_img = torch.zeros(
+        (height, width, channel), dtype=torch.float32, device=device
+    )
+    filled_mask = torch.zeros((height, width), dtype=torch.uint8, device=device)
 
     for idx, cam_name in enumerate(cam_names):
         img = imgs[idx]
-        # img_height, img_width = img.shape[0], img.shape[1]
 
         if cam_name == "front_wide_110":
             tiled_img[max_height : 2 * max_height, 2 * max_width : 3 * max_width] = img
@@ -180,8 +184,14 @@ def layout_qcraft(imgs: List[np.array], cam_names: List[str]) -> np.array:
             filled_mask[2 * max_height :, max_width : 2 * max_width] = 1
 
         elif cam_name == "rear_left_30":
-            tiled_img[2 * max_height :, max_width - min_width : max_width] = img
-            filled_mask[2 * max_height :, max_width - min_width : max_width] = 1
+            tiled_img[
+                2 * max_height : 2 * max_height + min_height,
+                max_width - min_width : max_width,
+            ] = img
+            filled_mask[
+                2 * max_height : 2 * max_height + min_height,
+                max_width - min_width : max_width,
+            ] = 1
 
         elif cam_name == "front_wide_right_60":
             tiled_img[max_height : 2 * max_height, 3 * max_width : 4 * max_width] = img
@@ -201,11 +211,11 @@ def layout_qcraft(imgs: List[np.array], cam_names: List[str]) -> np.array:
 
         elif cam_name == "rear_right_30":
             tiled_img[
-                2 * max_height : 3 * max_height,
+                2 * max_height : 2 * max_height + min_height,
                 4 * max_width : 4 * max_width + min_width,
             ] = img
             filled_mask[
-                2 * max_height : 3 * max_height,
+                2 * max_height : 2 * max_height + min_height,
                 4 * max_width : 4 * max_width + min_width,
             ] = 1
 
@@ -217,10 +227,17 @@ def layout_qcraft(imgs: List[np.array], cam_names: List[str]) -> np.array:
                 2 * max_height : 3 * max_height, 2 * max_width : 3 * max_width
             ] = 1
 
-    # crop the image according to the lagrest filled area
-    min_y, max_y = np.where(filled_mask)[0].min(), np.where(filled_mask)[0].max()
-    min_x, max_x = np.where(filled_mask)[1].min(), np.where(filled_mask)[1].max()
+    min_y, max_y = (
+        torch.where(filled_mask)[0].min(),
+        torch.where(filled_mask)[0].max(),
+    )
+    min_x, max_x = (
+        torch.where(filled_mask)[1].min(),
+        torch.where(filled_mask)[1].max(),
+    )
     tiled_img = tiled_img[min_y:max_y, min_x:max_x]
+    tiled_img = tiled_img.cpu().numpy()
+
     return tiled_img
 
 

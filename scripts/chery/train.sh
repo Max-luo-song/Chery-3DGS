@@ -12,7 +12,7 @@ scene_idx="clip_1746752396800"
 camera_ids=(0 1 2 3 4 5 6)  # camera IDs to use, e.g., (0), (0 2 4)
 
 start_timestep=0 # start frame index for training
-end_timestep=10 # end frame index, -1 for the last frame
+end_timestep=-1 # end frame index, -1 for the last frame
 ################################################################################
 
 
