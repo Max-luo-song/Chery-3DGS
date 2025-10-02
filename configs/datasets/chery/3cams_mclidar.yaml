@@ -34,7 +34,7 @@ data:
   lidar_source: # everything related to "lidar" --- from lidar points
     type: datasets.chery.chery_sourceloader.CheryLiDARSource
     load_lidar: True # whether to load lidar
-    lidar_type: lidar
+    lidar_type: mclidar
     only_use_top_lidar: True # whether to only use the top lidar
     truncated_max_range: 80 # max range for truncated lidar in a ego-centric coordinate system
     truncated_min_range: -2 # min range for truncated lidar in a ego-centric coordinate system.

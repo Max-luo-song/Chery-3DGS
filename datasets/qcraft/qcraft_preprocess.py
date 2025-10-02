@@ -325,7 +325,7 @@ class QcraftProcessor(object):
 
         return obj2ego, (l, w, h)
 
-    def _generate_obj_masks(self, obj_data, masks, ego2cams, intrinsics, img_shapes):
+    def _generate_obj_masks(self, obj_data, masks, ego2cams, intrinsics):
         """
         处理单个动态物体，生成掩码图像
         """
@@ -333,20 +333,17 @@ class QcraftProcessor(object):
 
         for cam_idx, ego2cam in enumerate(ego2cams):
             obj2cam = ego2cam @ obj2ego
-            qx, qy, qz, qw = Rotation.from_matrix(obj2cam[:3, :3]).as_quat()
             box = Box(
                 center=obj2cam[:3, 3],
                 size=[w, l, h],
-                orientation=Quaternion([qw, qx, qy, qz]),
+                orientation=Quaternion(matrix=obj2cam[:3, :3]),
             )
-            corners = box.corners().T.astype(np.float32)
-            # print("corners:", corners)
-            points2d = project_points_to_image(
-                corners,
+            corners_cam = box.corners().T.astype(np.float32)
+            corners_2d = project_points_to_image(
+                corners_cam,
                 intrinsics[cam_idx],
-                img_shapes[cam_idx],
             )
-            masks[cam_idx] = draw_and_fill_box(masks[cam_idx], points2d)
+            masks[cam_idx] = draw_and_fill_box(masks[cam_idx], corners_2d)
 
         return masks
 
@@ -396,7 +393,6 @@ class QcraftProcessor(object):
                         masks_human,
                         ego2cams,
                         cache.intrinsics_matrix,
-                        img_shapes,
                     )
                 else:
                     masks_vehicle = self._generate_obj_masks(
@@ -404,7 +400,6 @@ class QcraftProcessor(object):
                         masks_vehicle,
                         ego2cams,
                         cache.intrinsics_matrix,
-                        img_shapes,
                     )
 
             for cam_idx in range(len(ego2cams)):

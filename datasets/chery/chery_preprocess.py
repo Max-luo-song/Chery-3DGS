@@ -20,7 +20,6 @@ from .chery_utils import (
 from pyquaternion import Quaternion
 from nuscenes.utils.data_classes import Box
 from scipy.spatial.transform import Rotation
-from concurrent.futures import ThreadPoolExecutor
 
 CHERY_CLASSES = ["unknown", "Vehicle", "Pedestrian", "Sign", "Cyclist"]
 # TODO(ziyu): consider all dynamic classes
@@ -359,7 +358,7 @@ class CheryProcessor(object):
         l, w, h = obj_data["size"]
         return obj2lidar, (l, w, h)
 
-    def _generate_obj_masks(self, obj_data, masks, lidar2cams, intrinsics, img_shapes):
+    def _generate_obj_masks(self, obj_data, masks, lidar2cams, intrinsics):
         """
         处理单个动态物体，生成掩码图像
         """
@@ -371,19 +370,17 @@ class CheryProcessor(object):
         # # 3.七个视角最终全部投影得到结果
         for cam_idx, lidar2cam in enumerate(lidar2cams):
             obj2cam = lidar2cam @ obj2lidar
-            qx, qy, qz, qw = Rotation.from_matrix(obj2cam[:3, :3]).as_quat()
-            cam_box = Box(
+            box = Box(
                 center=obj2cam[:3, 3],
                 size=[w, l, h],
-                orientation=Quaternion([qw, qx, qy, qz]),
+                orientation=Quaternion(matrix=obj2cam[:3, :3]),
             )
-            corners = cam_box.corners().T.astype(np.float32)
-            points2d = project_points_to_image(
-                corners,
+            corners_cam = box.corners().T.astype(np.float32)
+            corners_2d = project_points_to_image(
+                corners_cam,
                 intrinsics[cam_idx],
-                img_shapes[cam_idx],
             )
-            masks[cam_idx] = draw_and_fill_box(masks[cam_idx], points2d)
+            masks[cam_idx] = draw_and_fill_box(masks[cam_idx], corners_2d)
 
         return masks
 
@@ -444,7 +441,6 @@ class CheryProcessor(object):
                         masks_human,
                         lidar2cams,
                         cache.intrinsics_matrix,
-                        img_shapes,
                     )
                 else:  # vehicle
                     masks_vehicle = self._generate_obj_masks(
@@ -452,7 +448,6 @@ class CheryProcessor(object):
                         masks_vehicle,
                         lidar2cams,
                         cache.intrinsics_matrix,
-                        img_shapes,
                     )
 
             for cam_idx in range(len(lidar2cams)):

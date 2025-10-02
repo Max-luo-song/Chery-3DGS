@@ -1,5 +1,5 @@
 seed: 0
-dataset: waymo/1cams_chery
+dataset: waymo/3cams
 
 # ------------- Trainer ------------ #
 trainer:
@@ -24,11 +24,11 @@ trainer:
     mask:
       w: 0.05
       opacity_loss_type: bce # choose from [bce, safe_bce]
-    depth:
-      w: 0.01 # weight of depth loss
-      inverse_depth: False # whether to use inverse depth, NOTE that when set to True, must normalize=True
-      normalize: False # whether to normalize depth loss
-      loss_type: l1 # choose from ["l1", "l2"]
+    # depth:
+    #   w: 0.01 # weight of depth loss
+    #   inverse_depth: False # whether to use inverse depth, NOTE that when set to True, must normalize=True
+    #   normalize: False # whether to normalize depth loss
+    #   loss_type: l1 # choose from ["l1", "l2"]
     affine:
       w: 0.00001 # weight of affine regularization
   res_schedule:
@@ -72,9 +72,9 @@ model:
   Background:
     type: models.gaussians.VanillaGaussians
     init:
-      # from_lidar:
-      #   num_samples: 800_000
-      #   return_color: True
+      from_lidar:
+        num_samples: 800_000
+        return_color: True
       near_randoms: 100_000
       far_randoms: 100_000
     reg:
@@ -265,7 +265,7 @@ render:
   render_novel: 
     traj_types:
       - front_center_interp # type of trajectory for novel view synthesis
-    fps: 24 # frames per second for novel view rendering
+    fps: 10 # frames per second for novel view rendering
   vis_lidar: False # whether to visualize lidar points on ground truth images
   vis_sky: False # whether to include "rgb_sky" and "rgb_sky_blend" in rendered keys
   vis_error: False # whether to include "rgb_error_map" in rendered keys

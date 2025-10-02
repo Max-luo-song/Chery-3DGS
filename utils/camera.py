@@ -358,41 +358,6 @@ def change_lane_fn(
         )
     # <<<
 
-    # 三次样条插值 (shit) >>>
-    # from scipy.interpolate import CubicSpline
-
-    # # 提取平移部分（:3, 3）用于插值
-    # frames = np.array([change_start, change_start + change_duration // 3, 
-    #                    change_start + 2 * change_duration // 3, change_end])
-    # control_points = torch.stack([
-    #     new_trajectory[change_start, :3, 3],  # 起始点（原始轨迹平移）
-    #     new_trajectory[change_start + change_duration // 3, :3, 3],  # 中间控制点1
-    #     shifted_trajectory[change_start + 2 * change_duration // 3, :3, 3],  # 中间控制点2
-    #     shifted_trajectory[change_end, :3, 3]  # 结束点（偏移轨迹平移）
-    # ]).cpu().numpy()  # 形状为 (4, 3)，对应平移向量的 x, y, z
-    
-    # # 对每个平移维度（x, y, z）进行三次样条插值
-    # t = np.linspace(0, 1, len(frames))
-    # t_new = np.linspace(0, 1, change_duration)
-    
-    # # 初始化插值结果，形状为 (change_duration, 3)
-    # interpolated_translations = np.zeros((change_duration, 3))
-    
-    # # 对平移向量的每个维度（x, y, z）进行插值
-    # for dim in range(3):
-    #     cs = CubicSpline(t, control_points[:, dim])
-    #     interpolated_translations[:, dim] = cs(t_new)
-    
-    # # 将插值后的平移部分转换回 torch.Tensor
-    # interpolated_translations = torch.tensor(interpolated_translations, 
-    #                                         dtype=new_trajectory.dtype, 
-    #                                         device=new_trajectory.device)
-    
-    # # 更新轨迹的平移部分（change_start 到 change_end）
-    # new_trajectory[change_start:change_end, :3, 3] = interpolated_translations
-
-    # <<<
-    
     # 更新 change_end 之后的轨迹，保持在目标车道
     new_trajectory[change_end:, :3, 3] = shifted_trajectory[change_end:, :3, 3]
     

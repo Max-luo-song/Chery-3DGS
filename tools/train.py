@@ -267,7 +267,6 @@ def main(args):
             outputs=outputs,
             image_infos=image_infos,
             cam_infos=cam_infos,
-            has_lidar=cfg.data.lidar_source.load_lidar
         )
         # check nan or inf
         for k, v in loss_dict.items():

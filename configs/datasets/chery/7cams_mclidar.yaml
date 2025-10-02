@@ -18,8 +18,8 @@ data:
   preload_device: cuda # choose from ["cpu", "cuda"], cache the data on this device.
   pixel_source: # image source and object annotations
     type: datasets.chery.chery_sourceloader.CheryPixelSource
-    cameras: [0] # which cameras to use
-    downscale_when_loading: [2] # the size of the images to load
+    cameras: [0, 1, 2, 3, 4, 5, 6] # which cameras to use
+    downscale_when_loading: [4, 4, 4, 4, 4, 4, 4] # the size of the images to load
     downscale: 1 # downscale factor wrt to the downscale_when_loading
     undistort: False # whether to undistort the images
     test_image_stride: 0 # use every Nth timestep for the test set. if 0, use all images for training and none for testing
@@ -33,8 +33,8 @@ data:
       start_enhance_weight: 3 # give more chance to sample starting frames, which usually have more errors
   lidar_source: # everything related to "lidar" --- from lidar points
     type: datasets.chery.chery_sourceloader.CheryLiDARSource
-    load_lidar: False # whether to load lidar
-    lidar_type: visual
+    load_lidar: True # whether to load lidar
+    lidar_type: mclidar
     only_use_top_lidar: True # whether to only use the top lidar
     truncated_max_range: 80 # max range for truncated lidar in a ego-centric coordinate system
     truncated_min_range: -2 # min range for truncated lidar in a ego-centric coordinate system.

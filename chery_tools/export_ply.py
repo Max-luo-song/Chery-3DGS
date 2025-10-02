@@ -58,32 +58,15 @@ def export_ply(pth_path, out_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("Export background gaussians to ply file")
-    
+
     # misc
-    parser.add_argument(
-        "--project",
-        help="Name of the project",
-        type=str,
-        required=True
-    )
-    parser.add_argument(
-        "--run_name",
-        help="Name of the run",
-        type=str,
-        required=True
-    )
+    parser.add_argument("--ckpt_path", type=str, required=True)
     args = parser.parse_args()
 
-    run_dir = osp.join(
-        "output",
-        args.project,
-        args.run_name,
-    )
-    
-    pc_dir = osp.join(run_dir, "point_clouds")
-    os.makedirs(pc_dir, exist_ok=True)
+    run_dir = os.path.dirname(args.ckpt_path)
 
-    pth_path = osp.join(run_dir, "checkpoint_final.pth")
-    out_path = osp.join(pc_dir, "background.ply")
+    save_dir = osp.join(run_dir, "point_clouds")
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = osp.join(save_dir, "background.ply")
 
-    export_ply(pth_path, out_path)
+    export_ply(args.ckpt_path, save_path)

@@ -191,6 +191,7 @@ cython_debug/
 local_scripts
 
 output
+test/
 deprecated/
 tmp/
 backup/

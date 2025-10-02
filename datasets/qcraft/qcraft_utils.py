@@ -34,7 +34,7 @@ def pose_to_transform_matrix(x, y, z, yaw, pitch, roll):
     return T_matrix
 
 
-def project_points_to_image(points3d, intrinsic, img_shape):
+def project_points_to_image(points3d, intrinsic) -> np.ndarray:
     # 将3D点转换为齐次坐标
     points3d_homogeneous = np.concatenate(
         [points3d, np.ones((points3d.shape[0], 1))], axis=1

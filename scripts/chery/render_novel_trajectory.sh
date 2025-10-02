@@ -1,9 +1,8 @@
 # 参数设置
 ################################################################################
-cuda_device_id=5
+gpu=-1
 
-clip_name="clip_1746752396800"
-run_name="20250915_mclidar+cam0123456+depth_loss"
+ckpt_path="output/chery_clip_1746752396800/20250930_mclidar+cam0123456+depth_loss/checkpoint_final.pth"
 
 traj_types=(
     # original_traj
@@ -13,12 +12,6 @@ traj_types=(
     # right_shift_1m
     # right_shift_3m
     # right_shift_5m
-    # front_shift_1m
-    # front_shift_3m
-    # front_shift_5m
-    # back_shift_1m
-    # back_shift_3m
-    # back_shift_5m
     # change_lane_1m
     change_lane_2m
     # change_lane_3.5m
@@ -31,11 +24,18 @@ render_depth=false
 generate_lidar_pc=true
 ################################################################################
 
-export PYTHONPATH=$(pwd)
+# Pick an avaliable gpu
+source scripts/utils.sh
+if [ "${gpu}" = "-1" ]; then
+    gpu=$(pick_gpu)
+    if [ -z "${gpu}" ]; then
+        echo "no gpu found"
+        exit 1
+    fi
+fi
+echo "Using GPU: ${gpu}"
 
-project_name="chery_${clip_name}"
 
-ckpt_path="output/$project_name/$run_name/checkpoint_final.pth"
 echo "Using checkpoint: $ckpt_path"
 
 traj_types_str="$(IFS=" "; echo "${traj_types[*]}")"
@@ -51,7 +51,8 @@ if [ "$generate_lidar_pc" = true ]; then
     bool_args="$bool_args --generate_lidar_pc"
 fi
 
-CUDA_VISIBLE_DEVICES=$cuda_device_id python tools/render_novel_trajectory.py \
+export PYTHONPATH=$(pwd)
+CUDA_VISIBLE_DEVICES=${gpu} python tools/render_novel_trajectory.py \
     --resume_from $ckpt_path \
     --traj_types $traj_types_str \
     --cam_ids $cam_ids \

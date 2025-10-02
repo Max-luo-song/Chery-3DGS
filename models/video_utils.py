@@ -508,7 +508,6 @@ def render_edit_rigid(
 def render_legend(
     dataset: SplitWrapper,
     trainer: BasicTrainer = None,
-    compute_metrics: bool = False,
     compute_error_map: bool = False,
     vis_indices: Optional[List[int]] = None,
     image_output_pth: Optional[str] = None,
@@ -556,15 +555,6 @@ def render_legend(
 
     # misc
     cam_names, cam_ids = [], []
-
-    if compute_metrics:
-        psnrs, ssim_scores, lpipss = [], [], []
-        psnrs_no_ego, ssim_scores_no_ego, lpipss_no_ego = [], [], []
-        psnrs_with_ego, ssim_scores_with_ego, lpipss_with_ego = [], [], []
-        masked_psnrs, masked_ssims = [], []
-        human_psnrs, human_ssims = [], []
-        vehicle_psnrs, vehicle_ssims = [], []
-        occupied_psnrs, occupied_ssims = [], []
 
     with torch.no_grad():
         indices = vis_indices if vis_indices is not None else range(len(dataset))
@@ -681,193 +671,8 @@ def render_legend(
                 )
                 lidar_on_images.append(lidar_on_image)
 
-            if compute_metrics:
-                psnr = compute_psnr(rgb, image_infos["pixels"])
-                ssim_score = ssim(
-                    get_numpy(rgb),
-                    get_numpy(image_infos["pixels"]),
-                    data_range=1.0,
-                    channel_axis=-1,
-                )
-                lpips = trainer.lpips(
-                    rgb[None, ...].permute(0, 3, 1, 2),
-                    image_infos["pixels"][None, ...].permute(0, 3, 1, 2),
-                )
-                logger.info(f"Frame {i}: PSNR {psnr:.4f}, SSIM {ssim_score:.4f}")
-                psnrs.append(psnr)
-                ssim_scores.append(ssim_score)
-                lpipss.append(lpips.item())
-
-                # 不计入 ego 影响的指标 (syc)
-                if "egocar_masks" in image_infos:
-                    ego_mask = get_numpy(image_infos["egocar_masks"]).astype(bool)
-
-                    # 去除车身区域 >>>
-                    mask_no_ego = ~ego_mask
-
-                    psnr_no_ego = compute_psnr(
-                        rgb[mask_no_ego], image_infos["pixels"][mask_no_ego]
-                    )
-                    ssim_score_no_ego = ssim(
-                        get_numpy(rgb),
-                        get_numpy(image_infos["pixels"]),
-                        data_range=1.0,
-                        channel_axis=-1,
-                        full=True,
-                    )[1][mask_no_ego].mean()
-
-                    rgb_masked = rgb.clone()
-                    pixels_masked = image_infos["pixels"].clone()
-                    rgb_masked[ego_mask] = 0
-                    pixels_masked[ego_mask] = 0
-                    lpips_no_ego = trainer.lpips(
-                        rgb_masked[None, ...].permute(0, 3, 1, 2),
-                        pixels_masked[None, ...].permute(0, 3, 1, 2),
-                    )
-                    # <<<
-
-                    # 加上车身 GT >>>
-                    rgb_with_ego = rgb.clone()
-                    rgb_with_ego[ego_mask] = image_infos["pixels"][ego_mask]
-
-                    psnr_with_ego = compute_psnr(rgb_with_ego, image_infos["pixels"])
-                    ssim_score_with_ego = ssim(
-                        get_numpy(rgb_with_ego),
-                        get_numpy(image_infos["pixels"]),
-                        data_range=1.0,
-                        channel_axis=-1,
-                    )
-                    lpips_with_ego = trainer.lpips(
-                        rgb_with_ego[None, ...].permute(0, 3, 1, 2),
-                        image_infos["pixels"][None, ...].permute(0, 3, 1, 2),
-                    )
-                    # <<<
-
-                    psnrs_no_ego.append(psnr_no_ego)
-                    ssim_scores_no_ego.append(ssim_score_no_ego)
-                    lpipss_no_ego.append(lpips_no_ego.item())
-                    logger.info(
-                        f"Frame {i}: PSNR (no ego) {psnr_no_ego:.4f}, SSIM (no ego) {ssim_score_no_ego:.4f}"
-                    )
-
-                    psnrs_with_ego.append(psnr_with_ego)
-                    ssim_scores_with_ego.append(ssim_score_with_ego)
-                    lpipss_with_ego.append(lpips_with_ego.item())
-                    logger.info(
-                        f"Frame {i}: PSNR (with ego) {psnr_with_ego:.4f}, SSIM (with ego) {ssim_score_with_ego:.4f}"
-                    )
-
-                if "sky_masks" in image_infos:
-                    occupied_mask = ~get_numpy(image_infos["sky_masks"]).astype(bool)
-                    if occupied_mask.sum() > 0:
-                        occupied_psnrs.append(
-                            compute_psnr(
-                                rgb[occupied_mask], image_infos["pixels"][occupied_mask]
-                            )
-                        )
-                        occupied_ssims.append(
-                            ssim(
-                                get_numpy(rgb),
-                                get_numpy(image_infos["pixels"]),
-                                data_range=1.0,
-                                channel_axis=-1,
-                                full=True,
-                            )[1][occupied_mask].mean()
-                        )
-
-                if "dynamic_masks" in image_infos:
-                    dynamic_mask = get_numpy(image_infos["dynamic_masks"]).astype(bool)
-                    if dynamic_mask.sum() > 0:
-                        masked_psnrs.append(
-                            compute_psnr(
-                                rgb[dynamic_mask], image_infos["pixels"][dynamic_mask]
-                            )
-                        )
-                        masked_ssims.append(
-                            ssim(
-                                get_numpy(rgb),
-                                get_numpy(image_infos["pixels"]),
-                                data_range=1.0,
-                                channel_axis=-1,
-                                full=True,
-                            )[1][dynamic_mask].mean()
-                        )
-
-                if "human_masks" in image_infos:
-                    human_mask = get_numpy(image_infos["human_masks"]).astype(bool)
-                    if human_mask.sum() > 0:
-                        human_psnrs.append(
-                            compute_psnr(
-                                rgb[human_mask], image_infos["pixels"][human_mask]
-                            )
-                        )
-                        human_ssims.append(
-                            ssim(
-                                get_numpy(rgb),
-                                get_numpy(image_infos["pixels"]),
-                                data_range=1.0,
-                                channel_axis=-1,
-                                full=True,
-                            )[1][human_mask].mean()
-                        )
-
-                if "vehicle_masks" in image_infos:
-                    vehicle_mask = get_numpy(image_infos["vehicle_masks"]).astype(bool)
-                    if vehicle_mask.sum() > 0:
-                        vehicle_psnrs.append(
-                            compute_psnr(
-                                rgb[vehicle_mask], image_infos["pixels"][vehicle_mask]
-                            )
-                        )
-                        vehicle_ssims.append(
-                            ssim(
-                                get_numpy(rgb),
-                                get_numpy(image_infos["pixels"]),
-                                data_range=1.0,
-                                channel_axis=-1,
-                                full=True,
-                            )[1][vehicle_mask].mean()
-                        )
-
     # messy aggregation...
     results_dict = {}
-    results_dict["psnr"] = non_zero_mean(psnrs) if compute_metrics else -1
-    results_dict["ssim"] = non_zero_mean(ssim_scores) if compute_metrics else -1
-    results_dict["lpips"] = non_zero_mean(lpipss) if compute_metrics else -1
-    # syc >>>
-    results_dict["psnr_no_ego"] = non_zero_mean(psnrs_no_ego) if compute_metrics else -1
-    results_dict["ssim_no_ego"] = (
-        non_zero_mean(ssim_scores_no_ego) if compute_metrics else -1
-    )
-    results_dict["lpips_no_ego"] = (
-        non_zero_mean(lpipss_no_ego) if compute_metrics else -1
-    )
-    results_dict["psnr_with_ego"] = (
-        non_zero_mean(psnrs_with_ego) if compute_metrics else -1
-    )
-    results_dict["ssim_with_ego"] = (
-        non_zero_mean(ssim_scores_with_ego) if compute_metrics else -1
-    )
-    results_dict["lpips_with_ego"] = (
-        non_zero_mean(lpipss_with_ego) if compute_metrics else -1
-    )
-    # <<<
-    results_dict["occupied_psnr"] = (
-        non_zero_mean(occupied_psnrs) if compute_metrics else -1
-    )
-    results_dict["occupied_ssim"] = (
-        non_zero_mean(occupied_ssims) if compute_metrics else -1
-    )
-    results_dict["masked_psnr"] = non_zero_mean(masked_psnrs) if compute_metrics else -1
-    results_dict["masked_ssim"] = non_zero_mean(masked_ssims) if compute_metrics else -1
-    results_dict["human_psnr"] = non_zero_mean(human_psnrs) if compute_metrics else -1
-    results_dict["human_ssim"] = non_zero_mean(human_ssims) if compute_metrics else -1
-    results_dict["vehicle_psnr"] = (
-        non_zero_mean(vehicle_psnrs) if compute_metrics else -1
-    )
-    results_dict["vehicle_ssim"] = (
-        non_zero_mean(vehicle_ssims) if compute_metrics else -1
-    )
     results_dict["rgbs"] = rgbs
     results_dict["depths"] = depths
     results_dict["cam_names"] = cam_names
