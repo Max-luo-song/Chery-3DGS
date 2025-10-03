@@ -124,7 +124,7 @@ class CameraData(object):
         buffer_downscale: float = 1.0,
         # the device to move the camera to
         device: torch.device = torch.device("cpu"),
-        calib_only: bool = False,
+        novel_view_mode: bool = False,
     ):
         self.dataset_name = dataset_name
         self.cam_id = cam_id
@@ -134,7 +134,7 @@ class CameraData(object):
         self.undistort = undistort
         self.buffer_downscale = buffer_downscale
         self.device = device
-        self.calib_only = calib_only  # syc
+        self.novel_view_mode = novel_view_mode  # syc
 
         self.cam_name = DATASETS_CONFIG[dataset_name][cam_id]["camera_name"]
         self.original_size = DATASETS_CONFIG[dataset_name][cam_id]["original_size"]
@@ -152,7 +152,7 @@ class CameraData(object):
 
         self.load_calibrations()
 
-        if not self.calib_only:
+        if not self.novel_view_mode:
             self.load_images()
             self.load_egocar_mask()
             if load_dynamic_mask:
@@ -496,7 +496,7 @@ class CameraData(object):
         if self.distortions is not None:
             self.distortions = self.distortions.to(device)
 
-        if not self.calib_only:
+        if not self.novel_view_mode:
             self.images = self.images.to(device)
             self.egocar_mask = self.egocar_mask.to(device)
             if self.dynamic_masks is not None:

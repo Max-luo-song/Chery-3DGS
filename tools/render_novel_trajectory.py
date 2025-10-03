@@ -5,14 +5,17 @@ import time
 import logging
 import argparse
 import numpy as np
-import sys
-# sys.path.append("/data4/gls/code/drivestudio")
+
 import torch
-from datasets.driving_dataset import DrivingDataset
+from datasets.driving_dataset_novel_view import DrivingDatasetNovelView
 from utils.misc import import_str
 from models.trainers import BasicTrainer
 from models.video_utils import render_novel_views
-from chery_tools.pc_generator import unproject_depth_to_pointcloud, remove_ground_points, save_pointcloud_pcd
+from chery_tools.pc_generator import (
+    unproject_depth_to_pointcloud,
+    remove_ground_points,
+    save_pointcloud_pcd,
+)
 
 logger = logging.getLogger()
 current_time = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
@@ -23,7 +26,7 @@ def render_trajectory(
     step: int = 0,
     cfg: OmegaConf = None,
     trainer: BasicTrainer = None,
-    dataset: DrivingDataset = None,
+    dataset: DrivingDatasetNovelView = None,
     cam_ids: Optional[List[int]] = None,
     downscales: Optional[List[int]] = None,
     render_rgb: bool = True,
@@ -36,26 +39,28 @@ def render_trajectory(
 
     render_novel_cfg = cfg.render.get("render_novel", None)
 
-    render_traj = dataset.get_novel_render_traj(
-        traj_types=render_novel_cfg.traj_types,
-        target_frames=render_novel_cfg.get("frames", dataset.frame_num),
-    )
-    
     render_keys = []
     if render_rgb:
-        render_keys.append('rgbs')
+        render_keys.append("rgbs")
     if render_depth:
-        render_keys.append('depths')
+        render_keys.append("depths")
 
-    camera_data = dataset.pixel_source.load_specified_cameras(cam_ids, downscales)
+    camera_data = dataset.load_specified_cameras(cam_ids, downscales)
 
-    for traj_type, traj in render_traj.items():
+    for traj_type in render_novel_cfg.traj_types:
+        render_traj = dataset.get_novel_render_traj(
+            traj_type=traj_type,
+            target_frames=render_novel_cfg.get("frames", dataset.frame_num),
+        )
+        if render_traj is None:
+            continue
+
         output_dir = f"{cfg.log_dir}/novel_traj/{traj_type}_step{step}"
         os.makedirs(output_dir, exist_ok=True)
 
         # traj 为单个相机（前向）的新轨迹, render_data 包含所有相机在该轨迹下的位姿等信息
-        # FIXME(syc): CUDA OOM when downscale=2
-        render_data = dataset.prepare_novel_view_render_data(traj, camera_data)
+        print(f"Preparing render data for {traj_type}")
+        render_data = dataset.prepare_novel_view_render_data(render_traj, camera_data)
 
         # Render and save video
         video_output_dir = os.path.join(output_dir, "videos")
@@ -71,7 +76,7 @@ def render_trajectory(
             fps=render_novel_cfg.get("fps", cfg.render.fps),
         )
 
-        logger.info(f"Saved novel view videos for trajectory type: {traj_type}") 
+        logger.info(f"Saved novel view videos for trajectory type: {traj_type}")
 
         # Release rendering data
         del render_data
@@ -81,16 +86,28 @@ def render_trajectory(
             pc_output_dir = os.path.join(output_dir, "lidar_point_clouds")
             os.makedirs(pc_output_dir, exist_ok=True)
 
-            pinhole_cam_ids = [id for id, cam in camera_data.items() if not cam.is_fisheye]
-            intrinsics = {cam_id: camera_data[cam_id].intrinsics.cpu().numpy() for cam_id in pinhole_cam_ids}
-            T_cam_to_lidars = {cam_id: camera_data[cam_id].cam_to_main_lidar for cam_id in pinhole_cam_ids}
+            pinhole_cam_ids = [
+                id for id, cam in camera_data.items() if not cam.is_fisheye
+            ]
+            intrinsics = {
+                cam_id: camera_data[cam_id].intrinsics.cpu().numpy()
+                for cam_id in pinhole_cam_ids
+            }
+            T_cam_to_lidars = {
+                cam_id: camera_data[cam_id].cam_to_main_lidar
+                for cam_id in pinhole_cam_ids
+            }
 
             frame_id = 0
             for t in range(dataset.start_timestep, dataset.end_timestep):
                 depths = depth_maps[frame_id]
                 all_points = []
                 for cam_id in pinhole_cam_ids:
-                    points = unproject_depth_to_pointcloud(depths[cam_id], intrinsics[cam_id][frame_id], T_cam_to_lidars[cam_id])
+                    points = unproject_depth_to_pointcloud(
+                        depths[cam_id],
+                        intrinsics[cam_id][frame_id],
+                        T_cam_to_lidars[cam_id],
+                    )
                     if len(points) > 0:
                         all_points.append(points)
 
@@ -102,8 +119,10 @@ def render_trajectory(
                     # 保存为PCD文件
                     pcd_path = os.path.join(pc_output_dir, f"frame_{t:06d}.pcd")
                     save_pointcloud_pcd(all_points, pcd_path)
-                    
-                    logger.debug(f"Frame {t}: Merged {len(all_points)} points -> {pcd_path}")
+
+                    logger.debug(
+                        f"Frame {t}: Merged {len(all_points)} points -> {pcd_path}"
+                    )
 
                 frame_id += 1
 
@@ -117,22 +136,27 @@ def main(args):
     if args.cam_ids is None:
         specified_camera_ids = cfg.data.pixel_source.cameras
     else:
-        specified_camera_ids = sorted([int(x.strip()) for x in args.cam_ids.split(',')])
+        specified_camera_ids = sorted([int(x.strip()) for x in args.cam_ids.split(",")])
 
     # 使用第一个相机的 downscale 填充训练时未指定的相机
     default_downscale = cfg.data.pixel_source.downscale_when_loading[0]
     original_camera_dict = {
         cam_id: downscale
-        for cam_id, downscale in zip(cfg.data.pixel_source.cameras, cfg.data.pixel_source.downscale_when_loading)
+        for cam_id, downscale in zip(
+            cfg.data.pixel_source.cameras, cfg.data.pixel_source.downscale_when_loading
+        )
     }
-    specified_camera_downscales = [original_camera_dict.get(cam_id, default_downscale) for cam_id in specified_camera_ids]
-    
+    specified_camera_downscales = [
+        original_camera_dict.get(cam_id, default_downscale)
+        for cam_id in specified_camera_ids
+    ]
+
     if args.traj_types is not None:
         cfg.render.render_novel.traj_types = args.traj_types
-    
+
     if args.fps is not None:
         cfg.render.render_novel.fps = args.fps
-        
+
     if args.enable_viewer:
         # a simple viewer for background visualization
         trainer.init_viewer(port=args.viewer_port)
@@ -142,15 +166,15 @@ def main(args):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # build dataset
-    dataset = DrivingDataset(data_cfg=cfg.data)
+    dataset = DrivingDatasetNovelView(data_cfg=cfg.data)
 
     # setup trainer
     trainer = import_str(cfg.trainer.type)(
         **cfg.trainer,
         num_timesteps=dataset.num_img_timesteps,
         model_config=cfg.model,
-        num_train_images=len(dataset.train_image_set),
-        num_full_images=len(dataset.full_image_set),
+        # num_train_images=len(dataset.train_indices),
+        num_full_images=len(dataset.train_indices + dataset.test_indices),
         test_set_indices=dataset.test_timesteps,
         scene_aabb=dataset.get_aabb().reshape(2, 3),
         device=device,
@@ -174,7 +198,7 @@ def main(args):
         downscales=specified_camera_downscales,
         render_rgb=args.render_rgb,
         render_depth=args.render_depth,
-        generate_lidar_pc=args.generate_lidar_pc
+        generate_lidar_pc=args.generate_lidar_pc,
     )
 
     if args.enable_viewer:
@@ -225,9 +249,17 @@ if __name__ == "__main__":
         help="visualize lidar on image",
     )
 
-    parser.add_argument("--render_rgb", action="store_true", help='render rgb novel views')
-    parser.add_argument("--render_depth", action="store_true", help='render depth novel views')
-    parser.add_argument("--generate_lidar_pc", action="store_true", help='generate point cloud for each frame')
+    parser.add_argument(
+        "--render_rgb", action="store_true", help="render rgb novel views"
+    )
+    parser.add_argument(
+        "--render_depth", action="store_true", help="render depth novel views"
+    )
+    parser.add_argument(
+        "--generate_lidar_pc",
+        action="store_true",
+        help="generate point cloud for each frame",
+    )
 
     # viewer
     parser.add_argument("--enable_viewer", action="store_true", help="enable viewer")

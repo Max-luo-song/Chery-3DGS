@@ -163,11 +163,13 @@ class QcraftPixelSource(ScenePixelSource):
         start_timestep: int,
         end_timestep: int,
         device: torch.device = torch.device("cpu"),
+        novel_view_mode: bool = False,
     ):
         super().__init__(dataset_name, pixel_data_config, device=device)
         self.data_path = data_path
         self.start_timestep = start_timestep
         self.end_timestep = end_timestep
+        self.novel_view_mode = novel_view_mode  # syc
         self.load_data()
 
     def load_cameras(self):
@@ -192,6 +194,7 @@ class QcraftPixelSource(ScenePixelSource):
                 undistort=self.data_cfg.undistort,
                 buffer_downscale=self.buffer_downscale,
                 device=self.device,
+                novel_view_mode=self.novel_view_mode,
             )
             camera.load_time(self.normalized_time)
             unique_img_idx = (
@@ -219,7 +222,7 @@ class QcraftPixelSource(ScenePixelSource):
                 undistort=False,
                 buffer_downscale=self.buffer_downscale,
                 device=self.device,
-                calib_only=True,
+                novel_view_mode=True,
             )
             camera.load_time(self.normalized_time)
             unique_img_idx = (

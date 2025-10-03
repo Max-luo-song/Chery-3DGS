@@ -9,8 +9,6 @@ import logging
 import argparse
 
 import torch
-import sys
-# sys.path.append("/data4/gls/code/drivestudio")
 from tools.eval import do_evaluation
 from utils.misc import import_str
 from utils.backup import backup_project
