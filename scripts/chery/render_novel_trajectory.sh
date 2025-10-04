@@ -17,7 +17,11 @@ traj_types=(
     # change_lane_3.5m
 )
 
-cam_ids="0,1,2,3,4,5,6,7,8,9,10"
+cam_ids=(0 1 2 3 4 5 6 7 8 9 10)
+downscales=(2 2 2 2 2 2 2 2 2 2 2)
+# downscales=(1 1 1 1 1 1 1 1 1 1 1)
+
+fps=10
 
 render_rgb=true
 render_depth=false
@@ -38,8 +42,6 @@ echo "Using GPU: ${gpu}"
 
 echo "Using checkpoint: $ckpt_path"
 
-traj_types_str="$(IFS=" "; echo "${traj_types[*]}")"
-
 bool_args=""
 if [ "$render_rgb" = true ]; then
     bool_args="$bool_args --render_rgb"
@@ -54,6 +56,8 @@ fi
 export PYTHONPATH=$(pwd)
 CUDA_VISIBLE_DEVICES=${gpu} python tools/render_novel_trajectory.py \
     --resume_from $ckpt_path \
-    --traj_types $traj_types_str \
-    --cam_ids $cam_ids \
+    --traj_types "${traj_types[@]}" \
+    --cam_ids "${cam_ids[@]}" \
+    --downscales "${downscales[@]}" \
+    --fps $fps \
     $bool_args

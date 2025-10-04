@@ -8,6 +8,7 @@ import torch
 
 from models.gaussians.basics import *
 from datasets.base.scene_dataset import SceneDataset
+from datasets.base.pixel_source import CameraData
 from utils.camera import get_interp_novel_trajectories
 from utils.misc import export_points_to_ply, import_str
 
@@ -159,12 +160,6 @@ class DrivingDatasetNovelView(SceneDataset):
         train_timesteps = np.array(
             [i for i in range(self.num_img_timesteps) if i not in test_timesteps]
         )
-        logger.info(
-            f"Train timesteps: \n{np.arange(self.start_timestep, self.end_timestep)[train_timesteps]}"
-        )
-        logger.info(
-            f"Test timesteps: \n{np.arange(self.start_timestep, self.end_timestep)[test_timesteps]}"
-        )
 
         # propagate the train and test timesteps to the train and test indices
         train_indices, test_indices = [], []
@@ -175,10 +170,6 @@ class DrivingDatasetNovelView(SceneDataset):
             elif t in test_timesteps:
                 for cam in range(self.pixel_source.num_cams):
                     test_indices.append(t * self.pixel_source.num_cams + cam)
-        logger.info(f"Number of train indices: {len(train_indices)}")
-        logger.info(f"Train indices: {train_indices}")
-        logger.info(f"Number of test indices: {len(test_indices)}")
-        logger.info(f"Test indices: {test_indices}")
 
         # Again, training and testing indices are indices into the full dataset
         # train_indices are img indices, so the length is num_cams * num_train_timesteps
@@ -188,8 +179,10 @@ class DrivingDatasetNovelView(SceneDataset):
     def get_novel_render_traj(
         self,
         traj_type: str,
+        ref_cam_id: int,
+        camera_data_dict: Dict[int, CameraData],
         target_frames: int = 100,
-        traj_dir: str = None,
+        traj_path: str = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Get multiple novel trajectories of the scene for rendering.
@@ -205,26 +198,30 @@ class DrivingDatasetNovelView(SceneDataset):
             are the generated novel trajectories, each of shape (target_frames, 4, 4)
         """
         per_cam_poses = {}
-        for cam_id in self.pixel_source.camera_list:
-            per_cam_poses[cam_id] = self.pixel_source.camera_data[cam_id].cam_to_worlds
+        for cam_id, camera_data in camera_data_dict.items():
+            per_cam_poses[cam_id] = camera_data.cam_to_worlds
 
-        novel_traj = None
-
-        if traj_type == "custom" and traj_dir is not None:
+        if traj_type == "custom":
             # TODO: 支持自定义轨迹
-            # novel_trajs[traj_type] = load_custom_trajectory(traj_dir)
+            # novel_trajs[traj_type] = load_custom_trajectory(traj_path)
             pass
         else:
             novel_traj = get_interp_novel_trajectories(
-                self.type,
-                self.scene_idx,
-                per_cam_poses,
-                traj_type,
-                target_frames,
+                dataset_type=self.type,
+                scene_idx=self.scene_idx,
+                ref_cam_id=ref_cam_id,
+                per_cam_poses=per_cam_poses,
+                traj_type=traj_type,
+                target_frames=target_frames,
             )
         return novel_traj
 
-    def prepare_novel_view_render_data(self, traj: torch.Tensor, camera_data) -> list:
+    def prepare_novel_view_render_data(
+        self,
+        traj: torch.Tensor,
+        ref_cam_data: CameraData,
+        target_cam_data: CameraData,
+    ) -> list:
         """
         Prepare all necessary elements for novel view rendering.
 
@@ -237,10 +234,15 @@ class DrivingDatasetNovelView(SceneDataset):
                 - image_infos: Image-related information (indices, normalized time, viewdirs, etc.)
         """
         # Call the PixelSource's method
-        return self.pixel_source.prepare_multicam_novel_view_render_data(
-            self.type, traj, camera_data
+        return self.pixel_source.prepare_novel_view_render_data(
+            dataset_type=self.type,
+            ref_cam_novel_traj=traj,
+            ref_cam_data=ref_cam_data,
+            target_cam_data=target_cam_data,
         )
 
-    def load_specified_cameras(self, cam_ids: List[int], downscales: List[float]):
+    def load_specified_cameras(
+        self, cam_ids: List[int], downscales: List[float]
+    ) -> Dict[int, CameraData]:
         camera_data = self.pixel_source.load_specified_cameras(cam_ids, downscales)
         return camera_data

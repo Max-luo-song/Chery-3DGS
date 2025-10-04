@@ -11,6 +11,7 @@ from torch.nn import functional as F
 from skimage.metrics import structural_similarity as ssim
 
 from datasets.base import SplitWrapper
+from datasets.base.pixel_source import CameraData
 from models.trainers.base import BasicTrainer
 from utils.visualization import (
     to8b,
@@ -1173,206 +1174,80 @@ def save_videos(
     return return_frame
 
 
-def save_single_camera_video(
-    render_results: Dict[str, List[Tensor]],
-    cam_id: int,
-    save_pth: str,
-    num_timestamps: int,
-    keys: List[str] = ["rgbs", "depths"],
-    fps: int = 10,
-    verbose: bool = False,
-    save_images: bool = False,
-):
-    for key in keys:
-        tmp_save_pth = save_pth.replace(".mp4", f"_cam{cam_id}_{key}.mp4")
-        tmp_save_pth = tmp_save_pth.replace(".png", f"_cam{cam_id}_{key}.png")
-
-        if num_timestamps == 1:  # it's an image
-            writer = imageio.get_writer(tmp_save_pth, mode="I")
-        else:
-            writer = imageio.get_writer(tmp_save_pth, mode="I", fps=fps)
-
-        if "mask" not in key:
-            if key not in render_results or len(render_results[key]) == 0:
-                continue
-
-        for frame_idx in range(num_timestamps):
-            # skip if the key is not in render_results
-            if "mask" in key:
-                new_key = key.replace("mask", "opacities")
-                if new_key not in render_results or len(render_results[new_key]) == 0:
-                    continue
-                single_frame = render_results[new_key][frame_idx]
-            else:
-                if key not in render_results or len(render_results[key]) == 0:
-                    continue
-                single_frame = render_results[key][frame_idx]
-
-            # convert to rgb if necessary
-            if key == "gt_sky_masks":
-                single_frame = [
-                    np.stack([frame, frame, frame], axis=-1) for frame in single_frame
-                ]
-            elif "mask" in key:
-                single_frame = [
-                    np.stack([frame, frame, frame], axis=-1) for frame in single_frame
-                ]
-            elif "depth" in key:
-                try:
-                    opacities = render_results[key.replace("depths", "opacities")][
-                        frame_idx
-                    ]
-                except:
-                    if "median" in key:
-                        opacities = render_results[
-                            key.replace("median_depths", "opacities")
-                        ][frame_idx]
-                    else:
-                        continue
-                single_frame = [
-                    depth_visualizer(frame, opacity)
-                    for frame, opacity in zip(single_frame, opacities)
-                ]
-
-            single_frame = np.array(single_frame)
-
-            if save_images:
-                if frame_idx == 0:
-                    os.makedirs(tmp_save_pth.replace(".mp4", ""), exist_ok=True)
-
-                for j, frame in enumerate(single_frame):
-                    imageio.imwrite(
-                        tmp_save_pth.replace(".mp4", f"/{frame_idx:03d}_{j:03d}.png"),
-                        to8b(frame),
-                    )
-            single_frame = to8b(single_frame)
-            writer.append_data(single_frame)
-
-        # close the writer
-        writer.close()
-        del writer
-
-        if verbose:
-            logger.info(f"saved video to {tmp_save_pth}")
-
-    del render_results
-
-
 def render_novel_views(
     trainer,
-    render_data_list: list,
-    camera_data: dict,
-    video_output_pth: str,
-    render_keys: list = ["rgbs", "depths"],
-    fps: int = 30,
-) -> None:
-    """
-    Perform rendering and save the result as a video.
-
-    Args:
-        trainer: Trainer object containing the rendering method
-        render_data (list): List of dicts, each containing elements required for rendering a single frame
-        save_path (str): Path to save the output video
-        fps (int): Frames per second for the output video
-    """
+    render_data: list,
+    camera_data: CameraData,
+) -> list:
     trainer.set_eval()
 
-    depths_per_cam = {}
-    cam_ids = camera_data.keys()
-
-    print(f"Render keys: {render_keys}")
-
     with torch.no_grad():
-        for cam_id, render_data in zip(cam_ids, render_data_list):  # 单个相机的数据
-            rgbs = []
-            depths = []
-            opacities = []
+        rgbs = []
+        depths = []
+        opacities = []
 
-            for frame_data in render_data:
-                # Move data to GPU
-                for key, value in frame_data["cam_infos"].items():
-                    frame_data["cam_infos"][key] = value.cuda(non_blocking=True)
-                for key, value in frame_data["image_infos"].items():
-                    frame_data["image_infos"][key] = value.cuda(non_blocking=True)
+        for frame_data in render_data:
+            # Move data to GPU
+            for key, value in frame_data["cam_infos"].items():
+                frame_data["cam_infos"][key] = value.cuda(non_blocking=True)
+            for key, value in frame_data["image_infos"].items():
+                frame_data["image_infos"][key] = value.cuda(non_blocking=True)
 
-                # Perform rendering
-                outputs = trainer(
-                    image_infos=frame_data["image_infos"],
-                    camera_infos=frame_data["cam_infos"],
-                    novel_view=True,
-                )
-
-                # ------------- clip rgb ------------- #
-                for k, v in outputs.items():
-                    if isinstance(v, Tensor) and "rgb" in k:
-                        outputs[k] = v.clamp(0.0, 1.0)
-
-                rgb = get_numpy(outputs["rgb"])
-                depth = get_numpy(outputs["depth"])
-                opacity = (
-                    get_numpy(outputs["opacity"]) if "opacity" in outputs else None
-                )
-
-                # 模拟鱼眼相机
-                if camera_data[cam_id].is_fisheye:
-                    intrinsics = frame_data["cam_infos"]["intrinsics"].cpu().numpy()
-                    focal_length = intrinsics[0, 0]  # fx
-                    kb_coeffs = (
-                        frame_data["cam_infos"]["kb_coeffs"].cpu().numpy().flatten()
-                    )
-                    crop = False
-
-                    rgb = pinhole2fisheye(
-                        image=rgb,
-                        focal_length=focal_length,
-                        kb_coeffs=kb_coeffs,
-                        crop_valid=crop,
-                    )
-                    depth = pinhole2fisheye(
-                        image=depth,
-                        focal_length=focal_length,
-                        kb_coeffs=kb_coeffs,
-                        crop_valid=crop,
-                    )
-                    if opacity is not None:
-                        opacity = pinhole2fisheye(
-                            image=opacity,
-                            focal_length=focal_length,
-                            kb_coeffs=kb_coeffs,
-                            crop_valid=crop,
-                        )
-
-                rgbs.append(rgb)
-                depths.append(depth)
-                if opacity is not None:
-                    opacities.append(opacity)
-
-            render_results = {}
-            render_results["rgbs"] = rgbs
-            render_results["depths"] = depths
-            if len(opacities) > 0:
-                render_results["opacities"] = opacities
-
-            save_single_camera_video(
-                render_results,
-                cam_id,
-                video_output_pth,
-                num_timestamps=len(rgbs),
-                keys=render_keys,
-                fps=fps,
-                verbose=True,
-                save_images=False,
+            # Perform rendering
+            outputs = trainer(
+                image_infos=frame_data["image_infos"],
+                camera_infos=frame_data["cam_infos"],
+                novel_view=True,
             )
 
-            # 鱼眼相机不保存 depth
-            if not camera_data[cam_id].is_fisheye:
-                depths_per_cam[cam_id] = depths
+            # ------------- clip rgb ------------- #
+            for k, v in outputs.items():
+                if isinstance(v, Tensor) and "rgb" in k:
+                    outputs[k] = v.clamp(0.0, 1.0)
 
-    depths_per_frame = [
-        {cam_id: depths_per_cam[cam_id][i] for cam_id in depths_per_cam}
-        for i in range(len(render_data_list[0]))
-    ]
-    return depths_per_frame
+            rgb = get_numpy(outputs["rgb"])
+            depth = get_numpy(outputs["depth"])
+            opacity = get_numpy(outputs["opacity"]) if "opacity" in outputs else None
+
+            # 模拟鱼眼相机
+            if camera_data.is_fisheye:
+                intrinsics = frame_data["cam_infos"]["intrinsics"].cpu().numpy()
+                focal_length = intrinsics[0, 0]  # fx
+                kb_coeffs = frame_data["cam_infos"]["kb_coeffs"].cpu().numpy().flatten()
+                crop = False
+
+                rgb = pinhole2fisheye(
+                    image=rgb,
+                    focal_length=focal_length,
+                    kb_coeffs=kb_coeffs,
+                    crop_valid=crop,
+                )
+                depth = pinhole2fisheye(
+                    image=depth,
+                    focal_length=focal_length,
+                    kb_coeffs=kb_coeffs,
+                    crop_valid=crop,
+                )
+                if opacity is not None:
+                    opacity = pinhole2fisheye(
+                        image=opacity,
+                        focal_length=focal_length,
+                        kb_coeffs=kb_coeffs,
+                        crop_valid=crop,
+                    )
+
+            rgbs.append(rgb)
+            depths.append(depth)
+            if opacity is not None:
+                opacities.append(opacity)
+
+        render_results = {}
+        render_results["rgbs"] = rgbs
+        render_results["depths"] = depths
+        if len(opacities) > 0:
+            render_results["opacities"] = opacities
+
+    return render_results
 
 
 def save_concatenated_videos(
@@ -1518,3 +1393,88 @@ def save_seperate_videos(
             logger.info(f"saved video to {tmp_save_pth}")
     del render_results
     return return_frame_dict
+
+
+def save_single_camera_video(
+    render_results: Dict[str, List[Tensor]],
+    cam_id: int,
+    save_pth: str,
+    num_timestamps: int,
+    keys: List[str] = ["rgbs", "depths"],
+    fps: int = 10,
+    verbose: bool = False,
+    save_images: bool = False,
+):
+    for key in keys:
+        tmp_save_pth = save_pth.replace(".mp4", f"_cam{cam_id}_{key}.mp4")
+        tmp_save_pth = tmp_save_pth.replace(".png", f"_cam{cam_id}_{key}.png")
+
+        if num_timestamps == 1:  # it's an image
+            writer = imageio.get_writer(tmp_save_pth, mode="I")
+        else:
+            writer = imageio.get_writer(tmp_save_pth, mode="I", fps=fps)
+
+        if "mask" not in key:
+            if key not in render_results or len(render_results[key]) == 0:
+                continue
+
+        for frame_idx in range(num_timestamps):
+            # skip if the key is not in render_results
+            if "mask" in key:
+                new_key = key.replace("mask", "opacities")
+                if new_key not in render_results or len(render_results[new_key]) == 0:
+                    continue
+                single_frame = render_results[new_key][frame_idx]
+            else:
+                if key not in render_results or len(render_results[key]) == 0:
+                    continue
+                single_frame = render_results[key][frame_idx]
+
+            # convert to rgb if necessary
+            if key == "gt_sky_masks":
+                single_frame = [
+                    np.stack([frame, frame, frame], axis=-1) for frame in single_frame
+                ]
+            elif "mask" in key:
+                single_frame = [
+                    np.stack([frame, frame, frame], axis=-1) for frame in single_frame
+                ]
+            elif "depth" in key:
+                try:
+                    opacities = render_results[key.replace("depths", "opacities")][
+                        frame_idx
+                    ]
+                except:
+                    if "median" in key:
+                        opacities = render_results[
+                            key.replace("median_depths", "opacities")
+                        ][frame_idx]
+                    else:
+                        continue
+                single_frame = [
+                    depth_visualizer(frame, opacity)
+                    for frame, opacity in zip(single_frame, opacities)
+                ]
+
+            single_frame = np.array(single_frame)
+
+            if save_images:
+                if frame_idx == 0:
+                    os.makedirs(tmp_save_pth.replace(".mp4", ""), exist_ok=True)
+
+                for j, frame in enumerate(single_frame):
+                    imageio.imwrite(
+                        tmp_save_pth.replace(".mp4", f"/{frame_idx:03d}_{j:03d}.png"),
+                        to8b(frame),
+                    )
+            single_frame = to8b(single_frame)
+            writer.append_data(single_frame)
+
+        # close the writer
+        writer.close()
+        del writer
+
+        if verbose:
+            logger.info(f"saved video to {tmp_save_pth}")
+
+    del render_results

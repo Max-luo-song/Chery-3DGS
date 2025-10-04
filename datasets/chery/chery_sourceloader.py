@@ -206,7 +206,6 @@ class CheryPixelSource(ScenePixelSource):
     def load_specified_cameras(self, cam_ids, downscale_when_loading) -> Dict[int, CameraData]:
         camera_data = {}
         for idx, cam_id in enumerate(cam_ids):
-            print(f"Loading specified camera {cam_id}")
             camera = CheryCameraData(
                 dataset_name=self.dataset_name,
                 data_path=self.data_path,
