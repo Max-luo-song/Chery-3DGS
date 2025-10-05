@@ -1212,6 +1212,7 @@ def render_novel_views(
             # 模拟鱼眼相机
             if camera_data.is_fisheye:
                 intrinsics = frame_data["cam_infos"]["intrinsics"].cpu().numpy()
+                # FIXME(syc): fx != focal_length
                 focal_length = intrinsics[0, 0]  # fx
                 kb_coeffs = frame_data["cam_infos"]["kb_coeffs"].cpu().numpy().flatten()
                 crop = False

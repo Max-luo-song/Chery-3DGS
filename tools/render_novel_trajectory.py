@@ -12,7 +12,7 @@ from utils.misc import import_str
 from utils.logging import setup_logging
 from models.trainers import BasicTrainer
 from models.video_utils import render_novel_views, save_single_camera_video
-from chery_tools.pc_generator import (
+from chery_tools.lidar_simulation import (
     unproject_depth_to_pointcloud,
     remove_ground_points,
     save_pointcloud_pcd,
