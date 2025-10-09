@@ -34,6 +34,7 @@ def render_trajectory(
     fps: int = 10,
     render_rgb: bool = True,
     render_depth: bool = False,
+    save_images: bool = True,
     generate_lidar_pc: bool = False,
 ):
     trainer.set_eval()
@@ -72,6 +73,11 @@ def render_trajectory(
         os.makedirs(video_output_dir, exist_ok=True)
         video_output_path = os.path.join(video_output_dir, f"{traj_type}.mp4")
 
+        image_output_dir = None
+        if save_images:
+            image_output_dir = os.path.join(output_dir, "images")
+            os.makedirs(image_output_dir, exist_ok=True)
+
         ref_cam_data = camera_data_dict[ref_cam_id]
 
         depths_per_cam = {}
@@ -88,26 +94,26 @@ def render_trajectory(
             )
             del render_data
 
-            # TODO: 按原数据集格式输出图像
-
             save_single_camera_video(
                 render_results,
                 cam_id,
+                dataset.start_timestep,
+                dataset.end_timestep,
                 video_output_path,
-                num_timestamps=len(render_results["rgbs"]),
+                image_output_dir,
                 keys=render_keys,
                 fps=fps,
                 verbose=True,
-                save_images=False,
             )
 
             # 鱼眼相机不保存 depth
             depths_per_cam[cam_id] = render_results["depths"]
 
+            del render_results
+
         logger.info(f"Saved novel view videos for trajectory type: {traj_type}")
 
-        # 生成雷达点云
-        # NOTE(syc): 目前暂时通过深度反投影实现
+        # [DEPRECATED] 生成雷达点云
         if generate_lidar_pc:
             pc_output_dir = os.path.join(output_dir, "lidar_point_clouds")
             os.makedirs(pc_output_dir, exist_ok=True)
@@ -124,8 +130,7 @@ def render_trajectory(
                 for cam_id in pinhole_cam_ids
             }
 
-            frame_id = 0
-            for t in range(dataset.start_timestep, dataset.end_timestep):
+            for frame_id, t in enumerate(range(dataset.start_timestep, dataset.end_timestep)):
                 all_points = []
                 for cam_id in pinhole_cam_ids:
                     points = unproject_depth_to_pointcloud(
@@ -148,8 +153,6 @@ def render_trajectory(
                     logger.debug(
                         f"Frame {t}: Merged {len(all_points)} points -> {pcd_path}"
                     )
-
-                frame_id += 1
 
         del depths_per_cam
 
@@ -218,6 +221,7 @@ def main(args):
         fps=args.fps,
         render_rgb=args.render_rgb,
         render_depth=args.render_depth,
+        save_images=args.save_images,
         generate_lidar_pc=args.generate_lidar_pc,
     )
 
@@ -285,6 +289,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--render_depth", action="store_true", help="render depth novel views"
+    )
+    parser.add_argument(
+        "--save_images", action="store_true", help="save rendered images"
     )
     parser.add_argument(
         "--generate_lidar_pc",

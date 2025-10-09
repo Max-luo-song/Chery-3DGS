@@ -2,7 +2,7 @@
 ################################################################################
 gpu=-1
 
-ckpt_path="output/qcraft_20250702_133223_Q2517/20251001_lidar+cam0_1_2_3_4_5_6_8_9_10_12/checkpoint_final.pth"
+ckpt_path="output/qcraft_20250702_133223_Q2517/20251007_lidar+cam0_1_2_3_4_5_6_8_9_10_12/checkpoint_final.pth"
 
 traj_types=(
     # original_traj
@@ -24,7 +24,8 @@ fps=10
 
 render_rgb=true
 render_depth=false
-generate_lidar_pc=true
+save_images=true
+generate_lidar_pc=false
 ################################################################################
 
 # Pick an avaliable gpu
@@ -47,6 +48,9 @@ if [ "$render_rgb" = true ]; then
 fi
 if [ "$render_depth" = true ]; then
     bool_args="$bool_args --render_depth"
+fi
+if [ "$save_images" = true ]; then
+    bool_args="$bool_args --save_images"
 fi
 if [ "$generate_lidar_pc" = true ]; then
     bool_args="$bool_args --generate_lidar_pc"

@@ -78,12 +78,24 @@ def render_images(
         logger.info(f"\t Full Image  PSNR: {render_results['psnr']:.4f}")
         logger.info(f"\t Full Image  SSIM: {render_results['ssim']:.4f}")
         logger.info(f"\t Full Image LPIPS: {render_results['lpips']:.4f}")
-        logger.info(f"\t Full Image  PSNR (no ego): {render_results['psnr_no_ego']:.4f}")
-        logger.info(f"\t Full Image  SSIM (no ego): {render_results['ssim_no_ego']:.4f}")
-        logger.info(f"\t Full Image LPIPS (no ego): {render_results['lpips_no_ego']:.4f}")
-        logger.info(f"\t Full Image  PSNR (with ego): {render_results['psnr_with_ego']:.4f}")
-        logger.info(f"\t Full Image  SSIM (with ego): {render_results['ssim_with_ego']:.4f}")
-        logger.info(f"\t Full Image LPIPS (with ego): {render_results['lpips_with_ego']:.4f}")
+        logger.info(
+            f"\t Full Image  PSNR (no ego): {render_results['psnr_no_ego']:.4f}"
+        )
+        logger.info(
+            f"\t Full Image  SSIM (no ego): {render_results['ssim_no_ego']:.4f}"
+        )
+        logger.info(
+            f"\t Full Image LPIPS (no ego): {render_results['lpips_no_ego']:.4f}"
+        )
+        logger.info(
+            f"\t Full Image  PSNR (with ego): {render_results['psnr_with_ego']:.4f}"
+        )
+        logger.info(
+            f"\t Full Image  SSIM (with ego): {render_results['ssim_with_ego']:.4f}"
+        )
+        logger.info(
+            f"\t Full Image LPIPS (with ego): {render_results['lpips_with_ego']:.4f}"
+        )
         logger.info(f"\t     Non-Sky PSNR: {render_results['occupied_psnr']:.4f}")
         logger.info(f"\t     Non-Sky SSIM: {render_results['occupied_ssim']:.4f}")
         logger.info(f"\tDynamic-Only PSNR: {render_results['masked_psnr']:.4f}")
@@ -1399,27 +1411,30 @@ def save_seperate_videos(
 def save_single_camera_video(
     render_results: Dict[str, List[Tensor]],
     cam_id: int,
-    save_pth: str,
-    num_timestamps: int,
+    start_timestep: int,
+    end_timestep: int,
+    video_save_pth: str,
+    image_save_dir: str,
     keys: List[str] = ["rgbs", "depths"],
     fps: int = 10,
     verbose: bool = False,
-    save_images: bool = False,
 ):
     for key in keys:
-        tmp_save_pth = save_pth.replace(".mp4", f"_cam{cam_id}_{key}.mp4")
-        tmp_save_pth = tmp_save_pth.replace(".png", f"_cam{cam_id}_{key}.png")
+        if image_save_dir is not None:
+            # 为每个 timestep 创建目录
+            for timestep in range(start_timestep, end_timestep):
+                os.makedirs(
+                    os.path.join(image_save_dir, f"{timestep:03d}"), exist_ok=True
+                )
 
-        if num_timestamps == 1:  # it's an image
-            writer = imageio.get_writer(tmp_save_pth, mode="I")
-        else:
-            writer = imageio.get_writer(tmp_save_pth, mode="I", fps=fps)
+        video_tmp_save_pth = video_save_pth.replace(".mp4", f"_cam{cam_id}_{key}.mp4")
+        writer = imageio.get_writer(video_tmp_save_pth, mode="I", fps=fps)
 
         if "mask" not in key:
             if key not in render_results or len(render_results[key]) == 0:
                 continue
 
-        for frame_idx in range(num_timestamps):
+        for frame_idx, timestep in enumerate(range(start_timestep, end_timestep)):
             # skip if the key is not in render_results
             if "mask" in key:
                 new_key = key.replace("mask", "opacities")
@@ -1458,17 +1473,15 @@ def save_single_camera_video(
                 ]
 
             single_frame = np.array(single_frame)
-
-            if save_images:
-                if frame_idx == 0:
-                    os.makedirs(tmp_save_pth.replace(".mp4", ""), exist_ok=True)
-
-                for j, frame in enumerate(single_frame):
-                    imageio.imwrite(
-                        tmp_save_pth.replace(".mp4", f"/{frame_idx:03d}_{j:03d}.png"),
-                        to8b(frame),
-                    )
             single_frame = to8b(single_frame)
+
+            if image_save_dir is not None:
+                imageio.imwrite(
+                    os.path.join(
+                        image_save_dir, f"{timestep:03d}", f"{cam_id}_{key}.png"
+                    ),
+                    single_frame,
+                )
             writer.append_data(single_frame)
 
         # close the writer
@@ -1476,6 +1489,4 @@ def save_single_camera_video(
         del writer
 
         if verbose:
-            logger.info(f"saved video to {tmp_save_pth}")
-
-    del render_results
+            logger.info(f"saved video to {video_tmp_save_pth}")

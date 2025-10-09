@@ -2,7 +2,7 @@
 ################################################################################
 gpu=-1
 
-ckpt_path="output/chery_clip_1746752396800/20250930_mclidar+cam0123456+depth_loss/checkpoint_final.pth"
+ckpt_path="output/chery_clip_1746752396800/20251007_mclidar+cam0_1_2_3_4_5_6+depth_loss/checkpoint_final.pth"
 
 traj_types=(
     # original_traj
@@ -25,7 +25,8 @@ fps=10
 
 render_rgb=true
 render_depth=false
-generate_lidar_pc=true
+save_images=true
+generate_lidar_pc=false
 ################################################################################
 
 # Pick an avaliable gpu
@@ -48,6 +49,9 @@ if [ "$render_rgb" = true ]; then
 fi
 if [ "$render_depth" = true ]; then
     bool_args="$bool_args --render_depth"
+fi
+if [ "$save_images" = true ]; then
+    bool_args="$bool_args --save_images"
 fi
 if [ "$generate_lidar_pc" = true ]; then
     bool_args="$bool_args --generate_lidar_pc"
