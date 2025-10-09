@@ -24,3 +24,7 @@ gsplat==1.3.0
 smplx==0.1.28
 numpy==1.26.4
 nuscenes-devkit==1.2.0
+multiprocess==0.70.18
+plyfile==1.1.2
+einops==0.8.1
+pyrender==0.1.45
