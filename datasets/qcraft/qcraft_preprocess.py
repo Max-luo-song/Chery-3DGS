@@ -9,6 +9,9 @@ from datasets.tools.multiprocess_utils import track_parallel_progress
 from datasets.dataset_meta import DATASETS_CONFIG
 from chery_tools.parse_lidar import parse_lidar_pcd_file
 from .qcraft_utils import (
+    find_track_id_frame,
+    find_track_id_obj2world_and_boxsize,
+    convert_ndarray_to_list,
     euler_to_rotation_matrix,
     pose_to_transform_matrix,
     project_points_to_image,
@@ -110,8 +113,9 @@ class QcraftProcessor(object):
         original_clip_dir = os.path.join(self.load_dir, clip_name)
 
         # NOTE(syc): 轻舟数据下有一个子目录
-        subdirs = os.listdir(original_clip_dir)
-        return os.path.join(original_clip_dir, subdirs[0])
+        # subdirs = os.listdir(original_clip_dir)
+        # return os.path.join(original_clip_dir, subdirs[0])
+        return original_clip_dir
 
     def convert(self):
         """Convert action."""
@@ -143,7 +147,7 @@ class QcraftProcessor(object):
             print(f"Processed lidar for {clip_name}")
 
         if "pose" in self.process_keys:
-            self.save_pose(clip_name)
+            lidar2worlds = self.save_pose(clip_name)
             print(f"Processed lidar poses for {clip_name}")
 
         if "dynamic_masks" in self.process_keys:
@@ -151,7 +155,7 @@ class QcraftProcessor(object):
             print(f"Processed dynamic masks for scene {clip_name}")
 
         if "objects" in self.process_keys:
-            instances_info, frame_instances = self.save_objects(clip_name)
+            instances_info, frame_instances = self.save_objects(clip_name, lidar2worlds)
             print(f"Processed objects for scene {clip_name}")
 
             # Save instances info and frame instances
@@ -293,6 +297,7 @@ class QcraftProcessor(object):
                 f"{self.save_dir}/{clip_name}/lidar_pose/{str(frame_idx).zfill(3)}.txt",
                 lidar2world,
             )
+        return lidar2worlds
 
     def _generate_obj_masks(self, object, masks, ego2cams, intrinsics, img_shapes):
         """处理单个动态物体，生成掩码并更新图像"""
@@ -407,100 +412,83 @@ class QcraftProcessor(object):
                     )
                     mask_gray.save(mask_path)
 
-    def save_objects(self, clip_name):
-        # """
-        # 生成instances相关的json文件
-        # frame_instances是帧到实例的映射
-        # instances_info是实例到属性的映射
-        # """
-        # frame_instances, instances_info = {}, {}
+    def save_objects(self, clip_name, lidar2worlds):
+        """
+        生成instances相关的json文件
+        frame_instances是帧到实例的映射
+        instances_info是实例到属性的映射
+        """
+        print("Processing instances_info...")
+        frame_instances, instances_info, track_id_info = {}, {}, {}
 
-        # data_path = os.path.join(
-        #     self.load_dir, f"{clip_name}/dynamic_obj/autolabel_10hz/{clip_name}.json"
-        # )
-        # with open(data_path, "r") as f:
-        #     data = json.load(f)
+        clip_dir = self._get_clip_dir(clip_name)
+        # 处理每一帧
+        sample_names = self._read_sample_names(clip_dir)
+        for frame_idx, sample_name in tqdm(
+            enumerate(sample_names), total=len(sample_names)
+        ):
+            label_path = os.path.join(clip_dir, "label", f"{sample_name}.json")
+            with open(label_path, "r") as f:
+                label_data = json.load(f)
 
-        # """frame_instances.json"""
-        # track_id_info = {}
-        # for frame_index, frame_data in enumerate(data["frames"]):
-        #     track_id_list = []
-        #     object_detection_anns_info = (
-        #         frame_data.get("annotated_info", {})
-        #         .get("3d_city_object_detection_annotated_info", {})
-        #         .get("annotated_info", {})
-        #         .get("3d_object_detection_info", {})
-        #         .get("3d_object_detection_anns_info", [])
-        #     )
-        #     for obj in object_detection_anns_info:
-        #         track_id = obj.get("track_id")
-        #         is_cyclist = obj.get("is_cyclist")
-        #         # print("track_id:", track_id)
-        #         # time.sleep(1000)
-        #         category = obj.get("category")
-        #         if track_id is not None and track_id not in track_id_list:
-        #             track_id_list.append(track_id)
-        #         ### 建立一个track_id和category的映射
-        #         if track_id not in track_id_info:
-        #             track_id_info[str(track_id)] = {
-        #                 "category": category,
-        #                 "is_cyclist": is_cyclist,
-        #             }
+            """frame_instances.json"""
+            track_id_list = []
+            for _, obj_info in enumerate(label_data):
+                track_id = obj_info.get("obj_id")
+                category = obj_info.get("obj_type")
+                if track_id is not None and track_id not in track_id_list:
+                    track_id_list.append(track_id)
+                ### 建立一个track_id和category的映射
+                if track_id not in track_id_info:
+                    track_id_info[str(track_id)] = {
+                        "category": category,
+                    }
+            frame_instances[str(frame_idx)] = track_id_list
 
-        #     frame_instances[str(frame_index)] = track_id_list
+        """instances_info.json"""
+        ### result["实例编号"]["frame_annotations"]["frame_idx"] ["obj_to_world 4x4"] ["box_size 三维"]
+        # frame_idx可以反投影上面的result
+        # box_size是clip的size属性
+        # obj_to_world 每一个实例的旋转？？？  默认box就是obj
 
-        # """instances_info.json"""
+        for track_id, info in track_id_info.items():
+            instances_info[track_id] = {}
+            if "frame_annotations" not in instances_info[track_id]:
+                instances_info[track_id]["frame_annotations"] = {}
+            if "frame_idx" not in instances_info[track_id]["frame_annotations"]:
+                instances_info[track_id]["frame_annotations"]["frame_idx"] = {}
 
-        # print("Processing instances_info...")
-        # instances_info = {}
-        # ### result["实例编号"]["frame_annotations"]["frame_idx"] ["obj_to_world 4x4"] ["box_size 三维"]
-        # # frame_idx可以反投影上面的result
-        # # box_size是clip的size属性
-        # # obj_to_world 每一个实例的旋转？？？  默认box就是obj
+            frame_list = find_track_id_frame(track_id, frame_instances)
+            
+            instances_info[track_id]["frame_annotations"]["frame_idx"] = frame_list
+            instances_info[track_id]["id"] = "track_" + track_id
 
-        # lidar2worlds = [np.array(frame["lidar_pose"]) for frame in data["frames"]]
+            category = info["category"]
 
-        # for track_id, info in track_id_info.items():
-        #     # print("type:", type(track_id))
+            if category == "Pedestrian":
+                instances_info[track_id]["class_name"] = "Pedestrian"
+            elif category == "Motorcycle":
+                instances_info[track_id]["class_name"] = "Cyclist"
+            elif category == "Car":
+                instances_info[track_id]["class_name"] = "Vehicle"
+            else:
+                pass
 
-        #     instances_info[track_id] = {}
-        #     if "frame_annotations" not in instances_info[track_id]:
-        #         instances_info[track_id]["frame_annotations"] = {}
-        #     if "frame_idx" not in instances_info[track_id]["frame_annotations"]:
-        #         instances_info[track_id]["frame_annotations"]["frame_idx"] = {}
+            obj2world_list, box_size_list = find_track_id_obj2world_and_boxsize(
+                track_id,
+                frame_list,
+                lidar2worlds,
+                os.path.join(clip_dir, "label"),
+                sample_names,
+            )
+            instances_info[track_id]["frame_annotations"][
+                "obj_to_world"
+            ] = obj2world_list
+            instances_info[track_id]["frame_annotations"]["box_size"] = box_size_list
 
-        #     frame_list = find_track_id_frame(track_id, frame_instances)
-        #     print("frame_list:", frame_list)
-        #     instances_info[track_id]["frame_annotations"]["frame_idx"] = frame_list
-        #     instances_info[track_id]["id"] = "track_" + track_id
+        instances_info = convert_ndarray_to_list(instances_info)
 
-        #     category = info["category"]
-        #     is_cyclist = info["is_cyclist"]
-
-        #     if category == "person":
-        #         instances_info[track_id]["class_name"] = "Pedestrian"
-        #     else:
-        #         if is_cyclist == True:
-        #             instances_info[track_id]["class_name"] = "Cyclist"
-        #         else:
-        #             instances_info[track_id]["class_name"] = "Vehicle"
-
-        #     obj2world_list = find_track_id_obj2world(
-        #         track_id,
-        #         data,
-        #         frame_list,
-        #         lidar2worlds,
-        #     )
-        #     instances_info[track_id]["frame_annotations"][
-        #         "obj_to_world"
-        #     ] = obj2world_list
-        #     box_size_list = find_track_id_boxsize(track_id, data, frame_list)
-        #     instances_info[track_id]["frame_annotations"]["box_size"] = box_size_list
-
-        # instances_info = convert_ndarray_to_list(instances_info)
-
-        # return instances_info, frame_instances
-        pass
+        return instances_info, frame_instances
 
     def create_folder(self):
         """Create folder for data preprocessing."""
