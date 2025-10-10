@@ -1,7 +1,15 @@
 import numpy as np
-import cv2
+import cv2, os, json
 
 from scipy.spatial.transform import Rotation
+
+
+def find_track_id_frame(track_id, result):
+    frame_list = []
+    for frame, track_ids in result.items():
+        if str(track_id) in track_ids:
+            frame_list.append(int(frame))
+    return frame_list
 
 
 def euler_to_rotation_matrix(yaw, pitch, roll):
@@ -79,9 +87,9 @@ def filter_points_in_box(pointcloud, obj_center_pos, size):
     筛选出以obj_center_pos为中心、尺寸为size的矩形区域内的点云
 
     参数:
-        pointcloud: numpy数组，形状为(N, 3)，表示点云数据
+        pointcloud: numpy数组, 形状为(N, 3)，表示点云数据
         obj_center_pos: 列表或数组，表示矩形中心坐标[x, y, z]
-        size: 列表或数组，表示矩形在x、y、z三个维度上的尺寸[l, w, h]
+        size: 列表或数组, 表示矩形在x、y、z三个维度上的尺寸[l, w, h]
 
     返回:
         筛选后的点云数据
@@ -105,3 +113,54 @@ def filter_points_in_box(pointcloud, obj_center_pos, size):
     )
 
     return pointcloud[mask]
+
+
+def find_track_id_obj2world_and_boxsize(
+    track_id, frame_list, lidar2worlds, label_dir_path, sample_names
+):
+    obj2world_list, box_size_list = [], []
+
+    ### 每一个物体在每一个时间戳之内的obj2world
+    for frame_idx in frame_list:
+        with open(label_dir_path + f"/{sample_names[frame_idx]}.json", "r") as f:
+            frame_data = json.load(f)
+
+        for _, obj_info in enumerate(frame_data):
+            if track_id == obj_info.get("obj_id"):
+                scale = obj_info["psr"]["scale"]
+                l, w, h = scale["x"], scale["y"], scale["z"]
+                box_size_list.append([l, w, h])
+
+                rotation = obj_info["psr"]["rotation"]
+                rotation = euler_to_rotation_matrix(
+                    rotation["z"], rotation["y"], rotation["x"]
+                )
+
+                position = obj_info["psr"]["position"]
+                position = np.array([position["x"], position["y"], position["z"]])
+
+                # 动态物体位姿
+                box2lidar = np.eye(4, dtype=np.float64)
+                box2lidar[:3, :3] = rotation
+                box2lidar[:3, 3] = position
+
+                obj2world = lidar2worlds[frame_idx] @ box2lidar
+                obj2world_list.append(obj2world)
+                
+    return obj2world_list, box_size_list
+
+
+def convert_ndarray_to_list(obj):
+    """
+    递归将数据结构中的所有ndarray转换为list
+    """
+    if isinstance(obj, dict):
+        return {key: convert_ndarray_to_list(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_ndarray_to_list(item) for item in obj]
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.integer, np.floating)):
+        return obj.item()
+    else:
+        return obj
