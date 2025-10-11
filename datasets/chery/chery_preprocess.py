@@ -4,20 +4,19 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 import yaml
+from typing import List, Dict, Tuple
+from dataclasses import dataclass
 
 from datasets.tools.multiprocess_utils import track_parallel_progress
+from datasets.dataset_meta import DATASETS_CONFIG
+from chery_tools.parse_lidar import parse_lidar_pcd_file
 from .chery_utils import (
-    parse_lidar_pcd_file,
     project_points_to_image,
     draw_and_fill_box,
     filter_points_in_box,
-    find_track_id_frame,
-    find_track_id_obj2world,
-    find_track_id_boxsize,
-    convert_ndarray_to_list,
+    preprocess_lidar_point_cloud,
 )
 
-import cv2
 from pyquaternion import Quaternion
 from nuscenes.utils.data_classes import Box
 from scipy.spatial.transform import Rotation
@@ -27,6 +26,17 @@ CHERY_CLASSES = ["unknown", "Vehicle", "Pedestrian", "Sign", "Cyclist"]
 CHERY_DYNAMIC_CLASSES = ["Vehicle", "Pedestrian", "Cyclist"]
 CHERY_HUMAN_CLASSES = ["Pedestrian", "Cyclist"]
 CHERY_VEHICLE_CLASSES = ["Vehicle"]
+
+
+@dataclass
+class ClipDataCache:
+    clip_dir: str
+    label_data: Dict
+    sample_names: List[str]
+    lidar2worlds: List[np.ndarray]
+    cam2lidars: List[np.ndarray]
+    intrinsics_matrix: List[np.ndarray]
+    intrinsics_list: List[List[float]]
 
 
 class CheryProcessor(object):
@@ -42,12 +52,21 @@ class CheryProcessor(object):
         save_cam_sync_labels (bool, optional): Whether to save cam sync labels.
             Defaults to True.
     """
+
     def __init__(
         self,
         load_dir,
         save_dir,
         prefix,
-        process_keys=["images", "lidar", "calib", "pose", "dynamic_masks", "objects", "lidar_velocities"],
+        process_keys=[
+            "images",
+            "lidar",
+            "calib",
+            "pose",
+            "dynamic_masks",
+            "objects",
+            "lidar_velocities",
+        ],
         process_id_list=None,
         workers=64,
     ):
@@ -67,10 +86,16 @@ class CheryProcessor(object):
         self.save_dir = f"{save_dir}/{prefix}"
         self.workers = int(workers)
 
-        self.num_pinhole_cameras = 7
-        self.num_all_cameras = 11
+        self.pinhole_camera_ids = [
+            cam_id
+            for cam_id, cam_info in DATASETS_CONFIG["chery"].items()
+            if cam_info["is_fisheye"] == False
+        ]
+        self.all_camera_ids = [cam_id for cam_id in DATASETS_CONFIG["chery"]]
 
         self.create_folder()
+
+        self._cache: Dict[str, ClipDataCache] = {}
 
     def convert(self):
         """Convert action."""
@@ -89,6 +114,34 @@ class CheryProcessor(object):
     def convert_one(self, clip_name):
         """Convert action for single file."""
 
+        self._cache[clip_name] = {}
+
+        clip_dir = os.path.join(self.load_dir, clip_name)
+        label_data_path = os.path.join(
+            clip_dir, f"dynamic_obj/autolabel_10hz/{clip_name}.json"
+        )
+        with open(label_data_path, "r") as f:
+            label_data = json.load(f)
+
+        sample_names = [item["frame_name"] for item in label_data["frames"]]
+
+        cam2lidars = self._parse_extrinsics(clip_dir)
+        intrinsics_matrix, intrinsics_list = self._parse_intrinsics(label_data)
+
+        lidar2worlds = [
+            np.array(frame_data["lidar_pose"]) for frame_data in label_data["frames"]
+        ]
+
+        self._cache[clip_name] = ClipDataCache(
+            clip_dir=clip_dir,
+            label_data=label_data,
+            sample_names=sample_names,
+            lidar2worlds=lidar2worlds,
+            cam2lidars=cam2lidars,
+            intrinsics_matrix=intrinsics_matrix,
+            intrinsics_list=intrinsics_list,
+        )
+
         if "images" in self.process_keys:
             self.save_image(clip_name)
             print(f"Processed images for {clip_name}")
@@ -96,11 +149,11 @@ class CheryProcessor(object):
         if "calib" in self.process_keys:
             self.save_calib(clip_name)
             print(f"Processed calib for {clip_name}")
-            
+
         if "lidar_velocities" in self.process_keys:
             self.save_lidar_velocities(clip_name)
             print(f"Processed lidar velocities for {clip_name}")
-            
+
         if "lidar" in self.process_keys:
             self.save_lidar(clip_name)
             print(f"Processed lidar for {clip_name}")
@@ -128,73 +181,77 @@ class CheryProcessor(object):
         """Length of the filename list."""
         return len(self.process_id_list)
 
-    # Done
     def save_image(self, clip_name):
         """保存经过畸变校正的相机图像为 jpg 格式"""
-        clip_dir = os.path.join(self.load_dir, clip_name)
+        cache = self._cache[clip_name]
 
-        sample_folders = [
-            sample_folder
-            for sample_folder in os.listdir(clip_dir)
-            if os.path.isdir(os.path.join(clip_dir, sample_folder))
-            and sample_folder.startswith("sample_")
-        ]
-        # 按帧的时间戳排序
-        sample_folders.sort(key=lambda x: int(x.split("_")[-1]))
+        img_paths = []
+        save_paths = []
 
-        for frame_index, sample_name in enumerate(sample_folders):
-            sample_dir = os.path.join(clip_dir, sample_name)
+        for frame_idx, sample_name in enumerate(cache.sample_names):
+            sample_dir = os.path.join(cache.clip_dir, sample_name)
+            img_names = [
+                img_name  # camera0_1746752396953826_ae8a9af423443189bab574a9b3904cee_undist.jpg
+                for img_name in os.listdir(sample_dir)
+                if img_name.endswith(".jpg")
+            ]
 
-            for img_name in os.listdir(sample_dir):
-                if not img_name.startswith("camera"):
-                    continue
-
+            for img_name in img_names:
+                # 求出相机编号
                 cam_idx = int(img_name.split("_")[0][6:])  # 0-10
-                assert 0 <= cam_idx < self.num_all_cameras, f"Invalid camera index: {cam_idx}"
+                assert (
+                    cam_idx in self.all_camera_ids
+                ), f"Invalid camera index: {cam_idx}"
 
-                # 针孔相机使用去畸变图像，鱼眼相机使用原始图像
-                if cam_idx < self.num_pinhole_cameras and "_undist" not in img_name:
+                # NOTE(syc): 针孔相机使用去畸变图像，鱼眼相机使用原始图像
+                if (
+                    cam_idx in self.pinhole_camera_ids and "_undist" not in img_name
+                ):  # 跳过畸变针孔图像
                     continue
 
-                src_img_path = os.path.join(
-                    sample_dir, img_name
-                )  # camera0_1746752396953826_ae8a9af423443189bab574a9b3904cee_undist.jpg
+                img_path = os.path.join(sample_dir, img_name)
+                img_paths.append(img_path)
 
-                save_name = f"{frame_index:03}_{cam_idx}.jpg"  # 000_0, 000_1, ...
-                save_img_path = os.path.join(
-                    self.save_dir, clip_name, "images", save_name
-                )
-                image = Image.open(src_img_path)
-                image.save(save_img_path)
+                save_name = f"{frame_idx:03}_{cam_idx}.jpg"  # 000_0, 000_1, ...
+                save_path = os.path.join(self.save_dir, clip_name, "images", save_name)
+                save_paths.append(save_path)
 
-    # Done
+        for img_path, save_path in tqdm(
+            zip(img_paths, save_paths), total=len(img_paths)
+        ):
+            Image.open(img_path).save(save_path)
+
     def save_calib(self, clip_name):
         """解析并保存相机的外参（以 Front main LiDAR 为参考系）和内参"""
-        extrinsics = self._parse_extrinsics(clip_name)  # cam2lidar
-        intrinsics = self._parse_intrinsics(clip_name)
+        cache = self._cache[clip_name]
 
-        for cam_idx in range(self.num_all_cameras):
+        for cam_idx, (cam2lidar, intrinsic) in tqdm(
+            enumerate(zip(cache.cam2lidars, cache.intrinsics_list)),
+            total=len(cache.cam2lidars),
+        ):
             np.savetxt(
                 f"{self.save_dir}/{clip_name}/extrinsics/{cam_idx}.txt",
-                extrinsics[cam_idx],
+                cam2lidar,
             )
             np.savetxt(
                 f"{self.save_dir}/{clip_name}/intrinsics/{cam_idx}.txt",
-                intrinsics[cam_idx],
+                intrinsic,
             )
 
-    # Done
     def save_lidar(self, clip_name):
         """
         将雷达数据从 pcd 格式转换到 bin 格式
 
-        二进制文件中每个点包含 7 个 float32 字段：
+        二进制文件中包含 7 个 float32 字段：
             x y z intensity timestamp ring lidar_id
         """
+        cache = self._cache[clip_name]
 
-        clip_dir = os.path.join(self.load_dir, clip_name)
-
-        lidar_slam_info_path = os.path.join(clip_dir, "static_obj/lidar_slam/lidar_slam_info.json")
+        # 检查是否有经过运动补偿的 LiDAR
+        mc_lidar_paths = {}
+        lidar_slam_info_path = os.path.join(
+            cache.clip_dir, "static_obj/lidar_slam/lidar_slam_info.json"
+        )
         if os.path.exists(lidar_slam_info_path):
             print("Found mc_pcds for lidar 0")
 
@@ -202,134 +259,136 @@ class CheryProcessor(object):
                 lidar_slam_info = json.load(f)
 
             mc_lidar_paths = {
-                info["frame_name"]: os.path.join(clip_dir, info["mc_lidar"])
+                info["frame_name"]: os.path.join(cache.clip_dir, info["mc_lidar"])
                 for info in lidar_slam_info["lidar0"]["mc_pcds"]
             }
         else:
             print("No mc_pcds found for lidar 0")
-            mc_lidar_paths = None
 
-        sample_folders = [
-            sample_folder
-            for sample_folder in os.listdir(clip_dir)
-            if os.path.isdir(os.path.join(clip_dir, sample_folder))
-            and sample_folder.startswith("sample_")
-        ]
-        # 按帧的时间戳排序
-        sample_folders.sort(key=lambda x: int(x.split("_")[-1]))
-
-        for frame_idx, sample_name in tqdm(enumerate(sample_folders)):
-            sample_dir = os.path.join(clip_dir, sample_name)
+        for frame_idx, sample_name in tqdm(
+            enumerate(cache.sample_names), total=len(cache.sample_names)
+        ):
+            sample_dir = os.path.join(cache.clip_dir, sample_name)
 
             lidar_names = [
                 lidar_name  # lidar0_1746752396900110_2e4bd97ab9d533658a28cfbe1581df57.pcd
                 for lidar_name in os.listdir(sample_dir)
-                if lidar_name.startswith("lidar")
+                if lidar_name.endswith(".pcd")
                 and not lidar_name.startswith("lidar5")  # 排除5号雷达（m2雷达）
             ]
-            lidar_names = sorted(lidar_names, key=lambda x: int(x.split("_")[0][5:]))
+            lidar_names = sorted(
+                lidar_names, key=lambda name: int(name.split("_")[0][5:])
+            )
+            lidar_ids = [int(name.split("_")[0][5:]) for name in lidar_names]
             lidar_paths = [
                 os.path.join(sample_dir, lidar_name) for lidar_name in lidar_names
             ]
 
-            def save_lidar_data_as_bin(lidar_paths, lidar_type):
-                point_clouds = [
-                    parse_lidar_pcd_file(lidar_path) for lidar_path in lidar_paths
-                ]
+            point_cloud_list = [
+                parse_lidar_pcd_file(lidar_path) for lidar_path in lidar_paths
+            ]  # x y z intensity timestamp ring
+            point_cloud_list = [
+                preprocess_lidar_point_cloud(pc, lidar_id)
+                for lidar_id, pc in zip(lidar_ids, point_cloud_list)
+            ]  # x y z intensity timestamp ring lidar_id
+            point_cloud = np.concatenate(point_cloud_list, axis=0)
 
-                def append_lidar_id(pc, lidar_id):
-                    new_dtype = np.dtype(pc.dtype.descr + [("lidar_id", np.uint32)])
-                    new_pc = np.empty(pc.shape, dtype=new_dtype)
+            bin_path = (
+                f"{self.save_dir}/{clip_name}/lidar/{str(frame_idx).zfill(3)}.bin"
+            )
+            point_cloud.tofile(bin_path)
 
-                    for field in pc.dtype.names:
-                        new_pc[field] = pc[field]
+            mc_lidar_path = mc_lidar_paths.get(sample_name, None)
+            if mc_lidar_path is not None:
+                mc_lidar_point_cloud = parse_lidar_pcd_file(mc_lidar_path)
+                mc_lidar_point_cloud = preprocess_lidar_point_cloud(
+                    mc_lidar_point_cloud,
+                    lidar_id=0,
+                )
+                # 替换 LiDAR 0
+                point_cloud_list[0] = mc_lidar_point_cloud
+                mc_point_cloud = np.concatenate(point_cloud_list, axis=0)
 
-                    new_pc["lidar_id"] = lidar_id
-                    return new_pc
+                mc_bin_path = (
+                    f"{self.save_dir}/{clip_name}/mclidar/{str(frame_idx).zfill(3)}.bin"
+                )
+                mc_point_cloud.tofile(mc_bin_path)
 
-                point_clouds = [
-                    append_lidar_id(pc, lidar_id)
-                    for lidar_id, pc in enumerate(point_clouds)
-                ]
-
-                # 点云数据合并
-                point_cloud = np.concatenate(point_clouds, axis=0)
-
-                # 提取所有字段并转换为 float32
-                fields = ["x", "y", "z", "intensity", "timestamp", "ring", "lidar_id"]
-                point_cloud = np.stack(
-                    [point_cloud[field] for field in fields], axis=1
-                ).astype(np.float32)
-
-                # 保存为二进制文件
-                pc_path = f"{self.save_dir}/{clip_name}/{lidar_type}/{str(frame_idx).zfill(3)}.bin"
-                point_cloud.astype(np.float32).tofile(pc_path)
-            
-            save_lidar_data_as_bin(lidar_paths, "lidar")
-
-            if mc_lidar_paths is not None:
-                # 替换 lidar0 的路径
-                lidar_paths[0] = mc_lidar_paths[sample_name]
-                save_lidar_data_as_bin(lidar_paths, "mclidar")
-
-
-
-    # Done
     def save_pose(self, clip_name):
         """保存每一帧的位姿"""
-
         # FIXME: 由于目前奇瑞数据无法正确计算 ego pose，因此改为保存 lidar pose，后续找时间修正
 
-        data_path = os.path.join(
-            self.load_dir, f"{clip_name}/dynamic_obj/autolabel_10hz/{clip_name}.json"
-        )
-        with open(data_path, "r") as file:
-            data = json.load(file)
-
-        for frame_idx, params in enumerate(data["frames"]):
-            lidar_pose = params["lidar_pose"]
-            lidar_pose = np.array(lidar_pose)
+        cache = self._cache[clip_name]
+        for frame_idx, lidar2world in tqdm(
+            enumerate(cache.lidar2worlds), total=len(cache.lidar2worlds)
+        ):
             np.savetxt(
                 f"{self.save_dir}/{clip_name}/lidar_pose/{str(frame_idx).zfill(3)}.txt",
-                lidar_pose,
+                lidar2world,
             )
 
     def save_lidar_velocities(self, clip_name):
-        data_path = os.path.join(
-            self.load_dir, f"{clip_name}/dynamic_obj/autolabel_10hz/{clip_name}.json"
-        )
-        with open(data_path, "r") as file:
-            data = json.load(file)
+        cache = self._cache[clip_name]
 
-        for frame_idx, params in enumerate(data["frames"]):
-            lidar_velo = params["lidar_velo"]
-            lidar_velo = np.array(lidar_velo)
+        lidar_velos = [
+            np.array(frame_data["lidar_velo"])
+            for frame_data in cache.label_data["frames"]
+        ]
+        for frame_idx, lidar_velo in tqdm(
+            enumerate(lidar_velos), total=len(lidar_velos)
+        ):
             np.savetxt(
                 f"{self.save_dir}/{clip_name}/lidar_velocities/{str(frame_idx).zfill(3)}.txt",
                 lidar_velo,
             )
-            
+
+    def _get_obj_pose_and_size(
+        self, obj_data
+    ) -> Tuple[np.ndarray, Tuple[float, float, float]]:
+        """
+        返回 obj2lidar, (l, w, h)
+        """
+        rotation = np.array(obj_data["obj_rotation"])
+        position = np.array(obj_data["obj_center_pos"])
+
+        obj2lidar = np.eye(4, dtype=np.float64)
+        obj2lidar[:3, :3] = Rotation.from_quat(rotation).as_matrix()
+        obj2lidar[:3, 3] = position
+
+        l, w, h = obj_data["size"]
+        return obj2lidar, (l, w, h)
+
+    def _generate_obj_masks(self, obj_data, masks, lidar2cams, intrinsics):
+        """
+        处理单个动态物体，生成掩码图像
+        """
+        obj2lidar, (l, w, h) = self._get_obj_pose_and_size(obj_data)
+
+        # # 1.对任何一个物体，先对应到激光雷达点云
+        # mask_pointcloud = filter_points_in_box(pointcloud, obj_center_pos, size)
+        # # 2.把激光点云向7个视角均投影得到 uv
+        # # 3.七个视角最终全部投影得到结果
+        for cam_idx, lidar2cam in enumerate(lidar2cams):
+            obj2cam = lidar2cam @ obj2lidar
+            box = Box(
+                center=obj2cam[:3, 3],
+                size=[w, l, h],
+                orientation=Quaternion(matrix=obj2cam[:3, :3]),
+            )
+            corners_cam = box.corners().T.astype(np.float32)
+            corners_2d = project_points_to_image(
+                corners_cam,
+                intrinsics[cam_idx],
+            )
+            masks[cam_idx] = draw_and_fill_box(masks[cam_idx], corners_2d)
+
+        return masks
+
     def save_dynamic_mask(self, clip_name):
-        """需要雷达的 box 投影到图像平面上，获取 2D mask，包括all human vehicle三种"""
-
-        data_path = os.path.join(
-            self.load_dir, f"{clip_name}/dynamic_obj/autolabel_10hz/{clip_name}.json"
-        )
-        with open(data_path, "r") as f:
-            data = json.load(f)
-
-        # 读取 lidar2camera
-        # NOTE(syc): 这里仅使用针孔相机    
-        extrinsics = self._parse_extrinsics(clip_name)  # cam2lidar
-        # extrinsics = self._parse_extrinsics(clip_name, pinhole_only=True)  # cam2lidar
-        lidar2cams = [np.linalg.inv(extrinsic) for extrinsic in extrinsics]
-
-        # 读取相机内参
-        intrinsics = [
-            np.array(data["calibration"][f"camera{cam_idx}"]["intrinsic_scaled"])
-            for cam_idx in range(self.num_all_cameras)
-            # for cam_idx in range(self.num_pinhole_cameras)
-        ]
+        """
+        将 box 投影到图像平面上，获取 2D mask，包括 all human vehicle 三种
+        """
+        cache = self._cache[clip_name]
 
         # 创建保存目录
         categories = ["all", "human", "vehicle"]
@@ -338,56 +397,18 @@ class CheryProcessor(object):
             if not os.path.exists(mask_dir):
                 os.makedirs(mask_dir)
 
-        def process_object(object, category, masks, lidar2cams, intrinsics, img_shapes):
-            """处理单个动态物体，生成掩码并更新图像"""
-            l, w, h = object["size"]
-            obj_rotation = np.array(object["obj_rotation"])
-            obj_center_pos = np.array(object["obj_center_pos"])
-
-            # 读取物体的位姿
-            box2lidar = np.eye(4, dtype=np.float64)
-            box2lidar[:3, :3] = Rotation.from_quat(obj_rotation).as_matrix()
-            box2lidar[:3, 3] = obj_center_pos
-
-            # # 1.对任何一个物体，先对应到激光雷达点云
-            # mask_pointcloud = filter_points_in_box(pointcloud, obj_center_pos, size)
-            # # 2.把激光点云向7个视角均投影得到 uv
-            # # 3.七个视角最终全部投影得到结果
-            for cam_idx, lidar2cam in enumerate(lidar2cams):
-                box2cam = lidar2cam @ box2lidar
-                qx, qy, qz, qw = Rotation.from_matrix(box2cam[:3, :3]).as_quat()
-                cam_box = Box(
-                    center=box2cam[:3, 3],
-                    size=[w, l, h],
-                    orientation=Quaternion([qw, qx, qy, qz]),
-                    name=category,
-                )
-                corners = cam_box.corners().T.astype(np.float32)
-                # print("corners:", corners)
-                points2d = project_points_to_image(
-                    corners,
-                    intrinsics[cam_idx],
-                    img_shapes[cam_idx],
-                )
-
-                # 生成 mask
-                masks[cam_idx] = draw_and_fill_box(masks[cam_idx], points2d)
-
-            return masks
-
-        calib = data["calibration"]
         img_shapes = [
-            (
-                calib[f"camera{cam_idx}"]["height"],
-                calib[f"camera{cam_idx}"]["width"],
-            )
-            # for cam_idx in range(self.num_pinhole_cameras)
-            for cam_idx in range(self.num_all_cameras)
+            config["original_size"] for _, config in DATASETS_CONFIG["chery"].items()
         ]
 
+        lidar2cams = [np.linalg.inv(cam2lidar) for cam2lidar in cache.cam2lidars]
+
         # 处理每一帧
-        for frame_idx, params in tqdm(
-            enumerate(data["frames"]), total=len(data["frames"])
+        for frame_idx, frame_data in tqdm(
+            enumerate(cache.label_data["frames"]),
+            total=len(
+                cache.label_data["frames"],
+            ),
         ):
             # 初始化掩码图像
             masks_vehicle = [
@@ -401,37 +422,32 @@ class CheryProcessor(object):
             ]
 
             # 处理物体检测信息
-            object_anns = params["annotated_info"][
+            anns_info = frame_data["annotated_info"][
                 "3d_city_object_detection_annotated_info"
             ]["annotated_info"]["3d_object_detection_info"][
                 "3d_object_detection_anns_info"
             ]
 
-            for obj in object_anns:
-                category = obj["category"]
+            for obj_data in anns_info:
+                category = obj_data["category"]
 
                 # 类别对应关系
                 # [Chery] -> [Waymo]
                 # "person" -> "human"
                 # 其余类别 -> "vehicle"
-
                 if category == "person":
-                    masks_human = process_object(
-                        obj,
-                        category,
+                    masks_human = self._generate_obj_masks(
+                        obj_data,
                         masks_human,
                         lidar2cams,
-                        intrinsics,
-                        img_shapes,
+                        cache.intrinsics_matrix,
                     )
                 else:  # vehicle
-                    masks_vehicle = process_object(
-                        obj,
-                        category,
+                    masks_vehicle = self._generate_obj_masks(
+                        obj_data,
                         masks_vehicle,
                         lidar2cams,
-                        intrinsics,
-                        img_shapes,
+                        cache.intrinsics_matrix,
                     )
 
             for cam_idx in range(len(lidar2cams)):
@@ -458,91 +474,84 @@ class CheryProcessor(object):
         frame_instances是帧到实例的映射
         instances_info是实例到属性的映射
         """
-        frame_instances, instances_info = {}, {}
+        cache = self._cache[clip_name]
 
-        data_path = os.path.join(
-            self.load_dir, f"{clip_name}/dynamic_obj/autolabel_10hz/{clip_name}.json"
-        )
-        with open(data_path, "r") as f:
-            data = json.load(f)
+        instances_info, frame_instances = {}, {}
 
         """frame_instances.json"""
-        track_id_info = {}
-        for frame_index, frame_data in enumerate(data["frames"]):
-            track_id_list = []
-            object_detection_anns_info = (
-                frame_data.get("annotated_info", {})
-                .get("3d_city_object_detection_annotated_info", {})
-                .get("annotated_info", {})
-                .get("3d_object_detection_info", {})
-                .get("3d_object_detection_anns_info", [])
-            )
-            for obj in object_detection_anns_info:
-                track_id = obj.get("track_id")
-                is_cyclist = obj.get("is_cyclist")
-                # print("track_id:", track_id)
-                # time.sleep(1000)
-                category = obj.get("category")
-                if track_id is not None and track_id not in track_id_list:
-                    track_id_list.append(track_id)
-                ### 建立一个track_id和category的映射
-                if track_id not in track_id_info:
-                    track_id_info[str(track_id)] = {
-                        "category": category,
-                        "is_cyclist":is_cyclist
+        for frame_idx, frame_data in tqdm(
+            enumerate(cache.label_data["frames"]),
+            total=len(
+                cache.label_data["frames"],
+            ),
+        ):
+            anns_info = frame_data["annotated_info"][
+                "3d_city_object_detection_annotated_info"
+            ]["annotated_info"]["3d_object_detection_info"][
+                "3d_object_detection_anns_info"
+            ]
+
+            """
+            instances_info = {
+                "0": # simplified instance id
+                    {
+                        "id": str,
+                        "class_name": str,
+                        "frame_annotations": {
+                            "frame_idx": List,
+                            "obj_to_world": List,
+                            "box_size": List,
+                    },
+                ...
+            }
+            """
+            for obj_data in anns_info:
+                track_id = str(obj_data["track_id"])
+                is_cyclist = obj_data["is_cyclist"]
+
+                if track_id not in instances_info:
+                    category = obj_data.get("category")
+                    if category == "person":
+                        class_name = "Pedestrian"
+                    else:
+                        if is_cyclist is True:
+                            class_name = "Cyclist"
+                        else:
+                            class_name = "Vehicle"
+
+                    instances_info[track_id] = {
+                        "class_name": class_name,
+                        "id": track_id,
+                        "frame_annotations": {
+                            "frame_idx": [],
+                            "obj_to_world": [],
+                            "box_size": [],
+                        },
                     }
 
-            frame_instances[str(frame_index)] = track_id_list
+                obj2lidar, box_size = self._get_obj_pose_and_size(obj_data)
+                obj2world = cache.lidar2worlds[frame_idx] @ obj2lidar
 
-        """instances_info.json"""
+                instances_info[track_id]["frame_annotations"]["frame_idx"].append(
+                    frame_idx
+                )
+                instances_info[track_id]["frame_annotations"]["obj_to_world"].append(
+                    obj2world.tolist()
+                )
+                instances_info[track_id]["frame_annotations"]["box_size"].append(
+                    box_size
+                )
 
-        print("Processing instances_info...")
-        instances_info = {}
-        ### result["实例编号"]["frame_annotations"]["frame_idx"] ["obj_to_world 4x4"] ["box_size 三维"]
-        # frame_idx可以反投影上面的result
-        # box_size是clip的size属性
-        # obj_to_world 每一个实例的旋转？？？  默认box就是obj
-
-        lidar2worlds = [np.array(frame["lidar_pose"]) for frame in data["frames"]]
-
-        for track_id, info in track_id_info.items():
-            # print("type:", type(track_id))
-
-            instances_info[track_id] = {}
-            if "frame_annotations" not in instances_info[track_id]:
-                instances_info[track_id]["frame_annotations"] = {}
-            if "frame_idx" not in instances_info[track_id]["frame_annotations"]:
-                instances_info[track_id]["frame_annotations"]["frame_idx"] = {}
-
-            frame_list = find_track_id_frame(track_id, frame_instances)
-            print("frame_list:", frame_list)
-            instances_info[track_id]["frame_annotations"]["frame_idx"] = frame_list
-            instances_info[track_id]["id"] = "track_" + track_id
-
-            category = info['category']
-            is_cyclist = info['is_cyclist']
-
-            if category == "person":
-                instances_info[track_id]["class_name"] = "Pedestrian"
-            else:
-                if is_cyclist == True:
-                    instances_info[track_id]["class_name"] = "Cyclist"
-                else:
-                    instances_info[track_id]["class_name"] = "Vehicle"
-
-            obj2world_list = find_track_id_obj2world(
-                track_id,
-                data,
-                frame_list,
-                lidar2worlds,
-            )
-            instances_info[track_id]["frame_annotations"][
-                "obj_to_world"
-            ] = obj2world_list
-            box_size_list = find_track_id_boxsize(track_id, data, frame_list)
-            instances_info[track_id]["frame_annotations"]["box_size"] = box_size_list
-
-        instances_info = convert_ndarray_to_list(instances_info)
+            """
+            frame_instances = {
+                "0": # frame idx
+                    List[int] # list of simplified instance ids
+                ...
+            }
+            """
+            frame_instances[str(frame_idx)] = [
+                int(obj_data["track_id"]) for obj_data in anns_info
+            ]
 
         return instances_info, frame_instances
 
@@ -573,9 +582,15 @@ class CheryProcessor(object):
             if "lidar" in self.process_keys:
                 os.makedirs(f"{self.save_dir}/{str(clip_name)}/lidar", exist_ok=True)
 
-                lidar_slam_info_path = os.path.join(self.load_dir, clip_name, "static_obj/lidar_slam/lidar_slam_info.json")
+                lidar_slam_info_path = os.path.join(
+                    self.load_dir,
+                    clip_name,
+                    "static_obj/lidar_slam/lidar_slam_info.json",
+                )
                 if os.path.exists(lidar_slam_info_path):
-                    os.makedirs(f"{self.save_dir}/{str(clip_name)}/mclidar", exist_ok=True)
+                    os.makedirs(
+                        f"{self.save_dir}/{str(clip_name)}/mclidar", exist_ok=True
+                    )
 
             if "dynamic_masks" in self.process_keys:
                 os.makedirs(
@@ -586,62 +601,41 @@ class CheryProcessor(object):
                     f"{self.save_dir}/{str(clip_name)}/instances", exist_ok=True
                 )
 
-    def _parse_extrinsics(self, clip_name, pinhole_only=False):
-        extrinsics_dir = os.path.join(
-            self.load_dir, f"{clip_name}/extrinsics/lidar2camera"
-        )
-        if pinhole_only:
-            files = [
-                # 针孔相机
-                "lidar2frontwide.yaml",
-                "lidar2frontmain.yaml",
-                "lidar2leftfront.yaml",
-                "lidar2leftrear.yaml",
-                "lidar2rightfront.yaml",
-                "lidar2rightrear.yaml",
-                "lidar2rearmain.yaml",
-            ]
-        else:
-            files = [
-                # 针孔相机
-                "lidar2frontwide.yaml",
-                "lidar2frontmain.yaml",
-                "lidar2leftfront.yaml",
-                "lidar2leftrear.yaml",
-                "lidar2rightfront.yaml",
-                "lidar2rightrear.yaml",
-                "lidar2rearmain.yaml",
-
-                # 鱼眼相机
-                "lidar2fisheyeleft.yaml",
-                "lidar2fisheyerear.yaml",
-                "lidar2fisheyefront.yaml",
-                "lidar2fisheyeright.yaml",
-            ]
-
+    def _parse_extrinsics(self, clip_dir):
         extrinsics = []
-        for file in files:
-            with open(os.path.join(extrinsics_dir, file), "r", encoding="utf-8") as f:
+
+        extrinsics_dir = os.path.join(clip_dir, "extrinsics", "lidar2camera")
+        filenames = [
+            # 针孔相机
+            "lidar2frontwide.yaml",
+            "lidar2frontmain.yaml",
+            "lidar2leftfront.yaml",
+            "lidar2leftrear.yaml",
+            "lidar2rightfront.yaml",
+            "lidar2rightrear.yaml",
+            "lidar2rearmain.yaml",
+            # 鱼眼相机
+            "lidar2fisheyeleft.yaml",
+            "lidar2fisheyerear.yaml",
+            "lidar2fisheyefront.yaml",
+            "lidar2fisheyeright.yaml",
+        ]
+        for filename in filenames:
+            with open(
+                os.path.join(extrinsics_dir, filename), "r", encoding="utf-8"
+            ) as f:
                 extrinsic = yaml.safe_load(f)
 
             lidar2cam = np.array(extrinsic["transform"])
             cam2lidar = np.linalg.inv(lidar2cam)
-
             extrinsics.append(cam2lidar)
 
         return extrinsics
 
-    def _parse_intrinsics(self, clip_name):
-        data_path = os.path.join(
-            self.load_dir, f"{clip_name}/dynamic_obj/autolabel_10hz/{clip_name}.json"
-        )
-        with open(data_path, "r") as f:
-            data = json.load(f)
-
-        intrinsics = []
-
-        for cam_idx in range(self.num_all_cameras):
-            params = data["calibration"][f"camera{cam_idx}"]
+    def _parse_intrinsics(self, label_data):
+        intrinsics_matrix, intrinsics_list = [], []
+        for cam_idx in self.all_camera_ids:
+            cam_params = label_data["calibration"][f"camera{cam_idx}"]
 
             # # 原始相机内参
             # intrinsic = params["intrinsic"]
@@ -651,19 +645,27 @@ class CheryProcessor(object):
             # cy = intrinsic[1][2]
             # intrinsic = [fx, fy, cx, cy]
 
-            # 8 个畸变参数
-            distcoeff = params["distcoeff"][0]
+            # 畸变参数
+            distcoeff = cam_params["distcoeff"][0]
 
             # 去畸变后新的相机内参
-            intrinsic_scaled = params["intrinsic_scaled"]
+            intrinsic_scaled = cam_params["intrinsic_scaled"]
             fx_scaled = intrinsic_scaled[0][0]
             cx_scaled = intrinsic_scaled[0][2]
             fy_scaled = intrinsic_scaled[1][1]
             cy_scaled = intrinsic_scaled[1][2]
             intrinsic_scaled = [fx_scaled, fy_scaled, cx_scaled, cy_scaled]
 
-            # values = intrinsic + distcoeff + intrinsic_scaled
-            values = intrinsic_scaled + distcoeff
-            intrinsics.append(values)
+            matrix_values = np.array(
+                [
+                    [fx_scaled, 0, cx_scaled],
+                    [0, fy_scaled, cy_scaled],
+                    [0, 0, 1],
+                ]
+            )
+            list_values = intrinsic_scaled + distcoeff
 
-        return intrinsics
+            intrinsics_matrix.append(matrix_values)
+            intrinsics_list.append(list_values)
+
+        return intrinsics_matrix, intrinsics_list

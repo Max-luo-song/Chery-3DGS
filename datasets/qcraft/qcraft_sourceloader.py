@@ -30,19 +30,20 @@ SMPLNODE_CLASSES = ["Pedestrian"]
 OPENCV2DATASET = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
 
 # Qcraft Camera List:
-# 0 : "",
-# 1 : "",
-# 2 : "",
-# 3 : "",
-# 4 : "",
-# 5 : "",
-# 6 : "",
-# 7 : "",
-# 8 : "",
-# 9 : "",
-# 10 : "",
-# 11 : "",
-# 12 : "",
+# 0 : "front_wide_110",      广角前视 FOV110
+# 1 : "front_wide_60",       广角前视 FOV60
+# 2 : "front_tele_30",       长焦前视 FOV30
+# 3 : "front_tele_15",       长焦前视 FOV15
+# 4 : "front_wide_left_60",  广角左前 FOV60
+# 5 : "front_left_99",       左前 FOV99
+# 6 : "rear_left_99",        左后 FOV99
+# 7 : "rear_left_30",        左后 FOV30
+# 8 : "front_wide_right_60", 广角右前 FOV60
+# 9 : "front_right_99",      右前 FOV99
+# 10 : "rear_right_99",      右后 FOV99
+# 11 : "rear_right_30",      右后 FOV30
+# 12 : "rear_50",            后视 FOV50
+
 AVAILABLE_CAM_LIST = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
 
@@ -162,11 +163,13 @@ class QcraftPixelSource(ScenePixelSource):
         start_timestep: int,
         end_timestep: int,
         device: torch.device = torch.device("cpu"),
+        novel_view_mode: bool = False,
     ):
         super().__init__(dataset_name, pixel_data_config, device=device)
         self.data_path = data_path
         self.start_timestep = start_timestep
         self.end_timestep = end_timestep
+        self.novel_view_mode = novel_view_mode  # syc
         self.load_data()
 
     def load_cameras(self):
@@ -191,6 +194,7 @@ class QcraftPixelSource(ScenePixelSource):
                 undistort=self.data_cfg.undistort,
                 buffer_downscale=self.buffer_downscale,
                 device=self.device,
+                novel_view_mode=self.novel_view_mode,
             )
             camera.load_time(self.normalized_time)
             unique_img_idx = (
@@ -207,7 +211,6 @@ class QcraftPixelSource(ScenePixelSource):
     ) -> Dict[int, CameraData]:
         camera_data = {}
         for idx, cam_id in enumerate(cam_ids):
-            print(f"Loading specified camera {cam_id}")
             camera = QcraftCameraData(
                 dataset_name=self.dataset_name,
                 data_path=self.data_path,
@@ -218,7 +221,7 @@ class QcraftPixelSource(ScenePixelSource):
                 undistort=False,
                 buffer_downscale=self.buffer_downscale,
                 device=self.device,
-                calib_only=True,
+                novel_view_mode=True,
             )
             camera.load_time(self.normalized_time)
             unique_img_idx = (
@@ -458,7 +461,7 @@ class QcraftLiDARSource(SceneLidarSource):
         e.g., a list of all the lidar scans in the dataset.
         """
         lidar_type = self.data_cfg.lidar_type
-        assert lidar_type in ["lidar", "mclidar"]
+        assert lidar_type in ["lidar"]
         logger.info(f"Using '{lidar_type}' for lidar data.")
 
         lidar_filepaths = []
@@ -513,13 +516,12 @@ class QcraftLiDARSource(SceneLidarSource):
             0, len(self.lidar_filepaths), desc="Loading lidar", dynamic_ncols=True
         ):
             lidar_info = np.fromfile(self.lidar_filepaths[t], dtype=np.float32).reshape(
-                -1, 4
+                -1, 5
             )
 
             # select lidar points based on the laser id
             if self.data_cfg.only_use_top_lidar:
-                # laser_ids: 按照奇瑞的雷达排布 0-4
-                lidar_info = lidar_info[lidar_info[:, 6] == 0]
+                lidar_info = lidar_info[lidar_info[:, 4] == 0]
 
             original_length = len(lidar_info)
             accumulated_num_original_rays += original_length
@@ -535,7 +537,7 @@ class QcraftLiDARSource(SceneLidarSource):
                 self.lidar_to_worlds[t][:3, :3] @ lidar_points.T
                 + self.lidar_to_worlds[t][:3, 3:4]
             ).T
-            lidar_ids = torch.from_numpy(lidar_info[:, 6]).float()  # 13全选出来为0的
+            lidar_ids = torch.from_numpy(lidar_info[:, 4]).float()
             lidar_directions = lidar_points - lidar_origins
             lidar_ranges = torch.norm(lidar_directions, dim=-1, keepdim=True)
             lidar_directions = lidar_directions / lidar_ranges

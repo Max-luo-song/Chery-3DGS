@@ -12,7 +12,6 @@ import imageio
 import numpy as np
 
 
-# sys.path.append("/data4/gls/code/drivestudio")
 import torch
 from datasets.driving_dataset import DrivingDataset
 from utils.misc import import_str

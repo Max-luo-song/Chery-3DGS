@@ -6,9 +6,7 @@ import json
 import wandb
 import logging
 import argparse
-import sys
 
-# sys.path.append("/data4/gls/code/drivestudio")
 import torch
 from datasets.driving_dataset import DrivingDataset
 from utils.misc import import_str
