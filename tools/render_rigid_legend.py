@@ -6,9 +6,7 @@ import json
 import wandb
 import logging
 import argparse
-import sys
 
-# sys.path.append("/data4/gls/code/drivestudio")
 import torch
 from datasets.driving_dataset import DrivingDataset
 from utils.misc import import_str
@@ -44,7 +42,6 @@ def do_evaluation(
         render_results = render_legend(
             trainer=trainer,
             dataset=dataset.test_image_set,
-            compute_metrics=False,
             compute_error_map=cfg.render.vis_error,
             image_output_pth=image_output_pth
         )
@@ -111,7 +108,6 @@ def do_evaluation(
         render_results = render_legend(
             trainer=trainer,
             dataset=dataset.full_image_set,
-            compute_metrics=False,
             compute_error_map=cfg.render.vis_error,
             image_output_pth=image_output_pth
         )

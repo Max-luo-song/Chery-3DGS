@@ -1,29 +1,35 @@
 # 参数设置
 ################################################################################
-scene_idx="clip_1746752396800"
+gpu=-1
 
-camera_ids=(0 1 2 3 4 5 6)  # camera IDs to use, e.g., (0), (0 2 4)
+scene_idx="20250702_133223_Q2517"
 
-lidar_type="mclidar"  # lidar（运动补偿前）/mclidar（运动补偿后）/visual（纯视觉）
+camera_ids=(0 1 2 3 4 5 6 8 9 10 12)  # camera IDs to use, e.g., (0), (0 2 4)
 
-config_file="configs/omnire_extended_cam_lidar.yaml"
-dataset_config="chery/7cams_${lidar_type}"
-extra_config_info="+depth_loss"  # 额外信息，如 depth_loss
+lidar_type="lidar"  # lidar（运动补偿前）/visual（纯视觉）
+
+config_file="configs/omnire_extended_cam_lidar_wo_depth_loss.yaml"
+dataset_config="qcraft/11cams_${lidar_type}"
+extra_config_info=""  # 额外信息，如 depth_loss
 
 start_timestep=0 # start frame index for training
 end_timestep=-1 # end frame index, -1 for the last frame
 ################################################################################
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source ${SCRIPT_DIR}/utils.sh
 
-gpu=$(pick_gpu)
-if [ -z "${gpu}" ]; then
-    echo "no gpu found"
-    exit 1
+# Pick an avaliable gpu
+source scripts/utils.sh
+if [ "${gpu}" = "-1" ]; then
+    gpu=$(pick_gpu)
+    if [ -z "${gpu}" ]; then
+        echo "no gpu found"
+        exit 1
+    fi
 fi
+echo "Using GPU: ${gpu}"
+
 
 output_root="output"
-project_name="chery_${scene_idx}"
+project_name="qcraft_${scene_idx}"
 
 date_str=$(date +%Y%m%d)
 run_name="${date_str}_${lidar_type}+cam$(IFS="_"; echo "${camera_ids[*]}")${extra_config_info}"

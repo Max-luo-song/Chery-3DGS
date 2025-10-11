@@ -1,8 +1,9 @@
 import os
 import os.path as osp
-import torch
 import numpy as np
+import torch
 from plyfile import PlyData, PlyElement
+import argparse
 
 
 class Gaussian:
@@ -17,7 +18,6 @@ class Gaussian:
 
 def export_ply(pth_path, out_path):
     data = torch.load(pth_path)
-    # print(data['models'].keys())
 
     gaussian = Gaussian(data["models"]["Background"])
     xyz = gaussian._means
@@ -57,11 +57,16 @@ def export_ply(pth_path, out_path):
 
 
 if __name__ == "__main__":
-    pth_path = "output/omnire/0901_chery_wo_lidar_front_wide/checkpoint_final.pth"
+    parser = argparse.ArgumentParser("Export background gaussians to ply file")
 
-    out_dir = osp.join(osp.dirname(pth_path), "point_clouds")
-    os.makedirs(out_dir, exist_ok=True)
+    # misc
+    parser.add_argument("--ckpt_path", type=str, required=True)
+    args = parser.parse_args()
 
-    out_path = osp.join(out_dir, "background.ply")
+    run_dir = os.path.dirname(args.ckpt_path)
 
-    export_ply(pth_path, out_path)
+    save_dir = osp.join(run_dir, "point_clouds")
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = osp.join(save_dir, "background.ply")
+
+    export_ply(args.ckpt_path, save_path)
