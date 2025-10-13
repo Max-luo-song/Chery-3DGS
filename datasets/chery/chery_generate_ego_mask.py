@@ -5,11 +5,6 @@ import cv2
 import numpy as np
 import json
 
-"""
-NOTE: 运行前请先完成数据预处理
-"""
-
-
 IMAGE_SIZE = (3840, 2160)
 
 
@@ -40,7 +35,9 @@ def load_intrinsics(load_dir, clip_name, cam_id=0):
     cx_scaled = intrinsic_scaled[0][2]
     fy_scaled = intrinsic_scaled[1][1]
     cy_scaled = intrinsic_scaled[1][2]
-    intrinsic_scaled = np.array([[fx_scaled, 0, cx_scaled], [0, fy_scaled, cy_scaled], [0, 0, 1]])
+    intrinsic_scaled = np.array(
+        [[fx_scaled, 0, cx_scaled], [0, fy_scaled, cy_scaled], [0, 0, 1]]
+    )
 
     return intrinsic, distcoeff, intrinsic_scaled
 
@@ -94,24 +91,25 @@ def generate_ego_mask(load_dir, clip_name):
     cam_id = 0
 
     mask_lagacy_path = "data/ego_masks/chery/unprocessed/0.png"
-    image = Image.open(mask_lagacy_path).convert('L')
+    image = Image.open(mask_lagacy_path).convert("L")
 
-    intrinsics, distortions, new_intrinsics = load_intrinsics(load_dir, clip_name, cam_id=cam_id)
+    intrinsics, distortions, new_intrinsics = load_intrinsics(
+        load_dir, clip_name, cam_id=cam_id
+    )
 
-    distortion_mask = Image.new('L', image.size, 255)
-    distortion_mask = undistort_image(distortion_mask, intrinsics, distortions, new_intrinsics)
+    distortion_mask = Image.new("L", image.size, 255)
+    distortion_mask = undistort_image(
+        distortion_mask, intrinsics, distortions, new_intrinsics
+    )
     # 反色
     distortion_mask = ImageChops.invert(distortion_mask)
 
     # 求和
     image = ImageChops.add(image, distortion_mask)
 
-    image.save('data/ego_masks/chery/0.png')
+    image.save("data/ego_masks/chery/0.png")
 
     print("Done!")
-
-
-
 
 
 if __name__ == "__main__":
@@ -121,7 +119,7 @@ if __name__ == "__main__":
     load_dir = os.path.join("data/chery/raw")
 
     filepath = os.path.join(load_dir, clip_name, "ego_mask", filename)
-    with open(filepath, 'r') as file:
+    with open(filepath, "r") as file:
         yaml_data = file.read()
 
     mask_data = yaml.safe_load(yaml_data)

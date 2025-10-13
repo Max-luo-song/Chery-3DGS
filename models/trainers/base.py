@@ -531,7 +531,6 @@ class BasicTrainer(nn.Module):
         outputs: Dict[str, torch.Tensor],
         image_infos: Dict[str, torch.Tensor],
         cam_infos: Dict[str, torch.Tensor],
-        has_lidar: bool = False,
     ) -> Dict[str, torch.Tensor]:
         # calculate loss
         loss_dict = {}
@@ -562,7 +561,7 @@ class BasicTrainer(nn.Module):
             loss_dict.update({"sky_loss_opacity": sky_loss_opacity})
         
         # depth loss
-        if has_lidar and self.depth_loss_fn is not None:
+        if self.depth_loss_fn is not None:
             gt_depth = image_infos["lidar_depth_map"] 
             lidar_hit_mask = (gt_depth > 0).float() * valid_loss_mask
             pred_depth = outputs["depth"]

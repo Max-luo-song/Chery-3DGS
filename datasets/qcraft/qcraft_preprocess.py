@@ -3,23 +3,20 @@ import os
 import numpy as np
 from PIL import Image
 from tqdm import tqdm
-import yaml
+from typing import List, Dict, Tuple
+from dataclasses import dataclass
 
 from datasets.tools.multiprocess_utils import track_parallel_progress
 from datasets.dataset_meta import DATASETS_CONFIG
 from chery_tools.parse_lidar import parse_lidar_pcd_file
 from .qcraft_utils import (
-    find_track_id_frame,
-    find_track_id_obj2world_and_boxsize,
-    convert_ndarray_to_list,
     euler_to_rotation_matrix,
     pose_to_transform_matrix,
     project_points_to_image,
     draw_and_fill_box,
-    filter_points_in_box,
+    preprocess_lidar_point_cloud,
 )
 
-import cv2
 from pyquaternion import Quaternion
 from nuscenes.utils.data_classes import Box
 from scipy.spatial.transform import Rotation
@@ -54,6 +51,17 @@ OPENCV2DATASET = np.array(
         [0.0, 0.0, 0.0, 1.0],
     ]
 )
+
+
+@dataclass
+class ClipDataCache:
+    clip_dir: str
+    sample_names: List[str]
+    ego_poses: List[np.ndarray]
+    cam2egos: List[np.ndarray]
+    intrinsics_matrix: List[np.ndarray]
+    intrinsics_list: List[List[float]]
+    lidar2ego: np.ndarray
 
 
 class QcraftProcessor(object):
@@ -104,18 +112,9 @@ class QcraftProcessor(object):
         self.save_dir = f"{save_dir}/{prefix}"
         self.workers = int(workers)
 
-        self.num_pinhole_cameras = 13
-        self.num_all_cameras = 13
-
         self.create_folder()
 
-    def _get_clip_dir(self, clip_name) -> str:
-        original_clip_dir = os.path.join(self.load_dir, clip_name)
-
-        # NOTE(syc): 轻舟数据下有一个子目录
-        # subdirs = os.listdir(original_clip_dir)
-        # return os.path.join(original_clip_dir, subdirs[0])
-        return original_clip_dir
+        self._cache: Dict[str, ClipDataCache] = {}
 
     def convert(self):
         """Convert action."""
@@ -134,6 +133,32 @@ class QcraftProcessor(object):
     def convert_one(self, clip_name):
         """Convert action for single file."""
 
+        self._cache[clip_name] = {}
+
+        # NOTE(syc): 轻舟数据下有一个子目录
+        original_clip_dir = os.path.join(self.load_dir, clip_name)
+        subdirs = os.listdir(original_clip_dir)
+        clip_dir = os.path.join(original_clip_dir, subdirs[0])
+
+        sample_names = self._read_sample_names(clip_dir)
+        ego_poses = self._read_ego_poses(clip_dir, sample_names)
+
+        camera_params = self._read_camera_params(clip_dir)
+        cam2egos = self._parse_extrinsics(camera_params)
+        intrinsics_matrix, intrinsics_list = self._parse_intrinsics(camera_params)
+
+        lidar2ego = self._read_lidar2ego(clip_dir)
+
+        self._cache[clip_name] = ClipDataCache(
+            clip_dir=clip_dir,
+            sample_names=sample_names,
+            ego_poses=ego_poses,
+            cam2egos=cam2egos,
+            intrinsics_matrix=intrinsics_matrix,
+            intrinsics_list=intrinsics_list,
+            lidar2ego=lidar2ego,
+        )
+
         if "images" in self.process_keys:
             self.save_image(clip_name)
             print(f"Processed images for {clip_name}")
@@ -147,7 +172,7 @@ class QcraftProcessor(object):
             print(f"Processed lidar for {clip_name}")
 
         if "pose" in self.process_keys:
-            lidar2worlds = self.save_pose(clip_name)
+            self.save_pose(clip_name)
             print(f"Processed lidar poses for {clip_name}")
 
         if "dynamic_masks" in self.process_keys:
@@ -155,7 +180,7 @@ class QcraftProcessor(object):
             print(f"Processed dynamic masks for scene {clip_name}")
 
         if "objects" in self.process_keys:
-            instances_info, frame_instances = self.save_objects(clip_name, lidar2worlds)
+            instances_info, frame_instances = self.save_objects(clip_name)
             print(f"Processed objects for scene {clip_name}")
 
             # Save instances info and frame instances
@@ -171,12 +196,13 @@ class QcraftProcessor(object):
 
     def save_image(self, clip_name):
         """保存经过畸变校正的相机图像为 jpg 格式"""
-        clip_dir = self._get_clip_dir(clip_name)
-        sample_names = self._read_sample_names(clip_dir)
+        cache = self._cache[clip_name]
 
-        for frame_index, sample_name in enumerate(sample_names):
-            sample_dir = os.path.join(clip_dir, sample_name)
+        img_paths = []
+        save_paths = []
 
+        for frame_idx, sample_name in enumerate(cache.sample_names):
+            sample_dir = os.path.join(cache.clip_dir, sample_name)
             img_names = [
                 img_name  # img_name: 20250702_133223_Q2517-CAM_PBQ_FRONT_LEFT_RESET_OPTICAL_H99-1751434420.0459.jpg
                 for img_name in os.listdir(sample_dir)
@@ -192,25 +218,29 @@ class QcraftProcessor(object):
                         break
                 assert cam_idx is not None, f"Unknown camera in {img_name}"
 
-                save_name = f"{frame_index:03}_{cam_idx}.jpg"  # 000_0, 000_1, ...
-                save_img_path = os.path.join(
-                    self.save_dir, clip_name, "images", save_name
-                )
-                image = Image.open(os.path.join(sample_dir, img_name))
-                image.save(save_img_path)
+                img_path = os.path.join(sample_dir, img_name)
+                img_paths.append(img_path)
+
+                save_name = f"{frame_idx:03}_{cam_idx}.jpg"  # 000_0, 000_1, ...
+                save_path = os.path.join(self.save_dir, clip_name, "images", save_name)
+                save_paths.append(save_path)
+
+        for img_path, save_path in tqdm(
+            zip(img_paths, save_paths), total=len(img_paths)
+        ):
+            Image.open(img_path).save(save_path)
 
     def save_calib(self, clip_name):
-        # """解析并保存相机的外参（以LiDAR为参考系）和内参"""
-        clip_dir = self._get_clip_dir(clip_name)
-        camera_params = self._read_camera_params(clip_dir)
+        cache = self._cache[clip_name]
 
-        cam2egos = self._parse_extrinsics(camera_params)
-        lidar2ego = self._read_lidar2ego(clip_dir)
-        cam2lidars = [np.linalg.inv(lidar2ego) @ cam2ego for cam2ego in cam2egos]
+        cam2lidars = [
+            np.linalg.inv(cache.lidar2ego) @ cam2ego for cam2ego in cache.cam2egos
+        ]
+        intrinsics = cache.intrinsics_list
 
-        intrinsics = self._parse_intrinsics(camera_params, as_matrix=False)
-
-        for cam_idx, (cam2lidar, intrinsic) in enumerate(zip(cam2lidars, intrinsics)):
+        for cam_idx, (cam2lidar, intrinsic) in tqdm(
+            enumerate(zip(cam2lidars, intrinsics)), total=len(cam2lidars)
+        ):
             np.savetxt(
                 f"{self.save_dir}/{clip_name}/extrinsics/{cam_idx}.txt",
                 cam2lidar,
@@ -221,12 +251,18 @@ class QcraftProcessor(object):
             )
 
     def save_lidar(self, clip_name):
-        # 将雷达数据从 pcd 格式转换到 bin 格式
-        clip_dir = self._get_clip_dir(clip_name)
-        sample_names = self._read_sample_names(clip_dir)
+        """
+        将雷达数据从 pcd 格式转换到 bin 格式
 
-        for frame_idx, sample_name in tqdm(enumerate(sample_names)):
-            sample_dir = os.path.join(clip_dir, sample_name)
+        二进制文件中包含 5 个 float32 字段：
+            x y z intensity lidar_id
+        """
+        cache = self._cache[clip_name]
+
+        for frame_idx, sample_name in tqdm(
+            enumerate(cache.sample_names), total=len(cache.sample_names)
+        ):
+            sample_dir = os.path.join(cache.clip_dir, sample_name)
 
             lidar_names = [
                 lidar_name  # 20250702_133223_Q2517-LDR_FRONT-1751434420.2514-ego.pcd
@@ -236,118 +272,91 @@ class QcraftProcessor(object):
             lidar_paths = [
                 os.path.join(sample_dir, lidar_name) for lidar_name in lidar_names
             ]
-            lidar2ego = self._read_lidar2ego(clip_dir)
+            lidar_ids = [0]
 
-            def save_lidar_data_as_bin(lidar_paths, lidar_type):
-                point_clouds = [
-                    parse_lidar_pcd_file(lidar_path) for lidar_path in lidar_paths
-                ]  # x y z intensity
+            point_cloud_list = [
+                parse_lidar_pcd_file(lidar_path) for lidar_path in lidar_paths
+            ]  # x y z intensity
+            point_cloud_list = [
+                preprocess_lidar_point_cloud(pc, cache.lidar2ego, lidar_id)
+                for lidar_id, pc in zip(lidar_ids, point_cloud_list)
+            ]  # x y z intensity lidar_id
+            point_cloud = np.concatenate(point_cloud_list, axis=0)
 
-                # NOTE(syc): LiDAR点云可能是ego坐标系的，这里转换到LiDAR坐标系
-                for i in range(len(point_clouds)):
-                    pc = point_clouds[i]
-                    pc_xyz = np.vstack([pc["x"], pc["y"], pc["z"]]).T  # (N, 3)
-                    pc_hom = np.hstack([pc_xyz, np.ones((pc.shape[0], 1))])  # N x 4
-                    pc_lidar = (np.linalg.inv(lidar2ego) @ pc_hom.T).T  # N x 4
-                    point_clouds[i]["x"] = pc_lidar[:, 0]
-                    point_clouds[i]["y"] = pc_lidar[:, 1]
-                    point_clouds[i]["z"] = pc_lidar[:, 2]
-
-                def append_lidar_id(pc, lidar_id):
-                    new_dtype = np.dtype(pc.dtype.descr + [("lidar_id", np.uint32)])
-                    new_pc = np.empty(pc.shape, dtype=new_dtype)
-
-                    for field in pc.dtype.names:
-                        new_pc[field] = pc[field]
-
-                    new_pc["lidar_id"] = lidar_id
-                    return new_pc
-
-                point_clouds = [
-                    append_lidar_id(pc, lidar_id)
-                    for lidar_id, pc in enumerate(point_clouds)
-                ]
-
-                # 点云数据合并
-                point_cloud = np.concatenate(point_clouds, axis=0)
-
-                # 提取所有字段并转换为 float32
-                fields = ["x", "y", "z", "intensity", "lidar_id"]
-                point_cloud = np.stack(
-                    [point_cloud[field] for field in fields], axis=1
-                ).astype(np.float32)
-
-                # 保存为二进制文件
-                pc_path = f"{self.save_dir}/{clip_name}/{lidar_type}/{str(frame_idx).zfill(3)}.bin"
-                point_cloud.astype(np.float32).tofile(pc_path)
-
-            save_lidar_data_as_bin(lidar_paths, "lidar")
+            # 保存为二进制文件
+            bin_path = (
+                f"{self.save_dir}/{clip_name}/lidar/{str(frame_idx).zfill(3)}.bin"
+            )
+            point_cloud.tofile(bin_path)
 
     def save_pose(self, clip_name):
         """保存每一帧的位姿"""
-
         # NOTE: 目前轻舟数据仿照的是奇瑞的数据预处理方式，因此保存的是 lidar pose 而非 ego pose
-        clip_dir = self._get_clip_dir(clip_name)
-        ego2worlds = self._read_ego_poses(clip_dir)
-        lidar2ego = self._read_lidar2ego(clip_dir)
 
-        lidar2worlds = [ego2world @ lidar2ego for ego2world in ego2worlds]
-        for frame_idx, lidar2world in enumerate(lidar2worlds):
+        cache = self._cache[clip_name]
+
+        lidar2worlds = [ego2world @ cache.lidar2ego for ego2world in cache.ego_poses]
+        for frame_idx, lidar2world in tqdm(
+            enumerate(lidar2worlds), total=len(lidar2worlds)
+        ):
             np.savetxt(
                 f"{self.save_dir}/{clip_name}/lidar_pose/{str(frame_idx).zfill(3)}.txt",
                 lidar2world,
             )
-        return lidar2worlds
 
-    def _generate_obj_masks(self, object, masks, ego2cams, intrinsics, img_shapes):
-        """处理单个动态物体，生成掩码并更新图像"""
-        scale = object["psr"]["scale"]
-        l, w, h = scale["x"], scale["y"], scale["z"]
-
-        rotation = object["psr"]["rotation"]
+    def _get_obj_pose_and_size(
+        self, obj_data
+    ) -> Tuple[np.ndarray, Tuple[float, float, float]]:
+        """
+        返回 obj2lidar, (l, w, h)
+        """
+        rotation = obj_data["psr"]["rotation"]
         rotation = euler_to_rotation_matrix(rotation["z"], rotation["y"], rotation["x"])
 
-        position = object["psr"]["position"]
+        position = obj_data["psr"]["position"]
         position = np.array([position["x"], position["y"], position["z"]])
 
-        # 动态物体位姿
-        box2ego = np.eye(4, dtype=np.float64)
-        box2ego[:3, :3] = rotation
-        box2ego[:3, 3] = position
+        obj2ego = np.eye(4, dtype=np.float64)
+        obj2ego[:3, :3] = rotation
+        obj2ego[:3, 3] = position
+
+        scale = obj_data["psr"]["scale"]
+        l, w, h = scale["x"], scale["y"], scale["z"]
+
+        return obj2ego, (l, w, h)
+
+    def _generate_obj_masks(self, obj_data, masks, ego2cams, intrinsics):
+        """
+        处理单个动态物体，生成掩码图像
+        """
+        obj2ego, (l, w, h) = self._get_obj_pose_and_size(obj_data)
 
         for cam_idx, ego2cam in enumerate(ego2cams):
-            box2cam = ego2cam @ box2ego
-            qx, qy, qz, qw = Rotation.from_matrix(box2cam[:3, :3]).as_quat()
+            obj2cam = ego2cam @ obj2ego
             box = Box(
-                center=box2cam[:3, 3],
+                center=obj2cam[:3, 3],
                 size=[w, l, h],
-                orientation=Quaternion([qw, qx, qy, qz]),
+                orientation=Quaternion(matrix=obj2cam[:3, :3]),
             )
-            corners = box.corners().T.astype(np.float32)
-            # print("corners:", corners)
-            points2d = project_points_to_image(
-                corners,
+            corners_cam = box.corners().T.astype(np.float32)
+            corners_2d = project_points_to_image(
+                corners_cam,
                 intrinsics[cam_idx],
-                img_shapes[cam_idx],
             )
-            masks[cam_idx] = draw_and_fill_box(masks[cam_idx], points2d)
+            masks[cam_idx] = draw_and_fill_box(masks[cam_idx], corners_2d)
 
         return masks
 
     def save_dynamic_mask(self, clip_name):
-        # """需要雷达的 box 投影到图像平面上，获取 2D mask，包括all human vehicle三种"""
-        clip_dir = self._get_clip_dir(clip_name)
-        camera_params = self._read_camera_params(clip_dir)
-
-        cam2egos = self._parse_extrinsics(camera_params)
-        ego2cams = [np.linalg.inv(m) for m in cam2egos]
-
-        intrinsics = self._parse_intrinsics(camera_params, as_matrix=True)
+        """
+        将 box 投影到图像平面上，获取 2D mask，包括 all human vehicle 三种
+        """
+        cache = self._cache[clip_name]
 
         # 创建保存目录
         categories = ["all", "human", "vehicle"]
-        for category in categories:
-            mask_dir = f"{self.save_dir}/{clip_name}/dynamic_masks/{category}"
+        for obj_type in categories:
+            mask_dir = f"{self.save_dir}/{clip_name}/dynamic_masks/{obj_type}"
             if not os.path.exists(mask_dir):
                 os.makedirs(mask_dir)
 
@@ -355,14 +364,15 @@ class QcraftProcessor(object):
             config["original_size"] for _, config in DATASETS_CONFIG["qcraft"].items()
         ]
 
+        ego2cams = [np.linalg.inv(m) for m in cache.cam2egos]
+
         # 处理每一帧
-        sample_names = self._read_sample_names(clip_dir)
         for frame_idx, sample_name in tqdm(
-            enumerate(sample_names), total=len(sample_names)
+            enumerate(cache.sample_names), total=len(cache.sample_names)
         ):
-            label_path = os.path.join(clip_dir, "label", f"{sample_name}.json")
+            label_path = os.path.join(cache.clip_dir, "label", f"{sample_name}.json")
             with open(label_path, "r") as f:
-                label_data = json.load(f)
+                labels = json.load(f)
 
             # 初始化掩码图像
             masks_vehicle = [
@@ -375,23 +385,21 @@ class QcraftProcessor(object):
                 np.zeros((sz[0], sz[1], 3), dtype=np.uint8) for sz in img_shapes
             ]
 
-            for obj in label_data:
-                category = obj["obj_type"]
-                if category == "person":
+            for obj_data in labels:
+                obj_type = obj_data["obj_type"]
+                if obj_type == "Person":
                     masks_human = self._generate_obj_masks(
-                        obj,
+                        obj_data,
                         masks_human,
                         ego2cams,
-                        intrinsics,
-                        img_shapes,
+                        cache.intrinsics_matrix,
                     )
                 else:
                     masks_vehicle = self._generate_obj_masks(
-                        obj,
+                        obj_data,
                         masks_vehicle,
                         ego2cams,
-                        intrinsics,
-                        img_shapes,
+                        cache.intrinsics_matrix,
                     )
 
             for cam_idx in range(len(ego2cams)):
@@ -401,92 +409,91 @@ class QcraftProcessor(object):
                 )
 
             # 保存掩码图像
-            for category, masks in zip(
+            for obj_type, masks in zip(
                 categories, [masks_all, masks_human, masks_vehicle]
             ):
                 for cam_idx, mask in enumerate(masks):
                     mask_gray = Image.fromarray(mask).convert("L")
                     mask_path = os.path.join(
-                        f"{self.save_dir}/{clip_name}/dynamic_masks/{category}",
+                        f"{self.save_dir}/{clip_name}/dynamic_masks/{obj_type}",
                         f"{str(frame_idx).zfill(3)}_{str(cam_idx)}.png",
                     )
                     mask_gray.save(mask_path)
 
-    def save_objects(self, clip_name, lidar2worlds):
+    def save_objects(self, clip_name):
         """
         生成instances相关的json文件
         frame_instances是帧到实例的映射
         instances_info是实例到属性的映射
         """
-        print("Processing instances_info...")
-        frame_instances, instances_info, track_id_info = {}, {}, {}
+        cache = self._cache[clip_name]
 
-        clip_dir = self._get_clip_dir(clip_name)
-        # 处理每一帧
-        sample_names = self._read_sample_names(clip_dir)
+        instances_info, frame_instances = {}, {}
+
         for frame_idx, sample_name in tqdm(
-            enumerate(sample_names), total=len(sample_names)
+            enumerate(cache.sample_names), total=len(cache.sample_names)
         ):
-            label_path = os.path.join(clip_dir, "label", f"{sample_name}.json")
-            with open(label_path, "r") as f:
-                label_data = json.load(f)
+            labels_path = os.path.join(cache.clip_dir, "label", f"{sample_name}.json")
+            with open(labels_path, "r") as f:
+                obj_data_list = json.load(f)
 
-            """frame_instances.json"""
-            track_id_list = []
-            for _, obj_info in enumerate(label_data):
-                track_id = obj_info.get("obj_id")
-                category = obj_info.get("obj_type")
-                if track_id is not None and track_id not in track_id_list:
-                    track_id_list.append(track_id)
-                ### 建立一个track_id和category的映射
-                if track_id not in track_id_info:
-                    track_id_info[str(track_id)] = {
-                        "category": category,
+            """
+            instances_info = {
+                "0": # simplified instance id
+                    {
+                        "id": str,
+                        "class_name": str,
+                        "frame_annotations": {
+                            "frame_idx": List,
+                            "obj_to_world": List,
+                            "box_size": List,
+                    },
+                ...
+            }
+            """
+            for obj_data in obj_data_list:
+                obj_id: str = obj_data["obj_id"]
+
+                obj2ego, box_size = self._get_obj_pose_and_size(obj_data)
+                obj2world = cache.ego_poses[frame_idx] @ obj2ego
+
+                if obj_id not in instances_info:
+                    obj_type = obj_data["obj_type"]
+                    if obj_type == "Person":
+                        class_name = "Pedestrian"
+                    elif obj_type == "Motorcycle":
+                        class_name = "Cyclist"
+                    else:
+                        class_name = "Vehicle"
+
+                    instances_info[obj_id] = {
+                        "class_name": class_name,
+                        "id": obj_id,
+                        "frame_annotations": {
+                            "frame_idx": [],
+                            "obj_to_world": [],
+                            "box_size": [],
+                        },
                     }
-            frame_instances[str(frame_idx)] = track_id_list
 
-        """instances_info.json"""
-        ### result["实例编号"]["frame_annotations"]["frame_idx"] ["obj_to_world 4x4"] ["box_size 三维"]
-        # frame_idx可以反投影上面的result
-        # box_size是clip的size属性
-        # obj_to_world 每一个实例的旋转？？？  默认box就是obj
+                instances_info[obj_id]["frame_annotations"]["frame_idx"].append(
+                    frame_idx
+                )
+                instances_info[obj_id]["frame_annotations"]["obj_to_world"].append(
+                    obj2world.tolist()
+                )
+                instances_info[obj_id]["frame_annotations"]["box_size"].append(box_size)
 
-        for track_id, info in track_id_info.items():
-            instances_info[track_id] = {}
-            if "frame_annotations" not in instances_info[track_id]:
-                instances_info[track_id]["frame_annotations"] = {}
-            if "frame_idx" not in instances_info[track_id]["frame_annotations"]:
-                instances_info[track_id]["frame_annotations"]["frame_idx"] = {}
-
-            frame_list = find_track_id_frame(track_id, frame_instances)
-            
-            instances_info[track_id]["frame_annotations"]["frame_idx"] = frame_list
-            instances_info[track_id]["id"] = "track_" + track_id
-
-            category = info["category"]
-
-            if category == "Pedestrian":
-                instances_info[track_id]["class_name"] = "Pedestrian"
-            elif category == "Motorcycle":
-                instances_info[track_id]["class_name"] = "Cyclist"
-            elif category == "Car":
-                instances_info[track_id]["class_name"] = "Vehicle"
-            else:
-                pass
-
-            obj2world_list, box_size_list = find_track_id_obj2world_and_boxsize(
-                track_id,
-                frame_list,
-                lidar2worlds,
-                os.path.join(clip_dir, "label"),
-                sample_names,
-            )
-            instances_info[track_id]["frame_annotations"][
-                "obj_to_world"
-            ] = obj2world_list
-            instances_info[track_id]["frame_annotations"]["box_size"] = box_size_list
-
-        instances_info = convert_ndarray_to_list(instances_info)
+            """
+            frame_instances = {
+                "0": # frame idx
+                    List[int] # list of simplified instance ids
+                ...
+            }
+            """
+            frame_instances[str(frame_idx)] = [
+                int(obj_data["obj_id"]) for obj_data in obj_data_list
+            ]
 
         return instances_info, frame_instances
 
@@ -591,14 +598,12 @@ class QcraftProcessor(object):
                 )
                 return pose_matrix
 
-        # HACK(syc): 是否有可能没有匹配的 timestamp
+        # HACK(syc): 可能没有匹配的 timestamp
         raise ValueError("No matching vehicle_pose found for main_timestamp")
 
-    def _read_ego_poses(self, clip_dir):
-        sample_names = self._read_sample_names(clip_dir)
-
+    def _read_ego_poses(self, clip_dir, sample_names):
         ego_poses = []
-        for frame_index, sample_name in enumerate(sample_names):
+        for sample_name in sample_names:
             sample_dir = os.path.join(clip_dir, sample_name)
             frame_data_path = os.path.join(sample_dir, "data_frame.pb.txt")
             ego_pose = self._read_ego_pose_from_pbtxt(frame_data_path)
@@ -637,8 +642,8 @@ class QcraftProcessor(object):
 
         return extrinsics
 
-    def _parse_intrinsics(self, camera_params, as_matrix):
-        intrinsics = []
+    def _parse_intrinsics(self, camera_params):
+        intrinsics_matrix, intrinsics_list = [], []
         for cam_name, _ in QCRAFT_CAMERA_DICT.items():
             intrinsic_raw = camera_params[cam_name]["intrinsics"]
 
@@ -657,11 +662,10 @@ class QcraftProcessor(object):
             k5 = intrinsic_raw["k5"]
             k6 = intrinsic_raw["k6"]
 
-            if as_matrix:
-                values = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
-            else:
-                values = [fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6]
+            matrix_values = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+            list_values = [fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6]
 
-            intrinsics.append(values)
+            intrinsics_matrix.append(matrix_values)
+            intrinsics_list.append(list_values)
 
-        return intrinsics
+        return intrinsics_matrix, intrinsics_list
