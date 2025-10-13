@@ -69,81 +69,81 @@ DATASETS_CONFIG = {
             "is_fisheye": True,
         },
     },
-    "qcraft": {  # 轻舟
+    "qcraft": {  # 轻舟，相机名称有修改
         0: {
-            "camera_name": "CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_H110",  # 广角前视 FOV110
+            "camera_name": "front_wide_110",  # 广角前视 FOV110
             "original_size": (512, 1024),
             "egocar_visible": True,
             "is_fisheye": False,
         },
         1: {
-            "camera_name": "CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_H60",  # 广角前视 FOV60
+            "camera_name": "front_wide_60",  # 广角前视 FOV60
             "original_size": (512, 1024),
             "egocar_visible": False,
             "is_fisheye": False,
         },
         2: {
-            "camera_name": "CAM_PBQ_FRONT_TELE_RESET_OPTICAL_H30",  # 长焦前视 FOV30
+            "camera_name": "front_tele_30",  # 长焦前视 FOV30
             "original_size": (512, 1024),
             "egocar_visible": False,
             "is_fisheye": False,
         },
         3: {
-            "camera_name": "CAM_PBQ_FRONT_TELE_RESET_OPTICAL_H15",  # 长焦前视 FOV15
+            "camera_name": "front_tele_15",  # 长焦前视 FOV15
             "original_size": (512, 1024),
             "egocar_visible": False,
             "is_fisheye": False,
         },
         4: {
-            "camera_name": "CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_LEFT_H60",  # 广角左前 FOV60
+            "camera_name": "front_wide_left_60",  # 广角左前 FOV60
             "original_size": (512, 1024),
             "egocar_visible": True,
             "is_fisheye": False,
         },
         5: {
-            "camera_name": "CAM_PBQ_FRONT_LEFT_RESET_OPTICAL_H99",  # 左前 FOV99
+            "camera_name": "front_left_99",  # 左前 FOV99
             "original_size": (512, 1024),
             "egocar_visible": True,
             "is_fisheye": False,
         },
         6: {
-            "camera_name": "CAM_PBQ_REAR_LEFT_RESET_OPTICAL_H99",  # 左后 FOV99
+            "camera_name": "rear_left_99",  # 左后 FOV99
             "original_size": (512, 1024),
             "egocar_visible": True,
             "is_fisheye": False,
         },
         7: {
-            "camera_name": "CAM_PBQ_REAR_LEFT_RESET_OPTICAL_H30",  # 左后 FOV30
+            "camera_name": "rear_left_30",  # 左后 FOV30
             "original_size": (256, 512),
             "egocar_visible": True,
             "is_fisheye": False,
         },
         8: {
-            "camera_name": "CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_RIGHT_H60",  # 广角右前 FOV60
+            "camera_name": "front_wide_right_60",  # 广角右前 FOV60
             "original_size": (512, 1024),
-            "egocar_visible": False,
+            "egocar_visible": True,
             "is_fisheye": False,
         },
         9: {
-            "camera_name": "CAM_PBQ_FRONT_RIGHT_RESET_OPTICAL_H99",  # 右前 FOV99
+            "camera_name": "front_right_99",  # 右前 FOV99
             "original_size": (512, 1024),
             "egocar_visible": True,
             "is_fisheye": False,
         },
         10: {
-            "camera_name": "CAM_PBQ_REAR_RIGHT_RESET_OPTICAL_H99",  # 右后 FOV99
+            "camera_name": "rear_right_99",  # 右后 FOV99
             "original_size": (512, 1024),
             "egocar_visible": True,
             "is_fisheye": False,
         },
         11: {
-            "camera_name": "CAM_PBQ_REAR_RIGHT_RESET_OPTICAL_H30",  # 右后 FOV30
+            "camera_name": "rear_right_30",  # 右后 FOV30
             "original_size": (256, 512),
             "egocar_visible": True,
             "is_fisheye": False,
         },
         12: {
-            "camera_name": "CAM_PBQ_REAR_RESET_OPTICAL_H50",  # 后视 FOV50
+            "camera_name": "rear_50",  # 后视 FOV50
             "original_size": (512, 1024),
             "egocar_visible": False,
             "is_fisheye": False,

@@ -1,7 +1,6 @@
 # 参数设置
 ################################################################################
-clip_name="clip_1746752396800"
-run_name="20250911_lidar+cam0+2downsample"
+ckpt_path="output/chery_clip_1746752396800/20250930_mclidar+cam0123456+depth_loss/checkpoint_final.pth"
 
 rigid_id=1
 edit_value=(3 0 0) 
@@ -15,8 +14,6 @@ if [ -z "${gpu}" ]; then
   exit 1
 fi
 
-project_name="chery_${clip_name}"
-ckpt_path="output/$project_name/$run_name/checkpoint_final.pth"
 echo "Using checkpoint: $ckpt_path"
 
 export PYTHONPATH=$(pwd)

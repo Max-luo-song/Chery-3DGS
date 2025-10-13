@@ -1,19 +1,16 @@
 # 参数设置
 ################################################################################
-clip_name="clip_1746752396800"
-run_name="20250915_mclidar+cam0123456+depth_loss"
+ckpt_path="output/chery_clip_1746752396800/20250930_mclidar+cam0123456+depth_loss/checkpoint_final.pth"
 ################################################################################
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source ${SCRIPT_DIR}/utils.sh
 
 gpu=$(pick_gpu)
 if [ -z "${gpu}" ]; then
-  echo "no gpu found"
-  exit 1
+    echo "no gpu found"
+    exit 1
 fi
 
-project_name="chery_${clip_name}"
-ckpt_path="output/$project_name/$run_name/checkpoint_final.pth"
 echo "Using checkpoint: $ckpt_path"
 
 export PYTHONPATH=$(pwd)

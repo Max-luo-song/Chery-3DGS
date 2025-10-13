@@ -83,17 +83,6 @@ def parse_lidar_pcd_file(pcd_path, return_fields=False):
         return data
 
 
-def parse_lidar_bin_file(bin_path, return_fields=False):
-    fields = ["x", "y", "z", "intensity", "lidar_id"]
-
-    point_cloud = np.fromfile(bin_path, dtype=np.float32)
-    point_cloud = point_cloud.reshape(-1, len(fields))
-
-    if return_fields:
-        return point_cloud, fields
-    return point_cloud
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="将 LIDAR PCD 文件转换为 CSV 文件")
     parser.add_argument("--path", type=str, help="Path to the input PCD file.")
@@ -101,12 +90,10 @@ if __name__ == "__main__":
 
     if args.path.endswith(".pcd"):
         parse_func = parse_lidar_pcd_file
-    elif args.path.endswith(".bin"):
-        parse_func = parse_lidar_bin_file
         
     data, fields = parse_func(args.path, return_fields=True)
     
-    save_path = os.path.basename(args.path).replace(".pcd", ".csv").replace(".bin", ".csv")
+    save_path = os.path.basename(args.path).replace(".pcd", ".csv")
     with open(save_path, "w") as csv_file:
         csv_file.write(",".join(fields) + "\n")
         for point in data:

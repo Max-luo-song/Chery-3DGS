@@ -1,2 +1,0 @@
-# scene_id, start_timestep, end_timestep
-20250702_133223_Q2517_60_75,0,-1

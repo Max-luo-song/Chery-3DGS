@@ -1,5 +1,9 @@
-#!/bin/bash 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" 
+# 参数设置
+################################################################################
+scene_id="clip_1746752396800"
+################################################################################
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source ${SCRIPT_DIR}/utils.sh
 
 export PYTHONPATH=$(pwd)
@@ -13,13 +17,11 @@ if [ -z "${gpu}" ]; then
   exit 1
 fi
 
-scene_ids="clip_1746581703000"
-
 CUDA_VISIBLE_DEVICES=${gpu} python datasets/preprocess.py \
     --data_root data/chery/raw/ \
     --target_dir ${target_dir} \
     --dataset chery \
     --split training \
-    --scene_ids $scene_ids \
-    --workers 64 \
+    --scene_ids $scene_id \
+    --workers 2 \
     --process_keys images lidar calib pose dynamic_masks objects lidar_velocities
