@@ -19,14 +19,18 @@ def pinhole2fisheye(image, focal_length, kb_coeffs, crop_valid, enable_cache=Tru
         dx = x - cx
         dy = y - cy
 
-        rc = np.sqrt(dx ** 2 + dy ** 2)  # 每个像素到图像中点的距离
+        rc = np.sqrt(dx**2 + dy**2)  # 每个像素到图像中点的距离
         theta = np.arctan2(rc, focal_length)  # 像素-光心-图像中点的角度
         gamma = np.arctan2(dy, dx)  # 像素-图像中间的2D角度,该角度不变
 
         # kb模型
         # HACK: kb_coeffs 只能有 4 个系数
-        d0, d1, d2, d3 = kb_coeffs
-        rf = theta * (1 + d0 * theta**2 + d1 * theta**4 + d2 * theta**6 + d3 * theta**8) * focal_length
+        d0, d1, d2, d3 = kb_coeffs[:4]
+        rf = (
+            theta
+            * (1 + d0 * theta**2 + d1 * theta**4 + d2 * theta**6 + d3 * theta**8)
+            * focal_length
+        )
 
         xf = rf * np.cos(gamma)
         yf = rf * np.sin(gamma)

@@ -18,7 +18,7 @@ from utils.visualization import (
     depth_visualizer,
 )
 
-from chery_tools.pinhole2fisheye.utils.pinhole2fisheye import pinhole2fisheye
+from chery_tools.distort import distort_image
 
 logger = logging.getLogger()
 
@@ -1221,32 +1221,28 @@ def render_novel_views(
             depth = get_numpy(outputs["depth"])
             opacity = get_numpy(outputs["opacity"]) if "opacity" in outputs else None
 
-            # 模拟鱼眼相机
+            # 恢复畸变图像
+            # NOTE(syc): 是否不只针对鱼眼相机？
             if camera_data.is_fisheye:
                 intrinsics = frame_data["cam_infos"]["intrinsics"].cpu().numpy()
-                # FIXME(syc): fx != focal_length
-                focal_length = intrinsics[0, 0]  # fx
                 kb_coeffs = frame_data["cam_infos"]["kb_coeffs"].cpu().numpy().flatten()
                 crop = False
 
-                rgb = pinhole2fisheye(
+                rgb = distort_image(
                     image=rgb,
-                    focal_length=focal_length,
+                    intrinsics=intrinsics,
                     kb_coeffs=kb_coeffs,
-                    crop_valid=crop,
                 )
-                depth = pinhole2fisheye(
+                depth = distort_image(
                     image=depth,
-                    focal_length=focal_length,
+                    intrinsics=intrinsics,
                     kb_coeffs=kb_coeffs,
-                    crop_valid=crop,
                 )
                 if opacity is not None:
-                    opacity = pinhole2fisheye(
+                    opacity = distort_image(
                         image=opacity,
-                        focal_length=focal_length,
+                        intrinsics=intrinsics,
                         kb_coeffs=kb_coeffs,
-                        crop_valid=crop,
                     )
 
             rgbs.append(rgb)
