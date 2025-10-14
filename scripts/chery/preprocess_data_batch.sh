@@ -1,6 +1,6 @@
 export PYTHONPATH=$(pwd)
 
-CUDA_VISIBLE_DEVICES=4 python datasets/preprocess.py \
+python datasets/preprocess.py \
     --data_root data/chery/raw/ \
     --target_dir data/chery/processed \
     --dataset chery \

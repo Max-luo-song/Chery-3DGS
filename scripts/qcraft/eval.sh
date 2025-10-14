@@ -1,16 +1,25 @@
 # 参数设置
 ################################################################################
-cuda_device_id=5
+gpu=-1
 
-clip_name="20250702_133223_Q2517"
-run_name="20250929_lidar+cam0_1_2_3_4_5_6_8_9_10_12"
+ckpt_path="output/qcraft_20250702_133223_Q2517/20251001_lidar+cam0_1_2_3_4_5_6_8_9_10_12/checkpoint_final.pth"
 ################################################################################
 
-project_name="qcraft_${clip_name}"
-ckpt_path="output/$project_name/$run_name/checkpoint_final.pth"
+# Pick an avaliable gpu
+source scripts/utils.sh
+if [ "${gpu}" = "-1" ]; then
+    gpu=$(pick_gpu)
+    if [ -z "${gpu}" ]; then
+        echo "no gpu found"
+        exit 1
+    fi
+fi
+echo "Using GPU: ${gpu}"
+
+
 echo "Using checkpoint: $ckpt_path"
 
 export PYTHONPATH=$(pwd)
-CUDA_VISIBLE_DEVICES=$cuda_device_id python tools/eval.py \
+CUDA_VISIBLE_DEVICES=${gpu} python tools/eval.py \
     --resume_from $ckpt_path \
     # --enable_viewer

@@ -9,8 +9,6 @@ import logging
 import argparse
 
 import torch
-import sys
-# sys.path.append("/data4/gls/code/drivestudio")
 from tools.eval import do_evaluation
 from utils.misc import import_str
 from utils.backup import backup_project
@@ -267,7 +265,6 @@ def main(args):
             outputs=outputs,
             image_infos=image_infos,
             cam_infos=cam_infos,
-            has_lidar=cfg.data.lidar_source.load_lidar
         )
         # check nan or inf
         for k, v in loss_dict.items():

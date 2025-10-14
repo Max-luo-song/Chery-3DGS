@@ -124,7 +124,7 @@ class CameraData(object):
         buffer_downscale: float = 1.0,
         # the device to move the camera to
         device: torch.device = torch.device("cpu"),
-        calib_only: bool = False,
+        novel_view_mode: bool = False,
     ):
         self.dataset_name = dataset_name
         self.cam_id = cam_id
@@ -134,7 +134,7 @@ class CameraData(object):
         self.undistort = undistort
         self.buffer_downscale = buffer_downscale
         self.device = device
-        self.calib_only = calib_only  # syc
+        self.novel_view_mode = novel_view_mode  # syc
 
         self.cam_name = DATASETS_CONFIG[dataset_name][cam_id]["camera_name"]
         self.original_size = DATASETS_CONFIG[dataset_name][cam_id]["original_size"]
@@ -150,9 +150,10 @@ class CameraData(object):
         # Load the images, dynamic masks, sky masks, etc.
         self.create_all_filelist()
 
+        # NOTE(syc): novel view mode 下只加载相机内外参
         self.load_calibrations()
 
-        if not self.calib_only:
+        if not self.novel_view_mode:
             self.load_images()
             self.load_egocar_mask()
             if load_dynamic_mask:
@@ -496,7 +497,7 @@ class CameraData(object):
         if self.distortions is not None:
             self.distortions = self.distortions.to(device)
 
-        if not self.calib_only:
+        if not self.novel_view_mode:
             self.images = self.images.to(device)
             self.egocar_mask = self.egocar_mask.to(device)
             if self.dynamic_masks is not None:
@@ -1112,11 +1113,10 @@ class ScenePixelSource(abc.ABC):
         """
         return self.data_cfg.sampler.buffer_downscale
 
-    def prepare_novel_view_render_data(
+    def _build_novel_view_render_data(
         self,
         dataset_type: str,
         traj: torch.Tensor,
-        cam_id: int,
         camera_data: CameraData = None,
     ) -> list:
         """
@@ -1131,22 +1131,14 @@ class ScenePixelSource(abc.ABC):
                 - cam_infos: Camera information (extrinsics, intrinsics, image dimensions)
                 - image_infos: Image-related information (indices, normalized time, viewdirs, etc.)
         """
-        if dataset_type in ["chery", "qcraft"]:
-            # 使用传入的 cam_id
-            pass
-        elif dataset_type == "argoverse":
-            cam_id = 1  # Use cam_id 1 for Argoverse dataset
-        else:
-            cam_id = 0  # Use cam_id 0 for other datasets
-
-        intrinsics = camera_data[cam_id].intrinsics[
+        intrinsics = camera_data.intrinsics[
             0
         ]  # Assume intrinsics are constant across frames
-        kb_coeffs = camera_data[cam_id].distortions[
+        kb_coeffs = camera_data.distortions[
             0
         ]  # Assume distortions are constant across frames
 
-        H, W = camera_data[cam_id].HEIGHT, camera_data[cam_id].WIDTH
+        H, W = camera_data.HEIGHT, camera_data.WIDTH
 
         original_frame_count = self.num_frames
         scaled_indices = torch.linspace(0, original_frame_count - 1, len(traj))
@@ -1204,36 +1196,26 @@ class ScenePixelSource(abc.ABC):
 
         return render_data
 
-    ### Note(gls):为每个相机准备数据
-    def prepare_multicam_novel_view_render_data(
-        self, dataset_type: str, cam0_traj: torch.Tensor, camera_data: CameraData = None
+    def prepare_novel_view_render_data(
+        self,
+        dataset_type: str,
+        ref_cam_novel_traj: torch.Tensor,
+        ref_cam_data: CameraData,
+        target_cam_data: CameraData,
     ) -> list:
-        render_data_list = []  # 存储每个相机的渲染数据
+        T_cam0_to_world_start = ref_cam_data.cam_to_worlds[0]
+        T_camX_to_world_start = target_cam_data.cam_to_worlds[0]
+        T_camX_to_cam0 = torch.linalg.inv(T_cam0_to_world_start) @ T_camX_to_world_start
 
-        if camera_data is None:
-            camera_data = self.camera_data
+        camX_traj = []
+        for T_cam0_to_world in ref_cam_novel_traj:  # 前视相机的位姿 (T_cam0_to_world)
+            T_camX_to_cam0 = T_camX_to_cam0.to(T_cam0_to_world.dtype)
+            T_camX_to_world = T_cam0_to_world @ T_camX_to_cam0
+            camX_traj.append(T_camX_to_world)
 
-        ref_cam_id = 0
-        T_cam0_to_world_start = camera_data[ref_cam_id].cam_to_worlds[
-            0
-        ]  # 取第一帧的位姿作为参考
-
-        for cam_id in camera_data:
-            # 取第一帧的位姿作为参考
-            T_camX_to_world_start = camera_data[cam_id].cam_to_worlds[0]
-            T_camX_to_cam0 = (
-                torch.linalg.inv(T_cam0_to_world_start) @ T_camX_to_world_start
-            )
-
-            camX_traj = []
-            for pose_cam0 in cam0_traj:  # 前视相机的位姿 (T_cam0_to_world)
-                T_camX_to_cam0 = T_camX_to_cam0.to(pose_cam0.dtype)
-                pose_camX = pose_cam0 @ T_camX_to_cam0
-                camX_traj.append(pose_camX)
-
-            render_data = self.prepare_novel_view_render_data(
-                dataset_type, camX_traj, cam_id, camera_data
-            )
-            render_data_list.append(render_data)
-
-        return render_data_list
+        render_data = self._build_novel_view_render_data(
+            dataset_type=dataset_type,
+            traj=camX_traj,
+            camera_data=target_cam_data,
+        )
+        return render_data

@@ -11,13 +11,14 @@ from torch.nn import functional as F
 from skimage.metrics import structural_similarity as ssim
 
 from datasets.base import SplitWrapper
+from datasets.base.pixel_source import CameraData
 from models.trainers.base import BasicTrainer
 from utils.visualization import (
     to8b,
     depth_visualizer,
 )
 
-from chery_tools.pinhole2fisheye.utils.pinhole2fisheye import pinhole2fisheye
+from chery_tools.distort import distort_image
 
 logger = logging.getLogger()
 
@@ -77,12 +78,24 @@ def render_images(
         logger.info(f"\t Full Image  PSNR: {render_results['psnr']:.4f}")
         logger.info(f"\t Full Image  SSIM: {render_results['ssim']:.4f}")
         logger.info(f"\t Full Image LPIPS: {render_results['lpips']:.4f}")
-        logger.info(f"\t Full Image  PSNR (no ego): {render_results['psnr_no_ego']:.4f}")
-        logger.info(f"\t Full Image  SSIM (no ego): {render_results['ssim_no_ego']:.4f}")
-        logger.info(f"\t Full Image LPIPS (no ego): {render_results['lpips_no_ego']:.4f}")
-        logger.info(f"\t Full Image  PSNR (with ego): {render_results['psnr_with_ego']:.4f}")
-        logger.info(f"\t Full Image  SSIM (with ego): {render_results['ssim_with_ego']:.4f}")
-        logger.info(f"\t Full Image LPIPS (with ego): {render_results['lpips_with_ego']:.4f}")
+        logger.info(
+            f"\t Full Image  PSNR (no ego): {render_results['psnr_no_ego']:.4f}"
+        )
+        logger.info(
+            f"\t Full Image  SSIM (no ego): {render_results['ssim_no_ego']:.4f}"
+        )
+        logger.info(
+            f"\t Full Image LPIPS (no ego): {render_results['lpips_no_ego']:.4f}"
+        )
+        logger.info(
+            f"\t Full Image  PSNR (with ego): {render_results['psnr_with_ego']:.4f}"
+        )
+        logger.info(
+            f"\t Full Image  SSIM (with ego): {render_results['ssim_with_ego']:.4f}"
+        )
+        logger.info(
+            f"\t Full Image LPIPS (with ego): {render_results['lpips_with_ego']:.4f}"
+        )
         logger.info(f"\t     Non-Sky PSNR: {render_results['occupied_psnr']:.4f}")
         logger.info(f"\t     Non-Sky SSIM: {render_results['occupied_ssim']:.4f}")
         logger.info(f"\tDynamic-Only PSNR: {render_results['masked_psnr']:.4f}")
@@ -508,7 +521,6 @@ def render_edit_rigid(
 def render_legend(
     dataset: SplitWrapper,
     trainer: BasicTrainer = None,
-    compute_metrics: bool = False,
     compute_error_map: bool = False,
     vis_indices: Optional[List[int]] = None,
     image_output_pth: Optional[str] = None,
@@ -556,15 +568,6 @@ def render_legend(
 
     # misc
     cam_names, cam_ids = [], []
-
-    if compute_metrics:
-        psnrs, ssim_scores, lpipss = [], [], []
-        psnrs_no_ego, ssim_scores_no_ego, lpipss_no_ego = [], [], []
-        psnrs_with_ego, ssim_scores_with_ego, lpipss_with_ego = [], [], []
-        masked_psnrs, masked_ssims = [], []
-        human_psnrs, human_ssims = [], []
-        vehicle_psnrs, vehicle_ssims = [], []
-        occupied_psnrs, occupied_ssims = [], []
 
     with torch.no_grad():
         indices = vis_indices if vis_indices is not None else range(len(dataset))
@@ -681,193 +684,8 @@ def render_legend(
                 )
                 lidar_on_images.append(lidar_on_image)
 
-            if compute_metrics:
-                psnr = compute_psnr(rgb, image_infos["pixels"])
-                ssim_score = ssim(
-                    get_numpy(rgb),
-                    get_numpy(image_infos["pixels"]),
-                    data_range=1.0,
-                    channel_axis=-1,
-                )
-                lpips = trainer.lpips(
-                    rgb[None, ...].permute(0, 3, 1, 2),
-                    image_infos["pixels"][None, ...].permute(0, 3, 1, 2),
-                )
-                logger.info(f"Frame {i}: PSNR {psnr:.4f}, SSIM {ssim_score:.4f}")
-                psnrs.append(psnr)
-                ssim_scores.append(ssim_score)
-                lpipss.append(lpips.item())
-
-                # 不计入 ego 影响的指标 (syc)
-                if "egocar_masks" in image_infos:
-                    ego_mask = get_numpy(image_infos["egocar_masks"]).astype(bool)
-
-                    # 去除车身区域 >>>
-                    mask_no_ego = ~ego_mask
-
-                    psnr_no_ego = compute_psnr(
-                        rgb[mask_no_ego], image_infos["pixels"][mask_no_ego]
-                    )
-                    ssim_score_no_ego = ssim(
-                        get_numpy(rgb),
-                        get_numpy(image_infos["pixels"]),
-                        data_range=1.0,
-                        channel_axis=-1,
-                        full=True,
-                    )[1][mask_no_ego].mean()
-
-                    rgb_masked = rgb.clone()
-                    pixels_masked = image_infos["pixels"].clone()
-                    rgb_masked[ego_mask] = 0
-                    pixels_masked[ego_mask] = 0
-                    lpips_no_ego = trainer.lpips(
-                        rgb_masked[None, ...].permute(0, 3, 1, 2),
-                        pixels_masked[None, ...].permute(0, 3, 1, 2),
-                    )
-                    # <<<
-
-                    # 加上车身 GT >>>
-                    rgb_with_ego = rgb.clone()
-                    rgb_with_ego[ego_mask] = image_infos["pixels"][ego_mask]
-
-                    psnr_with_ego = compute_psnr(rgb_with_ego, image_infos["pixels"])
-                    ssim_score_with_ego = ssim(
-                        get_numpy(rgb_with_ego),
-                        get_numpy(image_infos["pixels"]),
-                        data_range=1.0,
-                        channel_axis=-1,
-                    )
-                    lpips_with_ego = trainer.lpips(
-                        rgb_with_ego[None, ...].permute(0, 3, 1, 2),
-                        image_infos["pixels"][None, ...].permute(0, 3, 1, 2),
-                    )
-                    # <<<
-
-                    psnrs_no_ego.append(psnr_no_ego)
-                    ssim_scores_no_ego.append(ssim_score_no_ego)
-                    lpipss_no_ego.append(lpips_no_ego.item())
-                    logger.info(
-                        f"Frame {i}: PSNR (no ego) {psnr_no_ego:.4f}, SSIM (no ego) {ssim_score_no_ego:.4f}"
-                    )
-
-                    psnrs_with_ego.append(psnr_with_ego)
-                    ssim_scores_with_ego.append(ssim_score_with_ego)
-                    lpipss_with_ego.append(lpips_with_ego.item())
-                    logger.info(
-                        f"Frame {i}: PSNR (with ego) {psnr_with_ego:.4f}, SSIM (with ego) {ssim_score_with_ego:.4f}"
-                    )
-
-                if "sky_masks" in image_infos:
-                    occupied_mask = ~get_numpy(image_infos["sky_masks"]).astype(bool)
-                    if occupied_mask.sum() > 0:
-                        occupied_psnrs.append(
-                            compute_psnr(
-                                rgb[occupied_mask], image_infos["pixels"][occupied_mask]
-                            )
-                        )
-                        occupied_ssims.append(
-                            ssim(
-                                get_numpy(rgb),
-                                get_numpy(image_infos["pixels"]),
-                                data_range=1.0,
-                                channel_axis=-1,
-                                full=True,
-                            )[1][occupied_mask].mean()
-                        )
-
-                if "dynamic_masks" in image_infos:
-                    dynamic_mask = get_numpy(image_infos["dynamic_masks"]).astype(bool)
-                    if dynamic_mask.sum() > 0:
-                        masked_psnrs.append(
-                            compute_psnr(
-                                rgb[dynamic_mask], image_infos["pixels"][dynamic_mask]
-                            )
-                        )
-                        masked_ssims.append(
-                            ssim(
-                                get_numpy(rgb),
-                                get_numpy(image_infos["pixels"]),
-                                data_range=1.0,
-                                channel_axis=-1,
-                                full=True,
-                            )[1][dynamic_mask].mean()
-                        )
-
-                if "human_masks" in image_infos:
-                    human_mask = get_numpy(image_infos["human_masks"]).astype(bool)
-                    if human_mask.sum() > 0:
-                        human_psnrs.append(
-                            compute_psnr(
-                                rgb[human_mask], image_infos["pixels"][human_mask]
-                            )
-                        )
-                        human_ssims.append(
-                            ssim(
-                                get_numpy(rgb),
-                                get_numpy(image_infos["pixels"]),
-                                data_range=1.0,
-                                channel_axis=-1,
-                                full=True,
-                            )[1][human_mask].mean()
-                        )
-
-                if "vehicle_masks" in image_infos:
-                    vehicle_mask = get_numpy(image_infos["vehicle_masks"]).astype(bool)
-                    if vehicle_mask.sum() > 0:
-                        vehicle_psnrs.append(
-                            compute_psnr(
-                                rgb[vehicle_mask], image_infos["pixels"][vehicle_mask]
-                            )
-                        )
-                        vehicle_ssims.append(
-                            ssim(
-                                get_numpy(rgb),
-                                get_numpy(image_infos["pixels"]),
-                                data_range=1.0,
-                                channel_axis=-1,
-                                full=True,
-                            )[1][vehicle_mask].mean()
-                        )
-
     # messy aggregation...
     results_dict = {}
-    results_dict["psnr"] = non_zero_mean(psnrs) if compute_metrics else -1
-    results_dict["ssim"] = non_zero_mean(ssim_scores) if compute_metrics else -1
-    results_dict["lpips"] = non_zero_mean(lpipss) if compute_metrics else -1
-    # syc >>>
-    results_dict["psnr_no_ego"] = non_zero_mean(psnrs_no_ego) if compute_metrics else -1
-    results_dict["ssim_no_ego"] = (
-        non_zero_mean(ssim_scores_no_ego) if compute_metrics else -1
-    )
-    results_dict["lpips_no_ego"] = (
-        non_zero_mean(lpipss_no_ego) if compute_metrics else -1
-    )
-    results_dict["psnr_with_ego"] = (
-        non_zero_mean(psnrs_with_ego) if compute_metrics else -1
-    )
-    results_dict["ssim_with_ego"] = (
-        non_zero_mean(ssim_scores_with_ego) if compute_metrics else -1
-    )
-    results_dict["lpips_with_ego"] = (
-        non_zero_mean(lpipss_with_ego) if compute_metrics else -1
-    )
-    # <<<
-    results_dict["occupied_psnr"] = (
-        non_zero_mean(occupied_psnrs) if compute_metrics else -1
-    )
-    results_dict["occupied_ssim"] = (
-        non_zero_mean(occupied_ssims) if compute_metrics else -1
-    )
-    results_dict["masked_psnr"] = non_zero_mean(masked_psnrs) if compute_metrics else -1
-    results_dict["masked_ssim"] = non_zero_mean(masked_ssims) if compute_metrics else -1
-    results_dict["human_psnr"] = non_zero_mean(human_psnrs) if compute_metrics else -1
-    results_dict["human_ssim"] = non_zero_mean(human_ssims) if compute_metrics else -1
-    results_dict["vehicle_psnr"] = (
-        non_zero_mean(vehicle_psnrs) if compute_metrics else -1
-    )
-    results_dict["vehicle_ssim"] = (
-        non_zero_mean(vehicle_ssims) if compute_metrics else -1
-    )
     results_dict["rgbs"] = rgbs
     results_dict["depths"] = depths
     results_dict["cam_names"] = cam_names
@@ -1368,206 +1186,77 @@ def save_videos(
     return return_frame
 
 
-def save_single_camera_video(
-    render_results: Dict[str, List[Tensor]],
-    cam_id: int,
-    save_pth: str,
-    num_timestamps: int,
-    keys: List[str] = ["rgbs", "depths"],
-    fps: int = 10,
-    verbose: bool = False,
-    save_images: bool = False,
-):
-    for key in keys:
-        tmp_save_pth = save_pth.replace(".mp4", f"_cam{cam_id}_{key}.mp4")
-        tmp_save_pth = tmp_save_pth.replace(".png", f"_cam{cam_id}_{key}.png")
-
-        if num_timestamps == 1:  # it's an image
-            writer = imageio.get_writer(tmp_save_pth, mode="I")
-        else:
-            writer = imageio.get_writer(tmp_save_pth, mode="I", fps=fps)
-
-        if "mask" not in key:
-            if key not in render_results or len(render_results[key]) == 0:
-                continue
-
-        for frame_idx in range(num_timestamps):
-            # skip if the key is not in render_results
-            if "mask" in key:
-                new_key = key.replace("mask", "opacities")
-                if new_key not in render_results or len(render_results[new_key]) == 0:
-                    continue
-                single_frame = render_results[new_key][frame_idx]
-            else:
-                if key not in render_results or len(render_results[key]) == 0:
-                    continue
-                single_frame = render_results[key][frame_idx]
-
-            # convert to rgb if necessary
-            if key == "gt_sky_masks":
-                single_frame = [
-                    np.stack([frame, frame, frame], axis=-1) for frame in single_frame
-                ]
-            elif "mask" in key:
-                single_frame = [
-                    np.stack([frame, frame, frame], axis=-1) for frame in single_frame
-                ]
-            elif "depth" in key:
-                try:
-                    opacities = render_results[key.replace("depths", "opacities")][
-                        frame_idx
-                    ]
-                except:
-                    if "median" in key:
-                        opacities = render_results[
-                            key.replace("median_depths", "opacities")
-                        ][frame_idx]
-                    else:
-                        continue
-                single_frame = [
-                    depth_visualizer(frame, opacity)
-                    for frame, opacity in zip(single_frame, opacities)
-                ]
-
-            single_frame = np.array(single_frame)
-
-            if save_images:
-                if frame_idx == 0:
-                    os.makedirs(tmp_save_pth.replace(".mp4", ""), exist_ok=True)
-
-                for j, frame in enumerate(single_frame):
-                    imageio.imwrite(
-                        tmp_save_pth.replace(".mp4", f"/{frame_idx:03d}_{j:03d}.png"),
-                        to8b(frame),
-                    )
-            single_frame = to8b(single_frame)
-            writer.append_data(single_frame)
-
-        # close the writer
-        writer.close()
-        del writer
-
-        if verbose:
-            logger.info(f"saved video to {tmp_save_pth}")
-
-    del render_results
-
-
 def render_novel_views(
     trainer,
-    render_data_list: list,
-    camera_data: dict,
-    video_output_pth: str,
-    render_keys: list = ["rgbs", "depths"],
-    fps: int = 30,
-) -> None:
-    """
-    Perform rendering and save the result as a video.
-
-    Args:
-        trainer: Trainer object containing the rendering method
-        render_data (list): List of dicts, each containing elements required for rendering a single frame
-        save_path (str): Path to save the output video
-        fps (int): Frames per second for the output video
-    """
+    render_data: list,
+    camera_data: CameraData,
+) -> list:
     trainer.set_eval()
 
-    depths_per_cam = {}
-    cam_ids = camera_data.keys()
-
-    print(f"Render keys: {render_keys}")
-
     with torch.no_grad():
-        for cam_id, render_data in zip(cam_ids, render_data_list):  # 单个相机的数据
-            rgbs = []
-            depths = []
-            opacities = []
+        rgbs = []
+        depths = []
+        opacities = []
 
-            for frame_data in render_data:
-                # Move data to GPU
-                for key, value in frame_data["cam_infos"].items():
-                    frame_data["cam_infos"][key] = value.cuda(non_blocking=True)
-                for key, value in frame_data["image_infos"].items():
-                    frame_data["image_infos"][key] = value.cuda(non_blocking=True)
+        for frame_data in render_data:
+            # Move data to GPU
+            for key, value in frame_data["cam_infos"].items():
+                frame_data["cam_infos"][key] = value.cuda(non_blocking=True)
+            for key, value in frame_data["image_infos"].items():
+                frame_data["image_infos"][key] = value.cuda(non_blocking=True)
 
-                # Perform rendering
-                outputs = trainer(
-                    image_infos=frame_data["image_infos"],
-                    camera_infos=frame_data["cam_infos"],
-                    novel_view=True,
-                )
-
-                # ------------- clip rgb ------------- #
-                for k, v in outputs.items():
-                    if isinstance(v, Tensor) and "rgb" in k:
-                        outputs[k] = v.clamp(0.0, 1.0)
-
-                rgb = get_numpy(outputs["rgb"])
-                depth = get_numpy(outputs["depth"])
-                opacity = (
-                    get_numpy(outputs["opacity"]) if "opacity" in outputs else None
-                )
-
-                # 模拟鱼眼相机
-                if camera_data[cam_id].is_fisheye:
-                    intrinsics = frame_data["cam_infos"]["intrinsics"].cpu().numpy()
-                    focal_length = intrinsics[0, 0]  # fx
-                    kb_coeffs = (
-                        frame_data["cam_infos"]["kb_coeffs"].cpu().numpy().flatten()
-                    )
-                    crop = False
-
-                    rgb = pinhole2fisheye(
-                        image=rgb,
-                        focal_length=focal_length,
-                        kb_coeffs=kb_coeffs,
-                        crop_valid=crop,
-                    )
-                    depth = pinhole2fisheye(
-                        image=depth,
-                        focal_length=focal_length,
-                        kb_coeffs=kb_coeffs,
-                        crop_valid=crop,
-                    )
-                    if opacity is not None:
-                        opacity = pinhole2fisheye(
-                            image=opacity,
-                            focal_length=focal_length,
-                            kb_coeffs=kb_coeffs,
-                            crop_valid=crop,
-                        )
-
-                rgbs.append(rgb)
-                depths.append(depth)
-                if opacity is not None:
-                    opacities.append(opacity)
-
-            render_results = {}
-            render_results["rgbs"] = rgbs
-            render_results["depths"] = depths
-            if len(opacities) > 0:
-                render_results["opacities"] = opacities
-
-            save_single_camera_video(
-                render_results,
-                cam_id,
-                video_output_pth,
-                num_timestamps=len(rgbs),
-                keys=render_keys,
-                fps=fps,
-                verbose=True,
-                save_images=False,
+            # Perform rendering
+            outputs = trainer(
+                image_infos=frame_data["image_infos"],
+                camera_infos=frame_data["cam_infos"],
+                novel_view=True,
             )
 
-            # 鱼眼相机不保存 depth
-            if not camera_data[cam_id].is_fisheye:
-                depths_per_cam[cam_id] = depths
+            # ------------- clip rgb ------------- #
+            for k, v in outputs.items():
+                if isinstance(v, Tensor) and "rgb" in k:
+                    outputs[k] = v.clamp(0.0, 1.0)
 
-    depths_per_frame = [
-        {cam_id: depths_per_cam[cam_id][i] for cam_id in depths_per_cam}
-        for i in range(len(render_data_list[0]))
-    ]
-    return depths_per_frame
+            rgb = get_numpy(outputs["rgb"])
+            depth = get_numpy(outputs["depth"])
+            opacity = get_numpy(outputs["opacity"]) if "opacity" in outputs else None
+
+            # 恢复畸变图像
+            # NOTE(syc): 是否不只针对鱼眼相机？
+            if camera_data.is_fisheye:
+                intrinsics = frame_data["cam_infos"]["intrinsics"].cpu().numpy()
+                kb_coeffs = frame_data["cam_infos"]["kb_coeffs"].cpu().numpy().flatten()
+                crop = False
+
+                rgb = distort_image(
+                    image=rgb,
+                    intrinsics=intrinsics,
+                    kb_coeffs=kb_coeffs,
+                )
+                depth = distort_image(
+                    image=depth,
+                    intrinsics=intrinsics,
+                    kb_coeffs=kb_coeffs,
+                )
+                if opacity is not None:
+                    opacity = distort_image(
+                        image=opacity,
+                        intrinsics=intrinsics,
+                        kb_coeffs=kb_coeffs,
+                    )
+
+            rgbs.append(rgb)
+            depths.append(depth)
+            if opacity is not None:
+                opacities.append(opacity)
+
+        render_results = {}
+        render_results["rgbs"] = rgbs
+        render_results["depths"] = depths
+        if len(opacities) > 0:
+            render_results["opacities"] = opacities
+
+    return render_results
 
 
 def save_concatenated_videos(
@@ -1713,3 +1402,87 @@ def save_seperate_videos(
             logger.info(f"saved video to {tmp_save_pth}")
     del render_results
     return return_frame_dict
+
+
+def save_single_camera_video(
+    render_results: Dict[str, List[Tensor]],
+    cam_id: int,
+    start_timestep: int,
+    end_timestep: int,
+    video_save_pth: str,
+    image_save_dir: str,
+    keys: List[str] = ["rgbs", "depths"],
+    fps: int = 10,
+    verbose: bool = False,
+):
+    for key in keys:
+        if image_save_dir is not None:
+            # 为每个 timestep 创建目录
+            for timestep in range(start_timestep, end_timestep):
+                os.makedirs(
+                    os.path.join(image_save_dir, f"{timestep:03d}"), exist_ok=True
+                )
+
+        video_tmp_save_pth = video_save_pth.replace(".mp4", f"_cam{cam_id}_{key}.mp4")
+        writer = imageio.get_writer(video_tmp_save_pth, mode="I", fps=fps)
+
+        if "mask" not in key:
+            if key not in render_results or len(render_results[key]) == 0:
+                continue
+
+        for frame_idx, timestep in enumerate(range(start_timestep, end_timestep)):
+            # skip if the key is not in render_results
+            if "mask" in key:
+                new_key = key.replace("mask", "opacities")
+                if new_key not in render_results or len(render_results[new_key]) == 0:
+                    continue
+                single_frame = render_results[new_key][frame_idx]
+            else:
+                if key not in render_results or len(render_results[key]) == 0:
+                    continue
+                single_frame = render_results[key][frame_idx]
+
+            # convert to rgb if necessary
+            if key == "gt_sky_masks":
+                single_frame = [
+                    np.stack([frame, frame, frame], axis=-1) for frame in single_frame
+                ]
+            elif "mask" in key:
+                single_frame = [
+                    np.stack([frame, frame, frame], axis=-1) for frame in single_frame
+                ]
+            elif "depth" in key:
+                try:
+                    opacities = render_results[key.replace("depths", "opacities")][
+                        frame_idx
+                    ]
+                except:
+                    if "median" in key:
+                        opacities = render_results[
+                            key.replace("median_depths", "opacities")
+                        ][frame_idx]
+                    else:
+                        continue
+                single_frame = [
+                    depth_visualizer(frame, opacity)
+                    for frame, opacity in zip(single_frame, opacities)
+                ]
+
+            single_frame = np.array(single_frame)
+            single_frame = to8b(single_frame)
+
+            if image_save_dir is not None:
+                imageio.imwrite(
+                    os.path.join(
+                        image_save_dir, f"{timestep:03d}", f"{cam_id}_{key}.png"
+                    ),
+                    single_frame,
+                )
+            writer.append_data(single_frame)
+
+        # close the writer
+        writer.close()
+        del writer
+
+        if verbose:
+            logger.info(f"saved video to {video_tmp_save_pth}")
