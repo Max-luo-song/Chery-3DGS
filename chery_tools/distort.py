@@ -8,6 +8,7 @@ def distort_image(
     image,
     intrinsics,
     kb_coeffs,
+    camera_model="pinhole",  # 'pinhole' or 'fisheye'
     new_size=None,
     enable_cache=True,
 ):
@@ -16,48 +17,69 @@ def distort_image(
         new_size = (w, h)
     new_w, new_h = new_size
 
-    if len(kb_coeffs) < 8:
-        kb_coeffs = np.concatenate([kb_coeffs, np.zeros(8 - len(kb_coeffs))])
+    fx, fy = intrinsics[0, 0], intrinsics[1, 1]
+    # cx, cy = intrinsics[0, 2], intrinsics[1, 2]
+    cx, cy = new_w / 2.0, new_h / 2.0
 
-    cache_key = (h, w, new_w, new_h, tuple(kb_coeffs))
+    if camera_model == "pinhole":
+        if len(kb_coeffs) < 8:
+            kb_coeffs = np.concatenate([kb_coeffs, np.zeros(8 - len(kb_coeffs))])
+        kb_coeffs = kb_coeffs[:8]
+    elif camera_model == "fisheye":
+        if len(kb_coeffs) < 4:
+            raise ValueError("Fisheye needs at least 4 coeffs (k1~k4)")
+        kb_coeffs = kb_coeffs[:4]
+
+    cache_key = (h, w, new_w, new_h, tuple(kb_coeffs), camera_model)
 
     if enable_cache and cache_key in cache_index:
         mapx, mapy = cache_index[cache_key]
     else:
-        # 目标图像的像素坐标网格
         x_out, y_out = np.meshgrid(np.arange(new_w), np.arange(new_h))
 
-        cx, cy = new_w / 2.0, new_h / 2.0
-        x_d = (x_out - cx) / intrinsics[0, 0]  # fx
-        y_d = (y_out - cy) / intrinsics[1, 1]  # fy
+        x_norm = (x_out - cx) / fx
+        y_norm = (y_out - cy) / fy
 
-        r_d_sq = x_d**2 + y_d**2
-        r_d = np.sqrt(r_d_sq + 1e-10)
+        r_sq = x_norm**2 + y_norm**2
+        r = np.sqrt(r_sq + 1e-10)
 
-        # 径向畸变
-        k1, k2, p1, p2, k3, k4, k5, k6 = kb_coeffs[:8]
-        r_u = r_d * (
-            1
-            + k1 * r_d_sq
-            + k2 * r_d_sq**2
-            + k3 * r_d_sq**3
-            + k4 * r_d_sq**4
-            + k5 * r_d_sq**5
-            + k6 * r_d_sq**6
-        )
+        if camera_model == "pinhole":
+            k1, k2, p1, p2, k3, k4, k5, k6 = kb_coeffs
 
-        # 切向畸变
-        x_u = x_d + (2 * p1 * y_d + p2 * (r_d_sq + 2 * x_d**2))
-        y_u = y_d + (p1 * (r_d_sq + 2 * y_d**2) + 2 * p2 * x_d)
+            # 径向畸变
+            radial_factor = (
+                1
+                + k1 * r_sq
+                + k2 * r_sq**2
+                + k3 * r_sq**3
+                + k4 * r_sq**4
+                + k5 * r_sq**5
+                + k6 * r_sq**6
+            )
+            x_rad = x_norm * radial_factor
+            y_rad = y_norm * radial_factor
+            
+            # 切向畸变
+            x_tan = 2 * p1 * x_rad* y_rad+ p2 * (r_sq + 2 * x_rad**2)
+            y_tan = p1 * (r_sq + 2 * y_rad**2) + 2 * p2 * x_rad* y_rad
+            
+            x_src = x_rad + x_tan
+            y_src = y_rad + y_tan
 
-        # 结合径向和切向畸变
-        scale = np.where(r_d > 1e-10, r_u / r_d, 1)
-        x_u *= scale
-        y_u *= scale
+        elif camera_model == "fisheye":
+            k1, k2, k3, k4 = kb_coeffs
+            p1, p2 = 0.0, 0.0  # fisheye model typically does not use tangential distortion
+
+            theta = r
+            theta_poly = 1 + k1 * theta**2 + k2 * theta**4 + k3 * theta**6 + k4 * theta**8
+            theta_src = np.where(theta_poly > 1e-8, theta / theta_poly, theta)
+            scale = np.where(theta > 1e-8, theta_src / theta, 1)
+            x_src = x_norm * scale + 2 * p1 * x_norm * y_norm + p2 * (r_sq + 2 * x_norm**2)
+            y_src = y_norm * scale + p1 * (r_sq + 2 * y_norm**2) + 2 * p2 * x_norm * y_norm
 
         # 转换回像素坐标
-        mapx = x_u * intrinsics[0, 0] + cx
-        mapy = y_u * intrinsics[1, 1] + cy
+        mapx = x_src * fx + cx
+        mapy = y_src * fy + cy
 
         if enable_cache:
             cache_index[cache_key] = (mapx, mapy)

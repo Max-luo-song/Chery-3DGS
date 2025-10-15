@@ -1223,27 +1223,50 @@ def render_novel_views(
 
             # 恢复畸变图像
             # NOTE(syc): 是否不只针对鱼眼相机？
-            if camera_data.is_fisheye:
-                intrinsics = frame_data["cam_infos"]["intrinsics"].cpu().numpy()
-                kb_coeffs = frame_data["cam_infos"]["kb_coeffs"].cpu().numpy().flatten()
-                crop = False
+            # if camera_data.is_fisheye:
+            #     intrinsics = frame_data["cam_infos"]["intrinsics"].cpu().numpy()
+            #     kb_coeffs = frame_data["cam_infos"]["kb_coeffs"].cpu().numpy().flatten()
+            #     crop = False
 
-                rgb = distort_image(
-                    image=rgb,
+            #     rgb = distort_image(
+            #         image=rgb,
+            #         intrinsics=intrinsics,
+            #         kb_coeffs=kb_coeffs,
+            #     )
+            #     depth = distort_image(
+            #         image=depth,
+            #         intrinsics=intrinsics,
+            #         kb_coeffs=kb_coeffs,
+            #     )
+            #     if opacity is not None:
+            #         opacity = distort_image(
+            #             image=opacity,
+            #             intrinsics=intrinsics,
+            #             kb_coeffs=kb_coeffs,
+            #         )
+            intrinsics = frame_data["cam_infos"]["intrinsics"].cpu().numpy()
+            kb_coeffs = frame_data["cam_infos"]["kb_coeffs"].cpu().numpy().flatten()
+            crop = False
+
+            rgb = distort_image(
+                image=rgb,
+                intrinsics=intrinsics,
+                kb_coeffs=kb_coeffs,
+                camera_model="fisheye" if camera_data.is_fisheye else "pinhole",
+            )
+            depth = distort_image(
+                image=depth,
+                intrinsics=intrinsics,
+                kb_coeffs=kb_coeffs,
+                camera_model="fisheye" if camera_data.is_fisheye else "pinhole",
+            )
+            if opacity is not None:
+                opacity = distort_image(
+                    image=opacity,
                     intrinsics=intrinsics,
                     kb_coeffs=kb_coeffs,
+                    camera_model="fisheye" if camera_data.is_fisheye else "pinhole",
                 )
-                depth = distort_image(
-                    image=depth,
-                    intrinsics=intrinsics,
-                    kb_coeffs=kb_coeffs,
-                )
-                if opacity is not None:
-                    opacity = distort_image(
-                        image=opacity,
-                        intrinsics=intrinsics,
-                        kb_coeffs=kb_coeffs,
-                    )
 
             rgbs.append(rgb)
             depths.append(depth)
