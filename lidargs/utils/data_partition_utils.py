@@ -220,12 +220,10 @@ def judgeWhichBlock(sim_baselidar_to_world_pose, block_id_with_rect, log=None):
 
 def dataPartitionChery(args, single_block_test=True):
     print("[ Info ] start dataPartitionChery")
-    # lidar文件夹下bin文件的个数即为帧数
     lidar_filefolder = os.path.join(args.source_path, "lidar")
     bin_files = [f for f in os.listdir(lidar_filefolder) if f.endswith('.bin')]
     bin_files = sorted(bin_files, key=lambda x: int(x.split('.')[0]))
     print("[ Info ] find {} bin files in {}".format(len(bin_files), lidar_filefolder))
-    #排序后的第一个bin文件名对应的数字作为起始帧
     start_frame = int(bin_files[0].split('.')[0])
     bin_count = len(bin_files)
     
@@ -233,14 +231,14 @@ def dataPartitionChery(args, single_block_test=True):
     all_timestamp = list(range(start_frame, start_frame + bin_count))
     # block_time = {
     #     0: all_timestamp
-    # }   
- 
-    # block_time每三个分为一组
+    # }
+      
+    # 按每3帧分组
     block_time = {}
-    interval = 3
-    for i in range(0, len(all_timestamp), interval):
-        block_id = i // interval
-        block_time[block_id] = all_timestamp[i : i + interval]
+    group_size = 30
+    for i in range(0, len(all_timestamp), group_size):
+        block_id = i // group_size
+        block_time[block_id] = all_timestamp[i:i + group_size]
     block_time_with_extend = block_time
     block_time_without_extend = block_time
     # save json files
