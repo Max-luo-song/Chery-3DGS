@@ -14,3 +14,4 @@ output
 *.pyc
 __pycache__/
 docker/copy/opt/requirements.txt
+.vscode

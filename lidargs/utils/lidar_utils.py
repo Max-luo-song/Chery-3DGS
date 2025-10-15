@@ -84,7 +84,7 @@ def lidar_to_pano_with_intensities(local_points_with_intensities: np.ndarray,
         fov_down = fov - fov_up
 
     # Compute dists to lidar center.
-    if cam_pos != None:
+    if cam_pos is not None:
         dists = np.linalg.norm(local_points-cam_pos, axis=1)
     else:
         dists = np.linalg.norm(local_points, axis=1)
@@ -99,7 +99,7 @@ def lidar_to_pano_with_intensities(local_points_with_intensities: np.ndarray,
     pano = np.zeros((lidar_H, lidar_W))
     intensities = np.zeros((lidar_H, lidar_W))
     mask = np.zeros((lidar_H, lidar_W))
-    for (local_points, dist, local_point_intensity, is_ground, pre_label) in zip(
+    for (local_point, dist, local_point_intensity, is_ground, pre_label) in zip(
             local_points,
             dists,
             local_point_intensities,
@@ -110,7 +110,7 @@ def lidar_to_pano_with_intensities(local_points_with_intensities: np.ndarray,
         if dist >= max_depth:
             continue
 
-        x, y, z = local_points
+        x, y, z = local_point
         beta = np.pi - np.arctan2(y, x)
         c = int(round(beta / (2 * np.pi / lidar_W)))
 
@@ -125,7 +125,7 @@ def lidar_to_pano_with_intensities(local_points_with_intensities: np.ndarray,
                             continue
                     else:
                         if s2b is not None:
-                            tmp = local_points @ (s2b.T)[:3,:3] # 旋转到baselidar系
+                            tmp = local_point @ (s2b.T)[:3,:3] # 旋转到baselidar系
                             new_alpha = np.arctan2(tmp[2], np.sqrt(tmp[0]**2 + tmp[1]**2)) 
                             delta_alpha = new_alpha - alpha
                             if new_alpha<0:
