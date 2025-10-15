@@ -1,8 +1,8 @@
 import os
-import sys
 import numpy as np
-from utils.lidar_utils import lidar_to_pano_with_intensities
 import torch
+from utils.lidar_utils import lidar_to_pano_with_intensities
+import open3d as o3d
 
 class Chery_Dataloader:
     """
@@ -24,7 +24,6 @@ class Chery_Dataloader:
         lidar_filefolder = os.path.join(args.source_path, "lidar")
         lidarpose_filefolder = os.path.join(args.source_path, "lidar_pose")
         bin_files = [f for f in os.listdir(lidar_filefolder) if f.endswith('.bin')]
-        #lidar_filefolder文件夹下的bin文件名是三位数字，按数字排序
         bin_files = sorted(bin_files, key=lambda x: int(x.split('.')[0]))
         print("[ Info ] find {} bin files in {}".format(len(bin_files), lidar_filefolder))
         self.start_frame = train_frame_times[0]
@@ -40,21 +39,20 @@ class Chery_Dataloader:
             1. log_time_stamp
             2. lidar2world
             3. lidar_points
-            4. path {pcd}
+            4. time_stamp
+            5. ring
+            6. lidar_id
+            7. path {pcd}
             """
             if i < self.start_frame: continue
             single_frame_data = {}
             single_frame_data['log_time_stamp'] = i
-            # lidar_pose
+
             lidar_pose_i_path = os.path.join(lidarpose_filefolder, str(i).zfill(3)+'.txt')
             lidar_to_world_current = np.loadtxt(lidar_pose_i_path)
             lidar_to_world = np.linalg.inv(lidar_to_world_start) @ lidar_to_world_current
             single_frame_data['lidar2world'] = lidar_to_world
 
-            # lidar_points
-            # lidar_info = np.fromfile(
-            #     os.path.join(args.source_path, "lidar", str(i).zfill(3)+'.bin'), dtype=np.float32
-            # ).reshape(-1, 7)
             lidar_info = np.fromfile(
                 os.path.join(args.source_path, "lidar", str(i).zfill(3)+'.bin'), dtype=np.float32
             ).reshape(-1, 5)
@@ -66,18 +64,14 @@ class Chery_Dataloader:
             lidar_info = np.concatenate([lidar_info, ring, lidar_id], axis=1) # shape (N, 7)
             # 过滤掉lidar_id不为0的点
             lidar_info = lidar_info[lidar_info[:, 6] == 0]
-            # 过滤掉强度为0的点
-            # lidar_info = lidar_info[lidar_info[:, 3] > 0]
 
             lidar_points = lidar_info[:, :3]  # shape (N, 3)
-            R = lidar_to_world[:3, :3]
-            T = lidar_to_world[:3, 3]
-
-            lidar_points_transformed = (R @ lidar_points.T).T + T  # shape (N, 3)
             lidar_intensity = lidar_info[:, 3:4] / 255.0  # shape (N, 1)
-            lidar_data = np.concatenate([lidar_points_transformed, lidar_intensity], axis=1)  # (N, 4)
-
+            lidar_data = np.concatenate([lidar_points, lidar_intensity], axis=1)  # (N, 4)
             single_frame_data['lidar_points'] = lidar_data  # 存 NumPy array
+            single_frame_data['time_stamp'] = lidar_info[:,4]
+            single_frame_data['ring'] = lidar_info[:,5]
+            single_frame_data['lidar_id'] = lidar_info[:,6]
             pcd_i_path = os.path.join(lidar_filefolder, str(i).zfill(3)+'.bin')
             single_frame_data['path'] = {'pcd': os.path.relpath(pcd_i_path, self.root_path)}
             frames_data.append(single_frame_data)
@@ -118,23 +112,27 @@ class Chery_Dataloader:
 
         self.obj_frames_id = dict()  # 通过obj_id 查询实例出现在哪几帧（列表）(frame id : 0-50)
         self.obj_pcd = dict() # 通过obj_id 查询实例的拼接后的完整的pcd
-        self.obj_o2l = dict() # 通过obj_id 和对应那一帧的frame id查询实例的o2l ， 字典嵌套了一个字典
+        self.obj_o2l = dict() # 通过obj_id 和对应那一帧的frame id查询实例的o2l，字典嵌套了一个字典
 
-        # 拼接所有帧点云作为静态场景
-        pcd_xyzs = []
-        for i in range(len(self.pcds)):
-            if len(self.pcds) == 3 and i == 1: continue # debug时用
-            if len(self.pcds) >= 10 and (i % 10 == 5): continue # 30帧以上时每10帧取9帧
-            pcd = self.pcds[i]      # shape: (N_i, 7)
-            pcd_xyz = pcd[:, :3]    # shape: (N_i, 3)
-            pcd_xyzs.append(pcd_xyz)
 
-        # 拼接所有帧
-        self.static_pcd = np.concatenate(pcd_xyzs, axis=0)  # shape: (total_points, 3)
-        # 保存整个静态pcd到txt文件，用于可视化，文件名args.block_id + static_scene.txt
-        np.savetxt(os.path.join(self.root_path, str(args.block_id) + "_static_scene.txt"), self.static_pcd)
-        # np.savetxt(os.path.join(self.root_path, "static_scene.txt"), self.static_pcd)
-        print("[ Info ] static scene have {} points".format(self.static_pcd.shape[0]))
+        # # 拼接训练帧点云作为静态场景，后续的高斯初始化需要
+        # pcd_xyzs = []
+        # for i in range(0, len(self.pcds)):
+        #     lidar_to_world = self.l2ws[i]
+        #     R = lidar_to_world[:3, :3]
+        #     T = lidar_to_world[:3, 3]
+        #     pcd = self.pcds[i]
+        #     pcd_transformed = (R @ pcd.T).T + T  # shape (N, 3)
+        #     pcd_xyz = pcd_transformed[:, :3]    # shape: (N_i, 3)
+        #     pcd_xyzs.append(pcd_xyz)
+        # self.static_pcd = np.concatenate(pcd_xyzs, axis=0)  # shape: (total_points, 3)
+
+        # # 保存整个静态pcd到txt文件，用于可视化，文件名args.block_id + static_scene.txt
+        # np.savetxt(os.path.join(self.root_path, str(args.block_id) + "_static_scene.txt"), self.static_pcd)
+        # print("[ Info ] static scene have {} points".format(self.static_pcd.shape[0]))
+
+        self.static_pcd = np.loadtxt("/home/not0513/data/orinY/processed/training/20250702_133223_Q2517/static_scene_all_frames.txt")
+
         self.range_views, self.masks = self.load_rangeview(self.H_lidar,self.W_lidar)
 
     def load_rangeview(self, H_lidar, W_lidar):
@@ -187,25 +185,8 @@ class Chery_Dataloader:
             sl2w = l2w @ self.extrinsic # vehicle2wordl @ lidar2vehicle
             l2ws.append(sl2w)
 
-            pcds.append(frame['lidar_points'])
-
-            pcd_path = self.root_path + "/" + frame["path"]["pcd"]
-
-            # 读取bin文件
-            """
-            二进制文件中每个点包含 7 个 float32 字段：
-            x y z intensity timestamp ring lidar_id
-            """
-            # pcd = np.fromfile(pcd_path, dtype=np.float32).reshape((-1,7))
-
-            # 临时修改
-            pcd = np.fromfile(pcd_path, dtype=np.float32).reshape((-1,5))
-            # 增加两列 ring 和 lidar_id，补全为7列，ring全为0，lidar_id全为0
-            ring = np.zeros((pcd.shape[0], 1), dtype=np.float32)
-            lidar_id = np.zeros((pcd.shape[0], 1), dtype=np.float32)
-            pcd = np.concatenate([pcd, ring, lidar_id], axis=1) # shape (N, 7)
-
-            ring_data = pcd[:,5]
+            pcd = frame['lidar_points']
+            ring_data = frame['ring']
             ring_min = np.min(ring_data)
             ring_max = np.max(ring_data)
 
@@ -215,15 +196,11 @@ class Chery_Dataloader:
             self.aabb_min = np.minimum(self.aabb_min, aabb_min)
             self.aabb_max = np.maximum(self.aabb_max, aabb_max)
 
-
             vehicle_to_laser = np.linalg.inv(self.extrinsic)
             sensor_pcd = (np.pad(pcd[...,:3], ((0,0),(0, 1)), constant_values=1) @ vehicle_to_laser.T)[:,:3]      
             pcd[:,:3] = sensor_pcd[:,:3]
+            pcds.append(pcd)
 
-            # if self.judgeLoadtype(): # 判断记录时间戳还是lidar文件名
-            #     timestep = pcd_path.split('/')[-1].split('.')[0]
-            # else:
-            #     timestep = str(frame["log_time_stamp"])
             timestep = str(frame["log_time_stamp"])
             self.timestep_2_frameid.update({timestep : count_ind})
             self.frameid_2_timestep.append(timestep)

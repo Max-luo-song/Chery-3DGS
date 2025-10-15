@@ -126,13 +126,14 @@ def training(gt_dynamic_model, dataset, opt, pipe, dataset_name, testing_iterati
 
             model_id_scene_info[model_id] = GaussianView(gaussians=model_gaussians, scene=model_scene, time_poses=time_poses) 
 
-    ######### TODO 
     test_timestamp = []
-    if len(static_views) == 3:
-        test_timestamp.append(int(static_views[1].image_name))
-    # 大于10帧，每10帧选第5帧作为测试
-    if len(static_views) >= 10:
-        for i in range(5, len(static_views), 10):
+    if static_views is None:
+        print("ERROR: empty static_views")
+        sys.exit(1)
+    if len(static_views) < dataset.test_dataset_interval:
+        test_timestamp.append(int(static_views[0].image_name))
+    else:
+        for i in range(1, len(static_views), 10): #dataset.test_dataset_interval
             test_timestamp.append(int(static_views[i].image_name))
     
     train_views = []
