@@ -121,14 +121,14 @@ class Chery_Dataloader:
         #     lidar_to_world = self.l2ws[i]
         #     R = lidar_to_world[:3, :3]
         #     T = lidar_to_world[:3, 3]
-        #     pcd = self.pcds[i]
+        #     pcd = self.pcds[i][:, :3]
         #     pcd_transformed = (R @ pcd.T).T + T  # shape (N, 3)
         #     pcd_xyz = pcd_transformed[:, :3]    # shape: (N_i, 3)
         #     pcd_xyzs.append(pcd_xyz)
         # self.static_pcd = np.concatenate(pcd_xyzs, axis=0)  # shape: (total_points, 3)
 
         # # 保存整个静态pcd到txt文件，用于可视化，文件名args.block_id + static_scene.txt
-        # np.savetxt(os.path.join(self.root_path, str(args.block_id) + "_static_scene.txt"), self.static_pcd)
+        # np.savetxt(os.path.join(self.root_path, "static_scene_all_frames.txt"), self.static_pcd)
         # print("[ Info ] static scene have {} points".format(self.static_pcd.shape[0]))
 
         self.static_pcd = np.loadtxt("/home/not0513/data/orinY/processed/training/20250702_133223_Q2517/static_scene_all_frames.txt")
