@@ -84,7 +84,7 @@ class ModelParams(ParamGroup):
         self.add_color_dist = True
 
         # test dataset interval
-        self.test_dataset_interval = 30
+        self.test_dataset_interval = 149
         
         super().__init__(parser, "Loading Parameters", sentinel)
 
