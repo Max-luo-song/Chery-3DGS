@@ -152,8 +152,6 @@ def renderComposite(viewpoint_cam, background, pipe, valid_model_info, max_depth
             background,
             max_depth
         )
-        if model_visible_mask.sum() == 0:
-            print("-----error------")
         model_xyz, model_color, model_opacity, model_scaling, model_rot, neural_opacity, mask = (
             generate_neural_gaussians(
                 model_info.model_view,

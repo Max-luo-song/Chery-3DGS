@@ -197,7 +197,6 @@ def training(gt_dynamic_model, dataset, opt, pipe, dataset_name, testing_iterati
             model_gaussian = model_id_scene_info[model_id].gaussians
             model_gaussian.update_learning_rate(iteration)
             model_to_world = camera_to_world_pose @ model_to_camera_pose # for id=0 ,static scene, this is c2w @ w2c
-
             valid_model_info.append(
                 ValidModeInfo(
                     model_id=model_id,
@@ -232,8 +231,8 @@ def training(gt_dynamic_model, dataset, opt, pipe, dataset_name, testing_iterati
         if True:
             render_raydrop = image[1:2,...]
             render_raydrop_mask = torch.where(render_raydrop > 0.5, 1, 0)
-            render_intensity = render_intensity*ray_drop * gt_objmask # 直接使用gt的raydrop mask
-            depth = depth*ray_drop * gt_objmask
+            render_intensity = render_intensity * render_raydrop_mask * gt_objmask
+            depth = depth * render_raydrop_mask * gt_objmask
             mse_loss = torch.nn.MSELoss()
             raydrop_loss = mse_loss(render_raydrop,ray_drop)
         else:
@@ -458,17 +457,18 @@ def train_composite_report(tb_writer, model_args, dataset_name, iteration, stati
             gt_point_with_intensity = pano_to_lidar_with_intensities(gt_depth_numpy[0, :, :],gt_intensity_numpy[0], lidar_K=None, beam_inclinations=scene_view.beam_inclinations.detach().cpu().numpy())            
 
             # 将point_with_intensity和gt_point_with_intensity中的点云坐标是相对于第一帧的
-            # lidar_to_world = np.linalg.inv(lidar_to_world_start) @ lidar_to_world_current
-            # transformed_point_with_intensity = point_with_intensity.copy()
-            # transformed_gt_point_with_intensity = gt_point_with_intensity.copy
-            point_with_intensity[:, :3] = (lidar_to_world_start[:3, :3] @ point_with_intensity[:, :3].T).T + lidar_to_world_start[:3, 3]
-            gt_point_with_intensity[:, :3] = (lidar_to_world_start[:3, :3] @ gt_point_with_intensity[:, :3].T).T + lidar_to_world_start[:3, 3]
+            point_with_intensity[:, :3] = (camera_to_world_pose[:3, :3] @ point_with_intensity[:, :3].T).T + camera_to_world_pose[:3, 3]
+            gt_point_with_intensity[:, :3] = (camera_to_world_pose[:3, :3] @ gt_point_with_intensity[:, :3].T).T + camera_to_world_pose[:3, 3]
 
             save_path = os.path.join(model_id_scene_info[0].scene.model_path, 'render_point_{}'.format(iteration), str(model_args.block_id)) 
             os.makedirs(save_path, exist_ok=True)
             header = "X Y Z Intensity\n"
-            np.savetxt(os.path.join(save_path, str(render_timestamp) + "_render_points.txt"), point_with_intensity, fmt='%.4f',header=header, comments='')
-            np.savetxt(os.path.join(save_path, str(render_timestamp) + "_gt__points.txt"), gt_point_with_intensity, fmt='%.4f',header=header, comments='')
+            render_save_path = os.path.join(save_path, "render")
+            gt_save_path = os.path.join(save_path, "gt")
+            os.makedirs(render_save_path, exist_ok=True)
+            os.makedirs(gt_save_path, exist_ok=True)
+            np.savetxt(os.path.join(render_save_path, str(render_timestamp) + "_render_points.txt"), point_with_intensity, fmt='%.4f',header=header, comments='')
+            np.savetxt(os.path.join(gt_save_path, str(render_timestamp) + "_gt__points.txt"), gt_point_with_intensity, fmt='%.4f',header=header, comments='')
 
         l1_test += l1_loss(render_intensity, gt_intensity)
         psnr_test += psnr(render_intensity, gt_intensity).mean().double()
@@ -546,8 +546,8 @@ if __name__ == "__main__":
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
     parser.add_argument('--warmup', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1000,2000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1000,2000])
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[1000,2000,3000,4000,5000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[1000,2000,3000,4000,5000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
@@ -581,9 +581,11 @@ if __name__ == "__main__":
     if "segment" in args.caseid:
         from scene.Waymo_Dynamic_dataloader import Waymo_Dataloader as GT_Dataloader
     elif "chery" in model_path or "orinY" in model_path:
-        from scene.Chery_Dynamic_dataloader import Chery_Dataloader as GT_Dataloader
+        from scene.chery_dataloader import Chery_Dataloader as GT_Dataloader
     else:
-        from scene.GT_Dynamic_dataloader import GT_Dataloader
+        print("ERROR: Unsupported data format.")
+        logger.info("\nUnsupported data format.")
+        sys.exit(1)
 
     # **dataPartitionSimple**: Divide into a block every 50 frames (simple implementation)
     # **dataPartition** : Divide blocks according to scene scale （You need to adjust the parameters according to the data set）
@@ -595,9 +597,6 @@ if __name__ == "__main__":
     for block_id, train_frame_times in block_info_with_extend.items():
         gt_dynamic_model = GT_Dataloader(model_args, train = True, train_frame_times=train_frame_times)
         model_args.block_id = block_id # update block id
-        print("-----training")
-        print(block_id)
-        print(train_frame_times)
         training(gt_dynamic_model, model_args, op.extract(args), pp.extract(args), dataset,  args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, logger)
     
     # All done

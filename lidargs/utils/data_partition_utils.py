@@ -229,16 +229,16 @@ def dataPartitionChery(args, single_block_test=True):
     
     # block_time即为1:bin_count
     all_timestamp = list(range(start_frame, start_frame + bin_count))
-    # block_time = {
-    #     0: all_timestamp
-    # }
+    block_time = {
+        0: all_timestamp
+    }
       
-    # 按每3帧分组
-    block_time = {}
-    group_size = 30
-    for i in range(0, len(all_timestamp), group_size):
-        block_id = i // group_size
-        block_time[block_id] = all_timestamp[i:i + group_size]
+    # # 按每3帧分组
+    # block_time = {}
+    # group_size = 30
+    # for i in range(0, len(all_timestamp), group_size):
+    #     block_id = i // group_size
+    #     block_time[block_id] = all_timestamp[i:i + group_size]
     block_time_with_extend = block_time
     block_time_without_extend = block_time
     # save json files
