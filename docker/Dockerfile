@@ -40,7 +40,7 @@ RUN bash /opt/downloads/Miniconda3-py39_25.7.0-2-Linux-x86_64.sh -b -u -p /opt/c
     cp /opt/configs/.condarc /opt/conda && conda clean -i && \
     conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
     conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r && \
-    conda install conda-build pysocks -y && conda index /opt/local-conda-ch/main && \
+    conda install conda-build pysocks yapf black -y && conda index /opt/local-conda-ch/main && \
     echo "source /opt/conda/etc/profile.d/conda.sh" >> /etc/profile
 
 RUN conda create -y -n main python=3.9 && source /opt/conda/etc/profile.d/conda.sh && \
