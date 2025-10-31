@@ -1,15 +1,17 @@
 # 参数设置
 ################################################################################
-gpu=-1
+gpu=5
 
-scene_idx="20250702_133223_Q2517"
+scene_idx="20250902_163634_Q3703"
 
-camera_ids=(0 1 2 3 4 5 6 8 9 10 12)  # camera IDs to use, e.g., (0), (0 2 4)
+camera_ids=(0 1 2 3 5 6 9 10 12)  # camera IDs to use, e.g., (0), (0 2 4)
 
 lidar_type="lidar"  # lidar（运动补偿前）/visual（纯视觉）
 
+# config_file="configs/omnire_extended_cam_lidar.yaml"
 config_file="configs/omnire_extended_cam_lidar_wo_depth_loss.yaml"
-dataset_config="qcraft/11cams_${lidar_type}"
+dataset_config="qcraft/9cams_${lidar_type}"
+# extra_config_info="+depth_loss"  # 额外信息，如 depth_loss
 extra_config_info=""  # 额外信息，如 depth_loss
 
 start_timestep=0 # start frame index for training

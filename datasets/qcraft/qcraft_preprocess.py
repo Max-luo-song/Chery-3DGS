@@ -52,6 +52,9 @@ OPENCV2DATASET = np.array(
     ]
 )
 
+MAIN_LIDAR_NAME = "LDR_CENTER"
+# MAIN_LIDAR_NAME = "LDR_FRONT"
+
 
 @dataclass
 class ClipDataCache:
@@ -216,7 +219,10 @@ class QcraftProcessor(object):
                     if cam_name in img_name:
                         cam_idx = QCRAFT_CAMERA_DICT[cam_name]
                         break
-                assert cam_idx is not None, f"Unknown camera in {img_name}"
+                else:
+                    continue
+                    
+                # assert cam_idx is not None, f"Unknown camera in {img_name}"
 
                 img_path = os.path.join(sample_dir, img_name)
                 img_paths.append(img_path)
@@ -265,10 +271,11 @@ class QcraftProcessor(object):
             sample_dir = os.path.join(cache.clip_dir, sample_name)
 
             lidar_names = [
-                lidar_name  # 20250702_133223_Q2517-LDR_FRONT-1751434420.2514-ego.pcd
+                lidar_name # 20250702_133223_Q2517-LDR_FRONT-1751434420.2514-ego.pcd
                 for lidar_name in os.listdir(sample_dir)
-                if lidar_name.endswith(".pcd") and "LDR_FRONT" in lidar_name
+                if lidar_name.endswith(".pcd") and f'-{MAIN_LIDAR_NAME}-' in lidar_name
             ]
+
             lidar_paths = [
                 os.path.join(sample_dir, lidar_name) for lidar_name in lidar_names
             ]
@@ -387,7 +394,7 @@ class QcraftProcessor(object):
 
             for obj_data in labels:
                 obj_type = obj_data["obj_type"]
-                if obj_type == "Person":
+                if obj_type == "Pedestrian":
                     masks_human = self._generate_obj_masks(
                         obj_data,
                         masks_human,
@@ -459,9 +466,9 @@ class QcraftProcessor(object):
 
                 if obj_id not in instances_info:
                     obj_type = obj_data["obj_type"]
-                    if obj_type == "Person":
+                    if obj_type == "Pedestrian":
                         class_name = "Pedestrian"
-                    elif obj_type == "Motorcycle":
+                    elif obj_type in ["Motorcycle", "Bicycle"]:
                         class_name = "Cyclist"
                     else:
                         class_name = "Vehicle"
@@ -533,9 +540,13 @@ class QcraftProcessor(object):
         with open(data_frame_car_info_path, "r") as f:
             data_frame_car_info = json.load(f)
 
-        lidar2ego_raw = data_frame_car_info["lidar_params"][0]["installation"][
-            "extrinsics"
-        ]
+        lidar_params = data_frame_car_info["lidar_params"]
+        lidar2ego_raw = None
+        for param in lidar_params:
+            if param["installation"]["lidar_id"] == MAIN_LIDAR_NAME:
+                lidar2ego_raw = param["installation"]["extrinsics"]
+                break
+
         lidar2ego = pose_to_transform_matrix(
             lidar2ego_raw["x"],
             lidar2ego_raw["y"],
