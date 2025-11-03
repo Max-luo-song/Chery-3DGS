@@ -1,6 +1,6 @@
 # 参数设置
 ################################################################################
-ckpt_path="output/chery_clip_1746752396800/20251007_mclidar+cam0_1_2_3_4_5_6+depth_loss/checkpoint_final.pth"
+ckpt_path="output/chery_clip_1746581703000/20251016_mclidar+cam0_1_2_3_4_5_6+depth_loss/checkpoint_final.pth"
 
 traj_types=(
     # original_traj
@@ -21,8 +21,8 @@ traj_types=(
     # change_lane_3.5m
 )
 
-cam_ids=(0 1 2 3 4 5 6 7 8 9 10)
-downscales=(2 2 2 2 2 2 2 2 2 2 2)
+cam_ids=(0 1 2 3 4 5 6)
+downscales=(2 2 2 2 2 2 2)
 # downscales=(1 1 1 1 1 1 1 1 1 1 1)
 
 fps=10
@@ -32,8 +32,7 @@ render_depth=false
 save_images=true
 generate_lidar_pc=false
 ################################################################################
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source ${SCRIPT_DIR}/utils.sh
+source scripts/utils.sh
 
 export PYTHONPATH=$(pwd)
 
@@ -60,7 +59,7 @@ if [ "$generate_lidar_pc" = true ]; then
     bool_args="$bool_args --generate_lidar_pc"
 fi
 
-CUDA_VISIBLE_DEVICES=${gpu} python tools/render_novel_trajectory.py \
+CUDA_VISIBLE_DEVICES=${gpu} python sim_render/cam/render_novel_trajectory.py \
     --resume_from $ckpt_path \
     --traj_types "${traj_types[@]}" \
     --cam_ids "${cam_ids[@]}" \
