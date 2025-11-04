@@ -456,9 +456,8 @@ def train_composite_report(tb_writer, model_args, dataset_name, iteration, stati
             gt_intensity_numpy = gt_intensity.detach().cpu().numpy()
             gt_point_with_intensity = pano_to_lidar_with_intensities(gt_depth_numpy[0, :, :],gt_intensity_numpy[0], lidar_K=None, beam_inclinations=scene_view.beam_inclinations.detach().cpu().numpy())            
 
-            # 将point_with_intensity和gt_point_with_intensity中的点云坐标是相对于第一帧的
-            point_with_intensity[:, :3] = (camera_to_world_pose[:3, :3] @ point_with_intensity[:, :3].T).T + camera_to_world_pose[:3, 3]
-            gt_point_with_intensity[:, :3] = (camera_to_world_pose[:3, :3] @ gt_point_with_intensity[:, :3].T).T + camera_to_world_pose[:3, 3]
+            # point_with_intensity[:, :3] = (camera_to_world_pose[:3, :3] @ point_with_intensity[:, :3].T).T + camera_to_world_pose[:3, 3]
+            # gt_point_with_intensity[:, :3] = (camera_to_world_pose[:3, :3] @ gt_point_with_intensity[:, :3].T).T + camera_to_world_pose[:3, 3]
 
             save_path = os.path.join(model_id_scene_info[0].scene.model_path, 'render_point_{}'.format(iteration), str(model_args.block_id)) 
             os.makedirs(save_path, exist_ok=True)

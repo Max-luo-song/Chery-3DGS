@@ -48,6 +48,29 @@ def getWorld2View2(R, t, translate=np.array([.0, .0, .0]), scale=1.0):
     Rt = np.linalg.inv(C2W)
     return np.float32(Rt)
 
+def getAsymmetricProjectionMatrix(znear, zfar, left_angle, right_angle, up_angle, down_angle):
+    up    = math.tan(up_angle) * znear
+    down = math.tan(down_angle) * znear  # 注意：tan(-13°) 是负数
+    right  = math.tan(right_angle) * znear
+    left   = math.tan(left_angle) * znear    # 负数
+
+    P = torch.zeros(4, 4)
+
+    # x-axis
+    P[0, 0] = 2 * znear / (right - left)
+    P[0, 2] = (right + left) / (right - left)  # 非零！表示主点偏移
+
+    # y-axis
+    P[1, 1] = 2 * znear / (up - down)
+    P[1, 2] = (up + down) / (up - down)  # 非零！
+
+    # z-axis (OpenGL style, depth in [-1, 1] or [0, 1] depending on convention)
+    P[2, 2] = zfar / (zfar - znear)
+    P[2, 3] = -(zfar * znear) / (zfar - znear)
+    P[3, 2] = 1.0
+
+    return P
+
 def getProjectionMatrix(znear, zfar, fovX, fovY): # TODO 潜在问题 这里当成了对称正交投影 但是真实相机是非对称投影矩阵
     tanHalfFovY = math.tan((fovY / 2)) # cx/fx
     tanHalfFovX = math.tan((fovX / 2)) # cy/fy

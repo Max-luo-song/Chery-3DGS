@@ -74,7 +74,7 @@ class Scene:
         point_cloud_path = os.path.join(self.model_path, str(model_id), str(self.block_id) ,"iteration_{}".format(iteration))
         if not os.path.exists(point_cloud_path):
             os.makedirs(point_cloud_path)
-        # self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
+        self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
         self.gaussians.save_mlp_checkpoints(point_cloud_path, mode = 'unite')
 
     def getTrainCameras(self, scale=1.0):

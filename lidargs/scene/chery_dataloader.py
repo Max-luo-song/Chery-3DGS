@@ -8,12 +8,24 @@ class Chery_Dataloader:
     """
     Load Chery dataset, output as Waymo format
     """
-
-    FOV_UP = 10.0 * 6.28 / 360.0    # 向上10度
-    FOV = 20.0 * 6.28 / 360.0       # 总共20度垂直视场
-    NUM_BEAMS = 128                 # 128线
-    W_LIDAR = 2400                  # 水平分辨率
-    H_LIDAR = 128                   # 垂直分辨率
+    FOV_HORIZONTAL = 120 * torch.pi / 180.0
+    FOV_UP = 7.0 * torch.pi / 180.0     # 向上7度
+    FOV_DOWN = 13.0 * torch.pi / 180.0       # 总共20度垂直视场
+    NUM_BEAMS = 100                 # 128线
+    W_LIDAR = 1200                  # 水平分辨率
+    H_LIDAR = 100                   # 垂直分辨率
+    BEAM_INCLINATIONS = [
+        -13.03, -11.82, -10.84, -10.03, -9.47, -9.07, -8.66, -8.25, -7.88, -7.47,
+        -7.07, -6.66, -6.26, -5.86, -5.45, -5.05, -4.64, -4.55, -4.45, -4.34, 
+        -4.23, -4.14, -4.04, -3.94, -3.83, -3.73, -3.64, -3.53, -3.42, -3.33, 
+        -3.23, -3.13, -3.02, -2.92, -2.83, -2.72, -2.62, -2.52, -2.42, -2.32, 
+        -2.21, -2.12, -2.02, -1.91, -1.81, -1.71, -1.61, -1.51, -1.41, -1.31, 
+        -1.21, -1.11, -1.01, -0.91, -0.81, -0.71, -0.61, -0.51, -0.41, -0.30, 
+        -0.20, -0.10, 0.00, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 
+        0.81, 0.91, 1.00, 1.11, 1.21, 1.31, 1.41, 1.51, 1.61, 1.71, 
+        1.81, 1.91, 2.01, 2.11, 2.21, 2.31, 2.41, 2.52, 2.62, 3.03, 
+        3.43, 3.84, 4.24, 4.65, 5.05, 5.46, 5.87, 6.28, 6.69, 7.09
+    ]
 
     def __init__(self, args, train=True, train_frame_times=None, dtype=np.float32):
         self.train = train
@@ -80,11 +92,11 @@ class Chery_Dataloader:
 
         # 如果没有提供精确的 beam_inclinations，使用常量参数
         fov_up = self.FOV_UP
-        fov = self.FOV
-        fov_down = fov - fov_up
+        fov_down = self.FOV_DOWN
         num_beams = self.NUM_BEAMS
         # 注意这里是顺序是从小到大，即从 -fov_down 到 +fov_up, 而且是弧度制
         self.beam_inclinations = np.linspace(-fov_down, fov_up, num_beams, dtype=np.float32)
+        # self.beam_inclinations = [angle * torch.pi / 180.0 for angle in self.BEAM_INCLINATIONS]
 
         # 假设雷达位置就是自车位置
         R = np.eye(3, dtype=np.float32)
@@ -270,3 +282,12 @@ class Chery_Dataloader:
 
     def get_lidar_res(self):
         return self.W_lidar, self.H_lidar
+
+    def get_fov_horizontal(self):
+        return self.FOV_HORIZONTAL
+
+    def get_fov_up(self):
+        return self.FOV_UP
+
+    def get_fov_down(self):
+        return self.FOV_DOWN

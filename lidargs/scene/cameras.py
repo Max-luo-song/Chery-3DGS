@@ -13,7 +13,7 @@ from cv2 import transform
 import torch
 from torch import nn
 import numpy as np
-from utils.graphics_utils import getWorld2View2, getProjectionMatrix
+from utils.graphics_utils import getWorld2View2, getProjectionMatrix, getAsymmetricProjectionMatrix
 import math
 
 class Camera(nn.Module):
@@ -62,19 +62,16 @@ class Camera(nn.Module):
         z_far = 200.0                  # 最远 200 米
         self.FoVx = fov_x
         self.FoVy = fov_y
-        self.znear = z_near
-        self.zfar = z_far
+        self.up_angle   = math.radians(7.0)
+        self.down_angle = math.radians(-13.0)
+        self.left_angle  = math.radians(-60.0)
+        self.right_angle = math.radians(60.0)
 
         self.world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1).cuda()
-        # z_flip = torch.tensor([
-        #     [1, 0, 0, 0],
-        #     [0, 1, 0, 0],
-        #     [0, 0, -1, 0],  # 反转 Z 轴
-        #     [0, 0, 0, 1]
-        # ], dtype=self.world_view_transform.dtype, device=self.world_view_transform.device)
-        # # 右乘：先进行原始变换，再反转 Z 轴
-        # self.world_view_transform = self.world_view_transform @ z_flip
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
+        # self.projection_matrix = getAsymmetricProjectionMatrix(znear=self.znear, zfar=self.zfar, \
+        #                                                        left_angle=self.left_angle, right_angle=self.right_angle, \
+        #                                                        up_angle=self.up_angle, down_angle=self.down_angle).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
         self.lidar_center = torch.tensor(lidar_center,dtype=torch.float32,device=data_device)
