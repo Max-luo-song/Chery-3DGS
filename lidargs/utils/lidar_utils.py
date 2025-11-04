@@ -115,7 +115,7 @@ def lidar_to_pano_with_intensities(local_points_with_intensities: np.ndarray,
         c = int(round(beta / (2 * np.pi / lidar_W)))
 
         if use_beam_inclinations:
-            alpha = np.arctan2(z, np.sqrt(x**2 + y**2))
+            alpha = np.arctan2(z, np.sqrt(x**2 + y**2 + z**2))
             r = find_closest_label(beam_inclinations, alpha) 
             if is_correction : # 只对地面做个简单的矫正 其他的扫描可能得从运动本身去估计
                 if is_ground : 
