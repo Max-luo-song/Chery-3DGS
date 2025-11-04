@@ -14,7 +14,7 @@ from scene.embedding import Embedding
 from scene.pose_correction import PoseCorrection
 
 
-class GaussianModel(torch.nn.Module):#
+class GaussianModel(torch.nn.Module):  #
     def setup_functions(self):
         def build_covariance_from_scaling_rotation(scaling, scaling_modifier, rotation):
             L = build_scaling_rotation(scaling_modifier * scaling, rotation)
@@ -28,7 +28,6 @@ class GaussianModel(torch.nn.Module):#
         self.opacity_activation = torch.sigmoid
         self.inverse_opacity_activation = inverse_sigmoid
         self.rotation_activation = torch.nn.functional.normalize
-
 
     def __init__(
         self,
@@ -44,13 +43,13 @@ class GaussianModel(torch.nn.Module):#
         add_opacity_dist: bool = False,
         add_cov_dist: bool = False,
         add_color_dist: bool = False,
-        color_channel : int = 1,
+        color_channel: int = 1,
         use_pose_correction: bool = False,
     ):
         super().__init__()
-        self.feat_dim = feat_dim # feature维度
-        self.n_offsets = n_offsets # 每个anchor表达的高斯数量
-        self.voxel_size = voxel_size # 初始化时使用的体素大小
+        self.feat_dim = feat_dim  # feature维度
+        self.n_offsets = n_offsets  # 每个anchor表达的高斯数量
+        self.voxel_size = voxel_size  # 初始化时使用的体素大小
         self.update_depth = update_depth
         self.update_init_factor = update_init_factor
         self.update_hierachy_factor = update_hierachy_factor
@@ -111,27 +110,25 @@ class GaussianModel(torch.nn.Module):#
         # 预测颜色，可选择是否加入距离作为输入
         self.color_dist_dim = 1 if self.add_color_dist else 0
         self.mlp_color = nn.Sequential(
-            nn.Linear(
-                feat_dim + 3 + self.color_dist_dim, feat_dim
-            ),
+            nn.Linear(feat_dim + 3 + self.color_dist_dim, feat_dim),
             nn.ReLU(True),
-            nn.Linear(feat_dim, (self.color_channel-1)*self.n_offsets),
+            nn.Linear(feat_dim, (self.color_channel - 1) * self.n_offsets),
             nn.Sigmoid(),
         ).cuda()
 
         self.mlp_raydrop = nn.Sequential(
-            nn.Linear(feat_dim+3+self.color_dist_dim +self.appearance_dim, feat_dim),
+            nn.Linear(
+                feat_dim + 3 + self.color_dist_dim + self.appearance_dim, feat_dim
+            ),
             nn.ReLU(True),
-            nn.Linear(feat_dim, 1*self.n_offsets), # raydrop channel = 1
-            nn.Sigmoid()
+            nn.Linear(feat_dim, 1 * self.n_offsets),  # raydrop channel = 1
+            nn.Sigmoid(),
         ).cuda()
-
 
     def initPoseCorrection(self, frame_number):
         if self.use_pose_correction:
             self.pose_correction = PoseCorrection(frame_number)
         return
-
 
     def eval(self):
         self.mlp_opacity.eval()
@@ -218,7 +215,7 @@ class GaussianModel(torch.nn.Module):#
     @property
     def get_raydrop_mlp(self):
         return self.mlp_raydrop
-        
+
     @property
     def get_rotation(self):
         return self.rotation_activation(self._rotation)
@@ -244,8 +241,10 @@ class GaussianModel(torch.nn.Module):#
         )
 
     def voxelize_sample(self, data=None, voxel_size=0.01):
-        np.random.shuffle(data) # 打乱数据
-        data = np.unique(np.round(data / voxel_size), axis=0) * voxel_size # np.unique(), 每个体素只保留一个代表点
+        np.random.shuffle(data)  # 打乱数据
+        data = (
+            np.unique(np.round(data / voxel_size), axis=0) * voxel_size
+        )  # np.unique(), 每个体素只保留一个代表点
         return data
 
     def create_from_pcd(self, pcd: BasicPointCloud, spatial_lr_scale: float):
@@ -273,7 +272,9 @@ class GaussianModel(torch.nn.Module):#
         anchors_feat = (
             torch.zeros((fused_point_cloud.shape[0], self.feat_dim)).float().cuda()
         )
-        dist2 = torch.clamp_max(torch.clamp_min(distCUDA2(fused_point_cloud).float().cuda(), 0.0000001), 1.0)
+        dist2 = torch.clamp_max(
+            torch.clamp_min(distCUDA2(fused_point_cloud).float().cuda(), 0.0000001), 1.0
+        )
         # 为什么这里是 repeat 5 次
         scales = torch.log(torch.sqrt(dist2))[..., None].repeat(1, 5)
 
@@ -362,7 +363,11 @@ class GaussianModel(torch.nn.Module):#
                     "lr": training_args.appearance_lr_init,
                     "name": "embedding_appearance",
                 },
-                {'params': self.mlp_raydrop.parameters(), 'lr': training_args.mlp_color_lr_init, "name": "mlp_raydrop"},
+                {
+                    "params": self.mlp_raydrop.parameters(),
+                    "lr": training_args.mlp_color_lr_init,
+                    "name": "mlp_raydrop",
+                },
             ]
         elif self.appearance_dim > 0:
             l = [
@@ -416,7 +421,11 @@ class GaussianModel(torch.nn.Module):#
                     "lr": training_args.appearance_lr_init,
                     "name": "embedding_appearance",
                 },
-                {'params': self.mlp_raydrop.parameters(), 'lr': training_args.mlp_color_lr_init, "name": "mlp_raydrop"},
+                {
+                    "params": self.mlp_raydrop.parameters(),
+                    "lr": training_args.mlp_color_lr_init,
+                    "name": "mlp_raydrop",
+                },
             ]
         else:
             l = [
@@ -465,7 +474,11 @@ class GaussianModel(torch.nn.Module):#
                     "lr": training_args.mlp_color_lr_init,
                     "name": "mlp_color",
                 },
-                {'params': self.mlp_raydrop.parameters(), 'lr': training_args.mlp_color_lr_init, "name": "mlp_raydrop"},
+                {
+                    "params": self.mlp_raydrop.parameters(),
+                    "lr": training_args.mlp_color_lr_init,
+                    "name": "mlp_raydrop",
+                },
             ]
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
@@ -507,7 +520,8 @@ class GaussianModel(torch.nn.Module):#
             lr_init=training_args.mlp_color_lr_init,
             lr_final=training_args.mlp_color_lr_final,
             lr_delay_mult=training_args.mlp_color_lr_delay_mult,
-            max_steps=training_args.mlp_color_lr_max_steps)
+            max_steps=training_args.mlp_color_lr_max_steps,
+        )
 
         if self.use_feat_bank:
             self.mlp_featurebank_scheduler_args = get_expon_lr_func(
@@ -526,7 +540,6 @@ class GaussianModel(torch.nn.Module):#
 
         if self.use_pose_correction:
             self.pose_correction.training_setup()
-        
 
     def update_learning_rate(self, iteration):
         """Learning rate scheduling per step"""
@@ -547,8 +560,12 @@ class GaussianModel(torch.nn.Module):#
                 lr = self.mlp_color_scheduler_args(iteration)
                 param_group["lr"] = lr
             if param_group["name"] == "mlp_raydrop":
-                lr = self.mlp_raydrop_scheduler_args(0) if iteration<3000 else self.mlp_raydrop_scheduler_args(iteration)
-                param_group['lr'] = lr
+                lr = (
+                    self.mlp_raydrop_scheduler_args(0)
+                    if iteration < 3000
+                    else self.mlp_raydrop_scheduler_args(iteration)
+                )
+                param_group["lr"] = lr
             if self.use_feat_bank and param_group["name"] == "mlp_featurebank":
                 lr = self.mlp_featurebank_scheduler_args(iteration)
                 param_group["lr"] = lr
@@ -561,7 +578,6 @@ class GaussianModel(torch.nn.Module):#
 
         if self.use_pose_correction:
             self.pose_correction.training_setup()
-
 
     def construct_list_of_attributes(self):
         l = ["x", "y", "z", "nx", "ny", "nz"]
@@ -668,7 +684,7 @@ class GaussianModel(torch.nn.Module):#
                 np.float32
             )
         if offsets.shape[0] == 0:
-            offsets = np.zeros((0,3,6))
+            offsets = np.zeros((0, 3, 6))
         else:
             offsets = offsets.reshape((offsets.shape[0], 3, -1))
 
@@ -756,7 +772,15 @@ class GaussianModel(torch.nn.Module):#
         return optimizable_tensors
 
     # statis grad information to guide liftting.
-    def training_statis(self, viewspace_point_tensor_grad, opacity, update_filter, offset_selection_mask, anchor_visible_mask, abs_grad_f = 1.0):
+    def training_statis(
+        self,
+        viewspace_point_tensor_grad,
+        opacity,
+        update_filter,
+        offset_selection_mask,
+        anchor_visible_mask,
+        abs_grad_f=1.0,
+    ):
         # update opacity stats
         temp_opacity = opacity.clone().view(-1).detach()
         temp_opacity[temp_opacity < 0] = 0
@@ -779,9 +803,13 @@ class GaussianModel(torch.nn.Module):#
         combined_mask[temp_mask] = update_filter
 
         if viewspace_point_tensor_grad.shape[1] == 4:
-            grad_norm = torch.norm(viewspace_point_tensor_grad[update_filter,2:], dim=-1, keepdim=True)
+            grad_norm = torch.norm(
+                viewspace_point_tensor_grad[update_filter, 2:], dim=-1, keepdim=True
+            )
         else:
-            grad_norm = torch.norm(viewspace_point_tensor_grad[update_filter, :2], dim=-1, keepdim=True)      
+            grad_norm = torch.norm(
+                viewspace_point_tensor_grad[update_filter, :2], dim=-1, keepdim=True
+            )
         self.offset_gradient_accum[combined_mask] += grad_norm
         self.offset_denom[combined_mask] += 1
 
@@ -842,7 +870,7 @@ class GaussianModel(torch.nn.Module):#
         for i in range(self.update_depth):
             # update threshold
             # cur_threshold = threshold * ((self.update_hierachy_factor // 2) ** i)
-            cur_threshold = threshold / (self.update_hierachy_factor ** i + 1e-6)
+            cur_threshold = threshold / (self.update_hierachy_factor**i + 1e-6)
             # mask from grad threshold
             candidate_mask = grads >= cur_threshold
             candidate_mask = torch.logical_and(candidate_mask, offset_mask)
@@ -865,9 +893,9 @@ class GaussianModel(torch.nn.Module):#
                     dim=0,
                 )
 
-            all_xyz = self._anchor.unsqueeze(
-                dim=1
-            ) + self._offset * self.get_scaling[:, :3].unsqueeze(dim=1)
+            all_xyz = self._anchor.unsqueeze(dim=1) + self._offset * self.get_scaling[
+                :, :3
+            ].unsqueeze(dim=1)
 
             # assert self.update_init_factor // (self.update_hierachy_factor**i) > 0
             # size_factor = min(self.update_init_factor // (self.update_hierachy_factor**i), 1)
@@ -995,8 +1023,14 @@ class GaussianModel(torch.nn.Module):#
                 self._offset = optimizable_tensors["offset"]
                 self._opacity = optimizable_tensors["opacity"]
 
-
-    def adjust_anchor(self, check_interval=100, success_threshold=0.8, grad_threshold=0.0001, min_opacity=0.005, abs_grad_f = 1.0):
+    def adjust_anchor(
+        self,
+        check_interval=100,
+        success_threshold=0.8,
+        grad_threshold=0.0001,
+        min_opacity=0.005,
+        abs_grad_f=1.0,
+    ):
         # # adding anchors
         grads = self.offset_gradient_accum / self.offset_denom  # [N*k, 1]
         grads[grads.isnan()] = 0.0
@@ -1074,9 +1108,9 @@ class GaussianModel(torch.nn.Module):#
 
         self.max_radii2D = torch.zeros((self._anchor.shape[0]), device="cuda")
 
-    def save_mlp_checkpoints(self, path, mode = 'split'):
+    def save_mlp_checkpoints(self, path, mode="split"):
         mkdir_p(os.path.dirname(path))
-        if mode == 'split':
+        if mode == "split":
             self.mlp_opacity.eval()
             opacity_mlp = torch.jit.trace(
                 self.mlp_opacity,
@@ -1106,8 +1140,15 @@ class GaussianModel(torch.nn.Module):#
             self.mlp_color.train()
 
             self.mlp_raydrop.eval()
-            raydrop_mlp = torch.jit.trace(self.mlp_raydrop, (torch.rand(1, self.feat_dim+3+self.color_dist_dim+self.appearance_dim).cuda()))
-            raydrop_mlp.save(os.path.join(path, 'raydrop_mlp.pt'))
+            raydrop_mlp = torch.jit.trace(
+                self.mlp_raydrop,
+                (
+                    torch.rand(
+                        1, self.feat_dim + 3 + self.color_dist_dim + self.appearance_dim
+                    ).cuda()
+                ),
+            )
+            raydrop_mlp.save(os.path.join(path, "raydrop_mlp.pt"))
             self.mlp_raydrop.train()
 
             if self.use_feat_bank:
@@ -1126,47 +1167,57 @@ class GaussianModel(torch.nn.Module):#
                 )
                 emd.save(os.path.join(path, "embedding_appearance.pt"))
                 self.embedding_appearance.train()
-            
+
             if self.use_pose_correction:
                 self.pose_correction.save_state_dict(path)
 
-        elif mode == 'unite':
+        elif mode == "unite":
             if self.use_feat_bank:
-                torch.save({
-                    'opacity_mlp': self.mlp_opacity.state_dict(),
-                    'cov_mlp': self.mlp_cov.state_dict(),
-                    'color_mlp': self.mlp_color.state_dict(),
-                    'raydrop_mlp': self.mlp_raydrop.state_dict(),
-                    'feature_bank_mlp': self.mlp_feature_bank.state_dict(),
-                    'appearance': self.embedding_appearance.state_dict()
-                    }, os.path.join(path, 'checkpoints.pth'))
+                torch.save(
+                    {
+                        "opacity_mlp": self.mlp_opacity.state_dict(),
+                        "cov_mlp": self.mlp_cov.state_dict(),
+                        "color_mlp": self.mlp_color.state_dict(),
+                        "raydrop_mlp": self.mlp_raydrop.state_dict(),
+                        "feature_bank_mlp": self.mlp_feature_bank.state_dict(),
+                        "appearance": self.embedding_appearance.state_dict(),
+                    },
+                    os.path.join(path, "checkpoints.pth"),
+                )
             elif self.appearance_dim > 0:
-                torch.save({
-                    'opacity_mlp': self.mlp_opacity.state_dict(),
-                    'cov_mlp': self.mlp_cov.state_dict(),
-                    'color_mlp': self.mlp_color.state_dict(),
-                    'raydrop_mlp': self.mlp_raydrop.state_dict(),
-                    'appearance': self.embedding_appearance.state_dict()
-                    }, os.path.join(path, 'checkpoints.pth'))
+                torch.save(
+                    {
+                        "opacity_mlp": self.mlp_opacity.state_dict(),
+                        "cov_mlp": self.mlp_cov.state_dict(),
+                        "color_mlp": self.mlp_color.state_dict(),
+                        "raydrop_mlp": self.mlp_raydrop.state_dict(),
+                        "appearance": self.embedding_appearance.state_dict(),
+                    },
+                    os.path.join(path, "checkpoints.pth"),
+                )
             else:
-                torch.save({
-                    'opacity_mlp': self.mlp_opacity.state_dict(),
-                    'cov_mlp': self.mlp_cov.state_dict(),
-                    'color_mlp': self.mlp_color.state_dict(),
-                    'raydrop_mlp': self.mlp_raydrop.state_dict(),
-                    }, os.path.join(path, 'checkpoints.pth'))
+                torch.save(
+                    {
+                        "opacity_mlp": self.mlp_opacity.state_dict(),
+                        "cov_mlp": self.mlp_cov.state_dict(),
+                        "color_mlp": self.mlp_color.state_dict(),
+                        "raydrop_mlp": self.mlp_raydrop.state_dict(),
+                    },
+                    os.path.join(path, "checkpoints.pth"),
+                )
         else:
             raise NotImplementedError
 
-
-    def load_mlp_checkpoints(self, path, mode = 'split'):
-        if mode == 'split':
+    def load_mlp_checkpoints(self, path, mode="split"):
+        if mode == "split":
             self.mlp_opacity = torch.jit.load(
                 os.path.join(path, "opacity_mlp.pt")
             ).cuda()
             self.mlp_cov = torch.jit.load(os.path.join(path, "cov_mlp.pt")).cuda()
             self.mlp_color = torch.jit.load(os.path.join(path, "color_mlp.pt")).cuda()
-            self.mlp_raydrop = torch.jit.load(os.path.join(path, 'raydrop_mlp.pt')).cuda()
+            self.mlp_raydrop = torch.jit.load(
+                os.path.join(path, "raydrop_mlp.pt")
+            ).cuda()
             if self.use_feat_bank:
                 self.mlp_feature_bank = torch.jit.load(
                     os.path.join(path, "feature_bank_mlp.pt")
@@ -1175,17 +1226,17 @@ class GaussianModel(torch.nn.Module):#
                 self.embedding_appearance = torch.jit.load(
                     os.path.join(path, "embedding_appearance.pt")
                 ).cuda()
-        elif mode == 'unite':
-            checkpoint = torch.load(os.path.join(path, 'checkpoints.pth'))
-            self.mlp_opacity.load_state_dict(checkpoint['opacity_mlp'])
-            self.mlp_cov.load_state_dict(checkpoint['cov_mlp'])
-            self.mlp_color.load_state_dict(checkpoint['color_mlp'])
-            self.mlp_raydrop.load_state_dict(checkpoint['raydrop_mlp'])
+        elif mode == "unite":
+            checkpoint = torch.load(os.path.join(path, "checkpoints.pth"))
+            self.mlp_opacity.load_state_dict(checkpoint["opacity_mlp"])
+            self.mlp_cov.load_state_dict(checkpoint["cov_mlp"])
+            self.mlp_color.load_state_dict(checkpoint["color_mlp"])
+            self.mlp_raydrop.load_state_dict(checkpoint["raydrop_mlp"])
             if self.use_feat_bank:
-                self.mlp_feature_bank.load_state_dict(checkpoint['feature_bank_mlp'])
+                self.mlp_feature_bank.load_state_dict(checkpoint["feature_bank_mlp"])
             if self.appearance_dim > 0:
-                self.embedding_appearance.load_state_dict(checkpoint['appearance'])
+                self.embedding_appearance.load_state_dict(checkpoint["appearance"])
         else:
             raise NotImplementedError
-            
+
         self.train()
