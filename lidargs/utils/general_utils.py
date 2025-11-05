@@ -3,7 +3,7 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
 #
 # For inquiries contact  george.drettakis@inria.fr
@@ -16,8 +16,10 @@ import numpy as np
 import random
 import os
 
+
 def inverse_sigmoid(x):
-    return torch.log(x/(1-x))
+    return torch.log(x / (1 - x))
+
 
 def PILtoTorch(pil_image, resolution):
     resized_image_PIL = pil_image.resize(resolution)
@@ -26,6 +28,7 @@ def PILtoTorch(pil_image, resolution):
         return resized_image.permute(2, 0, 1)
     else:
         return resized_image.unsqueeze(dim=-1).permute(2, 0, 1)
+
 
 def get_expon_lr_func(
     lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
@@ -62,6 +65,7 @@ def get_expon_lr_func(
 
     return helper
 
+
 def strip_lowerdiag(L):
     uncertainty = torch.zeros((L.shape[0], 6), dtype=torch.float, device="cuda")
 
@@ -73,42 +77,48 @@ def strip_lowerdiag(L):
     uncertainty[:, 5] = L[:, 2, 2]
     return uncertainty
 
+
 def strip_symmetric(sym):
     return strip_lowerdiag(sym)
 
+
 def build_rotation(r):
-    norm = torch.sqrt(r[:,0]*r[:,0] + r[:,1]*r[:,1] + r[:,2]*r[:,2] + r[:,3]*r[:,3])
+    norm = torch.sqrt(
+        r[:, 0] * r[:, 0] + r[:, 1] * r[:, 1] + r[:, 2] * r[:, 2] + r[:, 3] * r[:, 3]
+    )
 
     q = r / norm[:, None]
 
-    R = torch.zeros((q.size(0), 3, 3), device='cuda')
+    R = torch.zeros((q.size(0), 3, 3), device="cuda")
 
     r = q[:, 0]
     x = q[:, 1]
     y = q[:, 2]
     z = q[:, 3]
 
-    R[:, 0, 0] = 1 - 2 * (y*y + z*z)
-    R[:, 0, 1] = 2 * (x*y - r*z)
-    R[:, 0, 2] = 2 * (x*z + r*y)
-    R[:, 1, 0] = 2 * (x*y + r*z)
-    R[:, 1, 1] = 1 - 2 * (x*x + z*z)
-    R[:, 1, 2] = 2 * (y*z - r*x)
-    R[:, 2, 0] = 2 * (x*z - r*y)
-    R[:, 2, 1] = 2 * (y*z + r*x)
-    R[:, 2, 2] = 1 - 2 * (x*x + y*y)
+    R[:, 0, 0] = 1 - 2 * (y * y + z * z)
+    R[:, 0, 1] = 2 * (x * y - r * z)
+    R[:, 0, 2] = 2 * (x * z + r * y)
+    R[:, 1, 0] = 2 * (x * y + r * z)
+    R[:, 1, 1] = 1 - 2 * (x * x + z * z)
+    R[:, 1, 2] = 2 * (y * z - r * x)
+    R[:, 2, 0] = 2 * (x * z - r * y)
+    R[:, 2, 1] = 2 * (y * z + r * x)
+    R[:, 2, 2] = 1 - 2 * (x * x + y * y)
     return R
+
 
 def build_scaling_rotation(s, r):
     L = torch.zeros((s.shape[0], 3, 3), dtype=torch.float, device="cuda")
     R = build_rotation(r)
 
-    L[:,0,0] = s[:,0]
-    L[:,1,1] = s[:,1]
-    L[:,2,2] = s[:,2]
+    L[:, 0, 0] = s[:, 0]
+    L[:, 1, 1] = s[:, 1]
+    L[:, 2, 2] = s[:, 2]
 
     L = R @ L
     return L
+
 
 def quaternionRawMultiply(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     aw, ax, ay, az = torch.unbind(a, -1)
@@ -118,15 +128,16 @@ def quaternionRawMultiply(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     oy = aw * by - ax * bz + ay * bw + az * bx
     oz = aw * bz + ax * by - ay * bx + az * bw
     return torch.stack((ow, ox, oy, oz), -1)
-    
+
+
 def rotation_matrix_to_quaternion(R: torch.Tensor) -> torch.Tensor:
     """
     Convert a rotation matrix to a quaternion.
-    
+
     Parameters:
-    R (torch.Tensor): A rotation matrix of shape (3, 3) or 
+    R (torch.Tensor): A rotation matrix of shape (3, 3) or
                      a batch of rotation matrices of shape (N, 3, 3).
-    
+
     Returns:
     torch.Tensor: A quaternion of shape (4,) or a batch of quaternions of shape (N, 4).
     """
@@ -134,7 +145,9 @@ def rotation_matrix_to_quaternion(R: torch.Tensor) -> torch.Tensor:
     if R.dim() == 2:  # 单个旋转矩阵
         R = R.unsqueeze(0)  # 增加一个批量维度
     elif R.dim() != 3 or R.size(1) != 3 or R.size(2) != 3:
-        raise ValueError("Input should be a single rotation matrix or a batch of rotation matrices.")
+        raise ValueError(
+            "Input should be a single rotation matrix or a batch of rotation matrices."
+        )
 
     # 提取旋转矩阵元素
     r00, r01, r02 = R[:, 0, 0], R[:, 0, 1], R[:, 0, 2]
@@ -146,7 +159,7 @@ def rotation_matrix_to_quaternion(R: torch.Tensor) -> torch.Tensor:
     x = (r21 - r12) / (4 * w)
     y = (r02 - r20) / (4 * w)
     z = (r10 - r01) / (4 * w)
-    
+
     # 处理 w 为 0 的特殊情况
     w = torch.where(w == 0, torch.zeros_like(w), w)  # 防止分母为零
     x = torch.where(w == 0, torch.sqrt(1 + r00 - r11 - r22) / 2, x)
@@ -159,6 +172,7 @@ def rotation_matrix_to_quaternion(R: torch.Tensor) -> torch.Tensor:
 
 def safe_state(silent):
     old_f = sys.stdout
+
     class F:
         def __init__(self, silent):
             self.silent = silent
@@ -166,7 +180,14 @@ def safe_state(silent):
         def write(self, x):
             if not self.silent:
                 if x.endswith("\n"):
-                    old_f.write(x.replace("\n", " [{}]\n".format(str(datetime.now().strftime("%d/%m %H:%M:%S")))))
+                    old_f.write(
+                        x.replace(
+                            "\n",
+                            " [{}]\n".format(
+                                str(datetime.now().strftime("%d/%m %H:%M:%S"))
+                            ),
+                        )
+                    )
                 else:
                     old_f.write(x)
 
@@ -177,18 +198,20 @@ def safe_state(silent):
 
     seed = 42
     random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.cuda.set_device(torch.device("cuda:0"))
 
-def colormap(img, cmap='jet'):
+
+def colormap(img, cmap="jet"):
     import matplotlib.pyplot as plt
+
     W, H = img.shape[:2]
     dpi = 300
-    fig, ax = plt.subplots(1, figsize=(H/dpi, W/dpi), dpi=dpi)
+    fig, ax = plt.subplots(1, figsize=(H / dpi, W / dpi), dpi=dpi)
     im = ax.imshow(img, cmap=cmap)
     ax.set_axis_off()
     fig.colorbar(im, ax=ax)
@@ -196,15 +219,18 @@ def colormap(img, cmap='jet'):
     fig.canvas.draw()
     data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
     data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-    img = torch.from_numpy(data / 255.).float().permute(2,0,1)
+    img = torch.from_numpy(data / 255.0).float().permute(2, 0, 1)
     # img = torch.from_numpy(data).float()
     plt.close()
     return img
-def gradcolormap(img, cmap='jet'):
+
+
+def gradcolormap(img, cmap="jet"):
     import matplotlib.pyplot as plt
+
     W, H = img.shape[:2]
     dpi = 300
-    fig, ax = plt.subplots(1, figsize=(H/dpi, W/dpi), dpi=dpi)
+    fig, ax = plt.subplots(1, figsize=(H / dpi, W / dpi), dpi=dpi)
     im = ax.imshow(img, cmap=cmap)
     ax.set_axis_off()
     fig.colorbar(im, ax=ax)
