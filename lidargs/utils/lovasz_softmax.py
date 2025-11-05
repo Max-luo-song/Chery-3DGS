@@ -11,6 +11,7 @@ furnished to do so, subject to the following conditions:
 The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
 """
+
 import torch
 import torch.nn as nn
 from torch.autograd import Variable
@@ -36,8 +37,8 @@ def mean(l, ignore_nan=False, empty=0):
         n = 1
         acc = next(l)
     except StopIteration:
-        if empty == 'raise':
-            raise ValueError('Empty mean')
+        if empty == "raise":
+            raise ValueError("Empty mean")
         return empty
     for n, v in enumerate(l, 2):
         acc += v
@@ -55,7 +56,7 @@ def lovasz_grad(gt_sorted):
     gts = gt_sorted.sum()
     intersection = gts - gt_sorted.float().cumsum(0)
     union = gts + (1 - gt_sorted).float().cumsum(0)
-    jaccard = 1. - intersection / union
+    jaccard = 1.0 - intersection / union
     if p > 1:  # cover 1-pixel case
         jaccard[1:p] = jaccard[1:p] - jaccard[0:-1]
     return jaccard
@@ -69,14 +70,14 @@ def lovasz_softmax_flat(probas, labels):
     """
     if probas.numel() == 0:
         # only void pixels, the gradients should be 0
-        return probas * 0.
-    C = probas.size(1) # number of classes
+        return probas * 0.0
+    C = probas.size(1)  # number of classes
     assert C > 1
     class_to_sum = list(range(C))
     losses = []
     for c in class_to_sum:
         fg = (labels == c).float()  # foreground for class c
-        if (fg.sum() == 0):
+        if fg.sum() == 0:
             continue
         class_pred = probas[:, c]
         errors = (Variable(fg) - class_pred).abs()
@@ -85,6 +86,7 @@ def lovasz_softmax_flat(probas, labels):
         fg_sorted = fg[perm]
         losses.append(torch.dot(errors_sorted, Variable(lovasz_grad(fg_sorted))))
     return mean(losses)
+
 
 class Lovasz_softmax(nn.Module):
 

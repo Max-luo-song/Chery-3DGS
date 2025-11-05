@@ -6,14 +6,17 @@
 # under the terms of the LICENSE and LICENSE_gaussian_splatting.md files.
 #
 import os
+import sys
 import random
 import numpy as np
 import torch
 import torch.nn.functional as F
 import lpips
 from skimage.metrics import structural_similarity
-from chamfer.chamfer3D.dist_chamfer_3D import chamfer_3DDist
-from chamfer.fscore import fscore
+
+sys.path.append("/scene_reconstruction/third_party/")
+from chamfer3D.dist_chamfer_3D import chamfer_3DDist
+from chamfer3D.fscore import fscore
 
 
 class PSNRMeter:
@@ -141,7 +144,7 @@ class DepthMeter:
         self.V = []
         self.N = 0
         self.scale = scale
-        self.lpips_fn = lpips.LPIPS(net='alex').eval()
+        self.lpips_fn = lpips.LPIPS(net="alex").eval()
 
     def clear(self):
         self.V = []
@@ -171,7 +174,11 @@ class DepthMeter:
         self.N += 1
 
     def compute_depth_errors(
-            self, gt, pred, min_depth=1e-6, max_depth=80,
+        self,
+        gt,
+        pred,
+        min_depth=1e-6,
+        max_depth=80,
     ):
         pred[pred < min_depth] = min_depth
         pred[pred > max_depth] = max_depth
@@ -184,8 +191,11 @@ class DepthMeter:
         medae = np.median(np.abs(gt - pred))
 
         if gt.shape[-2] >= 32:
-            lpips_loss = self.lpips_fn(torch.from_numpy(pred).squeeze(0),
-                                       torch.from_numpy(gt).squeeze(0), normalize=True).item()
+            lpips_loss = self.lpips_fn(
+                torch.from_numpy(pred).squeeze(0),
+                torch.from_numpy(gt).squeeze(0),
+                normalize=True,
+            ).item()
         else:
             lpips_loss = 1
 
@@ -193,7 +203,7 @@ class DepthMeter:
             pred.squeeze(0), gt.squeeze(0), data_range=np.max(gt) - np.min(gt)
         )
 
-        psnr = 10 * np.log10(max_depth ** 2 / np.mean((pred - gt) ** 2))
+        psnr = 10 * np.log10(max_depth**2 / np.mean((pred - gt) ** 2))
 
         return rmse, medae, lpips_loss, ssim, psnr
 
@@ -293,14 +303,25 @@ class PointsMeter:
         # TODO: 确认下这行到底要不要
         range_image[range_image > self.far] = 0  # self.far
         panorama_height, panorama_width = range_image.shape[-2:]
-        theta, phi = torch.meshgrid(torch.arange(panorama_height, device=range_image.device),
-                                    torch.arange(panorama_width, device=range_image.device), indexing="ij")
+        theta, phi = torch.meshgrid(
+            torch.arange(panorama_height, device=range_image.device),
+            torch.arange(panorama_width, device=range_image.device),
+            indexing="ij",
+        )
 
         vertical_degree_range = self.vfov[1] - self.vfov[0]
-        theta = (90 - self.vfov[1] + theta / panorama_height * vertical_degree_range) * torch.pi / 180
+        theta = (
+            (90 - self.vfov[1] + theta / panorama_height * vertical_degree_range)
+            * torch.pi
+            / 180
+        )
 
         horizontal_degree_range = self.hfov[1] - self.hfov[0]
-        phi = (self.hfov[0] + phi / panorama_width * horizontal_degree_range) * torch.pi / 180
+        phi = (
+            (self.hfov[0] + phi / panorama_width * horizontal_degree_range)
+            * torch.pi
+            / 180
+        )
 
         dx = torch.sin(theta) * torch.sin(phi)
         dz = torch.sin(theta) * torch.cos(phi)
@@ -409,7 +430,9 @@ class RaydropMeter:
         return np.array(self.V).mean(0)
 
     def write(self, writer, global_step, prefix="", suffix=""):
-        writer.add_scalar(os.path.join(prefix, "raydrop error"), self.measure()[0], global_step)
+        writer.add_scalar(
+            os.path.join(prefix, "raydrop error"), self.measure()[0], global_step
+        )
 
     def report(self):
         return f"Rdrop_error (RMSE, Acc, F1) = {self.measure()}"
@@ -420,7 +443,7 @@ class IntensityMeter:
         self.V = []
         self.N = 0
         self.scale = scale
-        self.lpips_fn = lpips.LPIPS(net='alex').eval()
+        self.lpips_fn = lpips.LPIPS(net="alex").eval()
 
     def clear(self):
         self.V = []
@@ -450,7 +473,11 @@ class IntensityMeter:
         self.N += 1
 
     def compute_intensity_errors(
-            self, gt, pred, min_intensity=1e-6, max_intensity=1.0,
+        self,
+        gt,
+        pred,
+        min_intensity=1e-6,
+        max_intensity=1.0,
     ):
         pred[pred < min_intensity] = min_intensity
         pred[pred > max_intensity] = max_intensity
@@ -463,8 +490,11 @@ class IntensityMeter:
         medae = np.median(np.abs(gt - pred))
 
         if gt.shape[-2] >= 32:
-            lpips_loss = self.lpips_fn(torch.from_numpy(pred).squeeze(0),
-                                       torch.from_numpy(gt).squeeze(0), normalize=True).item()
+            lpips_loss = self.lpips_fn(
+                torch.from_numpy(pred).squeeze(0),
+                torch.from_numpy(gt).squeeze(0),
+                normalize=True,
+            ).item()
         else:
             lpips_loss = 1
 
@@ -472,7 +502,7 @@ class IntensityMeter:
             pred.squeeze(0), gt.squeeze(0), data_range=np.max(gt) - np.min(gt)
         )
 
-        psnr = 10 * np.log10(max_intensity ** 2 / np.mean((pred - gt) ** 2))
+        psnr = 10 * np.log10(max_intensity**2 / np.mean((pred - gt) ** 2))
 
         return rmse, medae, lpips_loss, ssim, psnr
 
@@ -482,7 +512,9 @@ class IntensityMeter:
 
     def write(self, writer, global_step, prefix="", suffix=""):
         writer.add_scalar(
-            os.path.join(prefix, f"intensity error{suffix}"), self.measure()[0], global_step
+            os.path.join(prefix, f"intensity error{suffix}"),
+            self.measure()[0],
+            global_step,
         )
 
     def report(self):
