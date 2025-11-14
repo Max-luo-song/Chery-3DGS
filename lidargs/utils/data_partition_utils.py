@@ -268,7 +268,7 @@ def dataPartitionChery(args, single_block_test=True):
     bin_count = len(bin_files)
 
     all_timestamp = list(range(start_frame, start_frame + bin_count))
-    block_time = {0: all_timestamp}
+    block_time = {0: all_timestamp[0:100]}
 
     block_time_with_extend = block_time
     block_time_without_extend = block_time
