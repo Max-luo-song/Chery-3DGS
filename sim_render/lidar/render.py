@@ -1,6 +1,5 @@
 import os
 import torch
-
 import numpy as np
 import sys
 import subprocess
@@ -66,6 +65,12 @@ class ValidModeInfo(NamedTuple):
     need_train: bool
 
 
+class EditObjInfo(NamedTuple):
+    delete_obj_ids: list
+    obj_id_offset_pairs: list
+    add_id_path_pairs: list
+
+
 def render_set(
     gt_dynamic_model,
     dataset,
@@ -77,7 +82,6 @@ def render_set(
     pipeline,
     background,
     insert_objs,
-    insert_dynamic_obj=False,
 ):
     path_name = dataset.model_path.split("/")
     render_path = os.path.join(dataset.model_path, "renders")
@@ -87,7 +91,12 @@ def render_set(
 
     name_list = []
     per_view_dict = {}
-    t_list = []
+    t_list = []  # 存储每帧渲染时间
+    total_frames = len(views)  # 总渲染帧数
+
+    # 记录总渲染开始时间
+    total_render_start = time.time()
+
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
 
         render_timestamp = view.image_name
@@ -128,8 +137,13 @@ def render_set(
         )
         torch.cuda.synchronize()
         t1 = time.time()
-
-        t_list.append(t1 - t0)
+        # 输出当前进程占用的显存（单位：MB）
+        mem_allocated = torch.cuda.memory_allocated() / 1024 / 1024
+        mem_reserved = torch.cuda.memory_reserved() / 1024 / 1024
+        print(
+            f"[GPU] 当前帧显存占用: allocated={mem_allocated:.2f} MB, reserved={mem_reserved:.2f} MB"
+        )
+        t_list.append(t1 - t0)  # 记录单帧渲染时间
 
         rendering = render_pkg["render"]
         render_intensity = rendering[0:1, ...]
@@ -195,21 +209,42 @@ def render_set(
             gt_point_with_intensity,
         )
 
+    # 计算总渲染时间
+    total_render_time = time.time() - total_render_start
+
+    # 计算帧率 (FPS = 总帧数 / 总时间)
+    fps = total_frames / total_render_time if total_render_time > 0 else 0
+
+    # 打印帧率信息
+    print(f"\n渲染完成:")
+    print(f"总渲染帧数: {total_frames}")
+    print(f"总渲染时间: {total_render_time:.4f} 秒")
+    print(f"平均帧率 (FPS): {fps:.4f}")
+
+    # 计算单帧平均渲染时间
+    if t_list:
+        avg_frame_time = sum(t_list) / len(t_list)
+        print(f"单帧平均渲染时间: {avg_frame_time:.4f} 秒")
+
 
 def render_sets(
     gt_dynamic_model,
     dataset: ModelParams,
     iteration: int,
     pipeline: PipelineParams,
-    insert_static_obj: bool,
-    insert_dynamic_obj: bool,
+    edit_obj_info,
     insert_objs=None,
-    obj_type=None,
+    obj_types=None,
 ):
     model_id_list = [0]
     if gt_dynamic_model.get_dynamic_obj_id_list() is not None:
         model_id_list.extend(gt_dynamic_model.get_dynamic_obj_id_list())
     print("model_id_list ", model_id_list)
+    if edit_obj_info is not None:
+        for delete_id in edit_obj_info.delete_obj_ids:
+            if delete_id in model_id_list:
+                model_id_list.remove(delete_id)
+        print("After deletion, model_id_list ", model_id_list)
 
     with torch.no_grad():
         static_views = None
@@ -260,7 +295,23 @@ def render_sets(
                         valid_mask=view.img_mask,
                         gt_mask=view.original_image,
                     )
-
+                transform_R = torch.eye(
+                    3,
+                    device=model_gaussians._anchor.device,
+                    dtype=model_gaussians._anchor.dtype,
+                )
+                if edit_obj_info is not None:
+                    for move_pair in edit_obj_info.obj_id_offset_pairs:
+                        if move_pair[0] == model_id:
+                            transform_T = torch.tensor(
+                                move_pair[1],
+                                device=model_gaussians._anchor.device,
+                                dtype=model_gaussians._anchor.dtype,
+                            )
+                            new_anchor = (
+                                model_gaussians._anchor @ transform_R.T
+                            ) + transform_T.reshape(1, 3)
+                            model_gaussians._anchor.data.copy_(new_anchor)
                 model_id_scene_info[model_id] = GaussianView(
                     gaussians=model_gaussians, scene=model_scene, time_poses=time_poses
                 )
@@ -308,14 +359,19 @@ if __name__ == "__main__":
     pipeline = PipelineParams(parser)
     parser.add_argument("--iteration", default=-1, type=int)
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--insert_static_obj", action="store_true")
-    parser.add_argument("--insert_dynamic_obj", action="store_true")
-    parser.add_argument("--blockinfo", type=str, default=None)
     parser.add_argument("--test_frames", nargs="+", type=int, default=[])
-    parser.add_argument("--test_poses", type=str, default=None)
+    parser.add_argument("--edit_json", type=str, default=None)
     args = parser.parse_args(sys.argv[1:])
-    if args.test_frames is None and args.test_poses is None:
-        print("Please set test_frames or test_poses_file")
+
+    # 解析json文件
+    if args.edit_json is not None:
+        with open(args.edit_json, "r") as f:
+            edit_args = json.load(f)
+        for key, value in edit_args.items():
+            print(f"Setting {key} to {value} from {args.edit_json}")
+            setattr(args, key, value)
+    if args.test_frames is None and args.novel_poses is None:
+        print("Please set test_frames or novel_poses in edit_config.json")
         sys.exit(1)
     print("Rendering " + args.model_path)
 
@@ -330,19 +386,32 @@ if __name__ == "__main__":
         logger.info("\nUnsupported data format.")
         sys.exit(1)
 
-    block_id = 0
-    train_frame_times = args.test_frames
+    train_frame_times = []
+    pose_offsets = []
+    if args.test_frames is not None:
+        train_frame_times = args.test_frames
+    else:
+        for item in args.novel_poses:
+            train_frame_times.append(item["frame_id"])
+            pose_offsets.append(item["position_offset"])
     gt_dynamic_model = GT_Dataloader(
         model_args, train=False, train_frame_times=train_frame_times
     )
-    model_args.block_id = block_id
+    edit_obj_info = EditObjInfo(
+        delete_obj_ids=args.delete["obj_ids"] if hasattr(args, "delete") else [],
+        obj_id_offset_pairs=(
+            args.move["obj_id_offset_pairs"] if hasattr(args, "move") else []
+        ),
+        add_id_path_pairs=args.add["obj_id_path_pairs"] if hasattr(args, "add") else [],
+    )
+
+    model_args.block_id = 0
     objs = None
     render_sets(
         gt_dynamic_model,
         model_args,
         args.iteration,
         pipeline.extract(args),
-        args.insert_static_obj,
-        args.insert_dynamic_obj,
+        edit_obj_info,
         objs,
     )

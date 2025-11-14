@@ -3,6 +3,8 @@ import numpy as np
 import torch
 from utils.lidar_utils import lidar_to_pano_with_intensities
 import open3d as o3d
+import json
+import shutil
 
 
 class Chery_Dataloader:
@@ -124,91 +126,13 @@ class Chery_Dataloader:
         self.root_path = args.source_path
         self.case = args.caseid
 
-        self.frames_data = None
-        lidar_filefolder = os.path.join(args.source_path, "lidar")
-        lidarpose_filefolder = os.path.join(args.source_path, "lidar_pose")
-        bin_files = [f for f in os.listdir(lidar_filefolder) if f.endswith(".bin")]
-        bin_files = sorted(bin_files, key=lambda x: int(x.split(".")[0]))
-        print(
-            "[ Info ] find {} bin files in {}".format(len(bin_files), lidar_filefolder)
-        )
-        self.start_frame = train_frame_times[0]
-        frame_cnt = train_frame_times[-1] - train_frame_times[0] + 1
-        print("[ Info ] start frame is {}".format(self.start_frame))
-
-        frames_data = []
-        # set first-frame-pose as relative-coordinate origin point
-        # make sure train/infer views pose is consistent
-        lidar_to_world_start = np.loadtxt(
-            os.path.join(
-                lidarpose_filefolder, str(bin_files[0].split(".")[0]).zfill(3) + ".txt"
-            )
-        )
-        for i in range(self.start_frame, self.start_frame + frame_cnt):
-            """
-            1. log_time_stamp
-            2. lidar2world
-            3. lidar_points
-            4. time_stamp
-            5. ring
-            6. lidar_id
-            7. path {pcd}
-            """
-            if i < self.start_frame or i not in train_frame_times:
-                continue
-            single_frame_data = {}
-            single_frame_data["log_time_stamp"] = i
-
-            lidar_pose_i_path = os.path.join(
-                lidarpose_filefolder, str(i).zfill(3) + ".txt"
-            )
-            lidar_to_world_current = np.loadtxt(lidar_pose_i_path)
-            lidar_to_world = (
-                np.linalg.inv(lidar_to_world_start) @ lidar_to_world_current
-            )
-            single_frame_data["lidar2world"] = lidar_to_world
-
-            lidar_info = np.fromfile(
-                os.path.join(args.source_path, "lidar", str(i).zfill(3) + ".bin"),
-                dtype=np.float32,
-            ).reshape(-1, 5)
-            # 增加两列 ring 和 lidar_id，补全为7列，ring全为0，lidar_id全为0
-            lidar_info[:, 3] = lidar_info[:, 3] * 255  # 强度归一化到0-255之间
-            ring = np.zeros((lidar_info.shape[0], 1), dtype=np.float32)
-
-            lidar_id = np.zeros((lidar_info.shape[0], 1), dtype=np.float32)
-            lidar_info = np.concatenate(
-                [lidar_info, ring, lidar_id], axis=1
-            )  # shape (N, 7)
-            # 过滤掉lidar_id不为0的点
-            lidar_info = lidar_info[lidar_info[:, 6] == 0]
-
-            lidar_points = lidar_info[:, :3]  # shape (N, 3)
-            lidar_intensity = lidar_info[:, 3:4] / 255.0  # shape (N, 1)
-            lidar_data = np.concatenate(
-                [lidar_points, lidar_intensity], axis=1
-            )  # (N, 4)
-            single_frame_data["lidar_points"] = lidar_data  # 存 NumPy array
-            single_frame_data["time_stamp"] = lidar_info[:, 4]
-            single_frame_data["ring"] = lidar_info[:, 5]
-            single_frame_data["lidar_id"] = lidar_info[:, 6]
-            pcd_i_path = os.path.join(lidar_filefolder, str(i).zfill(3) + ".bin")
-            single_frame_data["path"] = {
-                "pcd": os.path.relpath(pcd_i_path, self.root_path)
-            }
-            frames_data.append(single_frame_data)
-        self.frames_data = frames_data
+        self.frames_data = self.load_frames_data(train_frame_times)
         print("[ Info ] this case have {} frames totally".format(len(self.frames_data)))
 
-        # 如果没有提供精确的 beam_inclinations，使用常量参数
-        fov_up = self.FOV_UP
-        fov_down = self.FOV_DOWN
-        num_beams = self.NUM_BEAMS
         # 注意这里是顺序是从小到大，即从 -fov_down 到 +fov_up, 而且是弧度制
         self.beam_inclinations = np.linspace(
-            -fov_down, fov_up, num_beams, dtype=np.float32
+            -self.FOV_DOWN, self.FOV_UP, self.NUM_BEAMS, dtype=np.float32
         )
-        # self.beam_inclinations = [angle * torch.pi / 180.0 for angle in self.BEAM_INCLINATIONS]
 
         # 假设雷达位置就是自车位置
         R = np.eye(3, dtype=np.float32)
@@ -226,7 +150,7 @@ class Chery_Dataloader:
 
         self.sensor2baselidar = dict()  # 记录每个lidar到toplidar的变换矩阵
         self.pcds = []  # 原始每帧点云
-        self.pcds_label = []  # onemodle的语义结果 ==10为地面 ==0为背景
+        self.pcds_label = []  # LiDAR语义label
         self.l2ws = []  # 每帧的l2w
         self.timestep_2_frameid = dict()  # 通过timsestep查询对应训练的帧的id _ 0 to 50
         self.frameid_2_timestep = []  # 通过frame id 反查询对应训练帧的timestep
@@ -236,7 +160,7 @@ class Chery_Dataloader:
             train_frame_times=self.train_frame_times,
             frame_num=self.max_frame_num,
         )
-        self.obj_id_list = None
+        self.obj_id_list = [int(key) for key in self.dynamic_obj_info.keys()]
 
         self.obj_frames_id = (
             dict()
@@ -244,27 +168,19 @@ class Chery_Dataloader:
         self.obj_pcd = dict()  # 通过obj_id 查询实例的拼接后的完整的pcd
         self.obj_o2l = (
             dict()
-        )  # 通过obj_id 和对应那一帧的frame id查询实例的o2l，字典嵌套了一个字典
+        )  # 通过obj_id 和对应那一帧的frame id查询实例的o2l ， 字典嵌套了一个字典
+        if self.obj_id_list is not None:
+            for obj_id in self.obj_id_list:
+                success, obj_pcd = self.load_dynamic_pcd(str(obj_id))
+                if not success:
+                    print(
+                        "[ Warning ]: Failed to load dynamic pcd for object_id:", obj_id
+                    )
+                    continue
+                self.obj_pcd[str(obj_id)] = obj_pcd
 
-        # # 拼接训练帧点云作为静态场景，后续的高斯初始化需要
-        # pcd_xyzs = []
-        # for i in range(0, len(self.pcds)):
-        #     lidar_to_world = self.l2ws[i]
-        #     R = lidar_to_world[:3, :3]
-        #     T = lidar_to_world[:3, 3]
-        #     pcd = self.pcds[i][:, :3]
-        #     pcd_transformed = (R @ pcd.T).T + T  # shape (N, 3)
-        #     pcd_xyz = pcd_transformed[:, :3]    # shape: (N_i, 3)
-        #     pcd_xyzs.append(pcd_xyz)
-        # self.static_pcd = np.concatenate(pcd_xyzs, axis=0)  # shape: (total_points, 3)
-
-        # # 保存整个静态pcd到txt文件，用于可视化，文件名args.block_id + static_scene.txt
-        # np.savetxt(os.path.join(self.root_path, "static_scene_all_frames.txt"), self.static_pcd)
-        # print("[ Info ] static scene have {} points".format(self.static_pcd.shape[0]))
         if train:
-            self.static_pcd = np.loadtxt(
-                "/home/not0513/data/orinY/processed/training/20250702_133223_Q2517/static_scene_all_frames.txt"
-            )
+            self.static_pcd = self.load_static_pcd()
 
         self.range_views, self.masks = self.load_rangeview(self.H_lidar, self.W_lidar)
 
@@ -321,10 +237,7 @@ class Chery_Dataloader:
             sl2w = l2w @ self.extrinsic  # vehicle2wordl @ lidar2vehicle
             l2ws.append(sl2w)
 
-            pcd = frame["lidar_points"]
-            ring_data = frame["ring"]
-            ring_min = np.min(ring_data)
-            ring_max = np.max(ring_data)
+            pcd = frame["raw_pcd"]
 
             pcd_world = (
                 np.pad(pcd[..., :3], ((0, 0), (0, 1)), constant_values=1) @ l2w.T
@@ -402,6 +315,8 @@ class Chery_Dataloader:
         """
         列表返回obj出现的帧
         """
+        if str(object_id) not in self.obj_frames_id:
+            return []
         return self.obj_frames_id[str(object_id)]
 
     def get_dynamic_obj_id_list(self):
@@ -424,3 +339,509 @@ class Chery_Dataloader:
 
     def get_fov_down(self):
         return self.FOV_DOWN
+
+    def load_dynamic_obj_id_list(self, train_frame_times):
+        """
+        加载每个时间帧的动态障碍物 ID 列表
+
+        返回:
+            frame_object_ids: list of str, 包含所有动态障碍物的 ID
+        """
+        json_path = self.root_path + "/instances/frame_instances.json"
+        with open(json_path, "r") as f:
+            data = json.load(f)
+
+        frame_object_ids = {}
+        for frame_idx, obj_ids in data.items():
+            if int(frame_idx) not in train_frame_times:
+                continue
+            frame_object_ids[int(frame_idx)] = obj_ids
+        return frame_object_ids
+
+    def load_dynamic_obj_info(self, train_frame_times):
+        """
+        加载动态障碍物标注 JSON 文件
+
+        返回:
+            annotations: dict, key 为 object_id (str), value 为 dict 包含：
+                - class_name: str
+                - frames: list of int (出现的帧索引)
+                - poses: list of np.ndarray (4x4 齐次变换矩阵, 到第一帧的世界坐标)
+                - sizes: list of list [l, w, h] (沿 x/y/z 的 bbox 尺寸)
+        """
+        json_path = self.root_path + "/instances/instances_info.json"
+        with open(json_path, "r") as f:
+            data = json.load(f)
+
+        annotations = {}
+        inv_start = np.linalg.inv(self.lidar_to_world_start)
+        for obj_id, obj_data in data.items():
+            class_name = obj_data["class_name"]
+            frame_ann = obj_data["frame_annotations"]
+
+            frame_indices = frame_ann["frame_idx"]  # list of int
+            filtered_frame_indices = []
+            for frame_idx in frame_indices:
+                if frame_idx not in train_frame_times:
+                    continue
+                filtered_frame_indices.append(frame_idx)
+            frame_indices = filtered_frame_indices
+            if len(frame_indices) == 0:
+                continue
+            obj_to_world_list = frame_ann["obj_to_world"]  # list of 4x4 matrices
+            box_sizes = frame_ann["box_size"]  # list of [l, w, h]
+
+            poses = [np.array(mat, dtype=np.float32) for mat in obj_to_world_list]
+            for pose in poses:
+                pose = inv_start @ pose
+            sizes = [list(sz) for sz in box_sizes]
+
+            annotations[obj_id] = {
+                "class_name": class_name,
+                "frames": frame_indices,
+                "poses": poses,
+                "sizes": sizes,
+            }
+
+        return annotations
+
+    def load_dynamic_pcd(self, object_id):
+        """
+        加载对应obj_id的各帧点云拼成一个完整obj的pcd, 同时每个obj会在哪几帧出现也会在这里处理和存储
+        reutrn : obj拼接后的点云
+        """
+        obj_info = self.dynamic_obj_info[object_id]
+        obj_occurred_frames = obj_info["frames"]
+        obj_pcd = None
+        obj_b2ls = dict()
+        l2w_start_inv = np.linalg.inv(self.lidar_to_world_start)
+        empty_frame_list = []
+        for frame in obj_occurred_frames:
+            dynamic_obj_path = (
+                self.root_path
+                + "/lidar"
+                + "/dynamic_pcd/"
+                + str(frame).zfill(3)
+                + "/"
+                + str(frame).zfill(3)
+                + "_obj"
+                + str(object_id).zfill(3)
+                + ".txt"
+            )
+            if not os.path.exists(dynamic_obj_path):
+                print(
+                    "[ Warning ]: Dynamic object pcd file not found:", dynamic_obj_path
+                )
+                continue
+            obj_frame_pcd = np.loadtxt(dynamic_obj_path).astype(np.float32)
+            if obj_frame_pcd is None or obj_frame_pcd.shape[0] == 0:
+                empty_frame_list.append(frame)
+                print(
+                    "[ Warning ]: Dynamic object pcd is empty for obj_id:",
+                    object_id,
+                    "frame:",
+                    frame,
+                )
+                continue
+
+            # 标注文件里的坐标obj_info['poses'],是全局的世界坐标系
+            # 实际上我们还基于第一帧构建了另一个相对的world坐标系
+            # slef.l2ws是在这个相对的world坐标系下的
+            # 全局的世界坐标系 到 相对的world坐标系 的变换矩阵是self.lidar_to_world_start
+            # 所以我们需要先把obj_info['poses']转换到相对的world坐标系下，然后再计算obj2lidar
+            l2w = self.l2ws[self.timestep_2_frameid[str(frame)]]
+            obj_2_world = np.array(
+                obj_info["poses"][obj_occurred_frames.index(frame)], dtype=np.float32
+            ).reshape(4, 4)
+            obj_2_world = l2w_start_inv @ obj_2_world
+            obj_b2ls[str(self.timestep_2_frameid[str(frame)])] = (
+                np.linalg.inv(l2w) @ obj_2_world
+            )
+            # obj_frame_pcd是lidar系下的点，统一转到obj系，再拼接
+            curr_frame_b2l = obj_b2ls[str(self.timestep_2_frameid[str(frame)])]
+            curr_frame_l2b = np.linalg.inv(curr_frame_b2l)
+            obj_frame_pcd_hom = np.hstack(
+                [
+                    obj_frame_pcd[..., :3],
+                    np.ones((obj_frame_pcd.shape[0], 1), dtype=obj_frame_pcd.dtype),
+                ]
+            )
+            obj_frame_pcd = obj_frame_pcd_hom @ curr_frame_l2b.T
+            obj_frame_pcd = obj_frame_pcd[:, :3]
+            if obj_pcd is None:
+                obj_pcd = obj_frame_pcd
+            else:
+                obj_pcd = np.vstack([obj_pcd, obj_frame_pcd])
+        for empty_frame in empty_frame_list:
+            obj_occurred_frames.remove(empty_frame)
+        if len(obj_occurred_frames) == 0 or len(obj_b2ls) != len(obj_occurred_frames):
+            print("Warning: No valid frames found for object_id:", object_id)
+            return False, None
+        self.obj_frames_id[str(object_id)] = obj_occurred_frames
+        self.obj_o2l[str(object_id)] = obj_b2ls
+        # 保存每个obj为一个单独的pcd文件，方便后续查看
+        obj_pcd_save_path = os.path.join(
+            self.root_path, "lidar", "dynamic_pcd", "object_whole_pcd"
+        )
+        if not os.path.exists(obj_pcd_save_path):
+            os.makedirs(obj_pcd_save_path)
+        np.savetxt(
+            os.path.join(
+                obj_pcd_save_path, f"obj{str(object_id).zfill(3)}_whole_pcd.txt"
+            ),
+            obj_pcd,
+        )
+        return True, obj_pcd
+
+    def get_lidar_to_world_start(self):
+        return self.lidar_to_world_start
+
+    def load_frames_data(self, train_frame_times):
+        """
+        加载指定训练帧的点云数据和位姿信息，并按照动态od标注信息，提取动静态点云，返回每帧数据的列表。
+        """
+        lidar_filefolder = os.path.join(self.root_path, "lidar")
+        bin_files = [f for f in os.listdir(lidar_filefolder) if f.endswith(".bin")]
+        bin_files = sorted(bin_files, key=lambda x: int(x.split(".")[0]))
+
+        lidarpose_filefolder = os.path.join(self.root_path, "lidar_pose")
+
+        self.start_frame = train_frame_times[0]
+        frame_cnt = train_frame_times[-1] - train_frame_times[0] + 1
+
+        frames_data = []
+        self.lidar_to_world_start = np.loadtxt(
+            os.path.join(
+                lidarpose_filefolder, str(bin_files[0].split(".")[0]).zfill(3) + ".txt"
+            )
+        )
+
+        self.dynamic_obj_list = self.load_dynamic_obj_id_list(train_frame_times)
+        self.dynamic_obj_info = self.load_dynamic_obj_info(train_frame_times)
+        for i in range(self.start_frame, self.start_frame + frame_cnt):
+            """
+            1. log_time_stamp
+            2. lidar2world
+            3. raw_pcd
+            4. lidar_id
+            5. static_pcd
+            6. dynamic_obj_pcd
+            """
+            if i < self.start_frame or i not in train_frame_times:
+                continue
+            single_frame_data = {}
+            single_frame_data["log_time_stamp"] = i
+
+            lidar_pose_i_path = os.path.join(
+                lidarpose_filefolder, str(i).zfill(3) + ".txt"
+            )
+            lidar_to_world_current = np.loadtxt(lidar_pose_i_path)
+            lidar_to_world = (
+                np.linalg.inv(self.lidar_to_world_start) @ lidar_to_world_current
+            )
+            single_frame_data["lidar2world"] = lidar_to_world
+
+            # x y z intensity lidar_id
+            lidar_info = np.fromfile(
+                os.path.join(self.root_path, "lidar", str(i).zfill(3) + ".bin"),
+                dtype=np.float32,
+            ).reshape(-1, 5)
+
+            # 过滤掉lidar_id不为0的点
+            lidar_info = lidar_info[lidar_info[:, 4] == 0]
+
+            # 强度在0-1之间
+            single_frame_data["raw_pcd"] = lidar_info[:, :4]  # x,y,z,intensity
+            single_frame_data["lidar_id"] = lidar_info[:, 4]
+
+            # 提取动态和静态点云，如果文件存在，则直接加载，否则进行筛选
+            dynamic_pcd = []
+            static_pcd = []
+            dynamic_pcd_file_folder = os.path.join(
+                lidar_filefolder, "dynamic_pcd", str(i).zfill(3)
+            )
+            static_pcd_file_folder = os.path.join(lidar_filefolder, "static_pcd")
+            if not os.path.exists(static_pcd_file_folder):
+                os.makedirs(static_pcd_file_folder)
+            if not os.path.exists(dynamic_pcd_file_folder):
+                os.makedirs(dynamic_pcd_file_folder)
+
+            dynamic_obj_id_list = self.dynamic_obj_list[i]
+
+            # pointcloud_xyz是lidar系下的
+            pointcloud_xyz = single_frame_data["raw_pcd"][:, :4]
+            dynamic_obj_infos = []
+            dynamic_pcd_data = []
+            for obj_id in dynamic_obj_id_list:
+
+                obj_info = self.dynamic_obj_info[str(obj_id)]
+                frame_indices = obj_info["frames"]
+                if i not in frame_indices:
+                    continue
+
+                dynamic_pcd_path = os.path.join(
+                    dynamic_pcd_file_folder,
+                    f"{str(i).zfill(3)}_obj{str(obj_id).zfill(3)}.txt",
+                )
+                if os.path.exists(dynamic_pcd_path):
+                    obj_dynamic_pcd = np.loadtxt(dynamic_pcd_path).astype(np.float32)
+                    dynamic_pcd.append({obj_id: obj_dynamic_pcd})
+                else:
+                    idx = frame_indices.index(i)
+
+                    # 标注文件里的坐标obj_info['poses'],在全局的世界坐标系下
+                    # 实际上我们基于第一帧构建了另一个相对的world坐标系
+                    # 全局的世界坐标系 到 相对的world坐标系 的变换矩阵是self.lidar_to_world_start
+                    center_world = obj_info["poses"][idx][:3, 3]
+                    center_hom = np.hstack([center_world, 1.0])
+                    center_lidar_hom = (
+                        np.linalg.inv(lidar_to_world_current) @ center_hom
+                    )
+                    center = center_lidar_hom[:3]  # lidar系下的中心点
+
+                    # box_size是lidar系下的
+                    size = obj_info["sizes"][idx]
+
+                    dynamic_obj_infos.append({"center": center, "size": size})
+
+                    obj_dynamic_pcd = self.filter_points_in_box(
+                        pointcloud_xyz, center, size
+                    )
+                    dynamic_pcd.append({obj_id: obj_dynamic_pcd})
+                    # 保存动态点云到文件
+                    dynamic_pcd_path = os.path.join(
+                        dynamic_pcd_file_folder,
+                        f"{str(i).zfill(3)}_obj{str(obj_id).zfill(3)}.txt",
+                    )
+                    np.savetxt(dynamic_pcd_path, obj_dynamic_pcd)
+            static_pcd_path = os.path.join(
+                static_pcd_file_folder, f"{str(i).zfill(3)}_static.txt"
+            )
+            if os.path.exists(static_pcd_path):
+                static_pcd = np.loadtxt(static_pcd_path).astype(np.float32)
+            else:
+                if len(dynamic_obj_infos) == 0:
+                    print("[ Warning ]: No dynamic objects found for frame:", i)
+                static_pcd = self.filter_static_background_points(
+                    pointcloud_xyz, dynamic_obj_infos
+                )
+                static_pcd = pointcloud_xyz
+                # 保存静态点云到文件
+                static_pcd_path = os.path.join(
+                    static_pcd_file_folder, f"{str(i).zfill(3)}_static.txt"
+                )
+                np.savetxt(static_pcd_path, static_pcd)
+
+            single_frame_data["static_pcd"] = static_pcd
+            single_frame_data["dynamic_pcd"] = dynamic_pcd
+
+            frames_data.append(single_frame_data)
+
+        return frames_data
+
+    def load_static_pcd(self):
+        static_pcd = []
+        static_pcd_file_path = "/home/not0513/data/orinY/processed/training/20250702_133223_Q2517/static_scene_all_frames.txt"
+        if os.path.exists(static_pcd_file_path):
+            static_pcd = np.loadtxt(static_pcd_file_path)
+        else:
+            # 拼接训练帧点云作为静态场景，后续的高斯初始化需要
+            pcd_xyzs = []
+            for i in range(0, len(self.frames_data)):
+                pcd = self.frames_data[i]["static_pcd"][:, :3]
+                lidar_to_world = self.frames_data[i]["lidar2world"]
+                R = lidar_to_world[:3, :3]
+                T = lidar_to_world[:3, 3]
+                pcd_transformed = (R @ pcd.T).T + T  # shape (N, 3)
+                pcd_xyz = pcd_transformed[:, :3]  # shape: (N_i, 3)
+                pcd_xyzs.append(pcd_xyz)
+            static_pcd = np.concatenate(pcd_xyzs, axis=0)  # shape: (total_points, 3)
+            # 再过滤一次动态od
+            all_dynamic_bboxs = self.get_all_dynamic_bboxs()
+            for item in all_dynamic_bboxs:
+                # TODO: 同一个object_id计算最大范围的bbox，然后删除点云，而不是每一个bbox都删除一次
+                corners_world = item["corners_world"]  # shape: (8, 3)
+                static_pcd = self.delete_points_in_box_with_corners(
+                    static_pcd, corners_world
+                )
+            np.savetxt(
+                os.path.join(self.root_path, "static_scene_all_frames.txt"), static_pcd
+            )
+            print("[ Info ] static scene have {} points".format(static_pcd.shape[0]))
+
+        return static_pcd
+
+    def filter_points_in_box(self, pointcloud, obj_center_pos, size):
+        """
+        筛选出以obj_center_pos为中心、尺寸为size的矩形区域内的点云
+
+        参数:
+            pointcloud: numpy数组，形状为(N, 4)，表示点云数据
+            obj_center_pos: 列表或数组，表示矩形中心坐标[x, y, z]
+            size: 列表或数组，表示矩形在x、y、z三个维度上的尺寸[l, w, h]
+
+        返回:
+            筛选后的点云数据
+        """
+        if pointcloud is None:
+            return None
+        if pointcloud.ndim != 2 or pointcloud.shape[1] != 4:
+            print(
+                "[Warning] filter_points_in_box: pointcloud shape is not (N, 4), got",
+                pointcloud.shape,
+            )
+            return None
+
+        # 计算矩形边界
+        half_size = np.array(size) / 2
+        min_bounds = np.array(obj_center_pos) - half_size
+        max_bounds = np.array(obj_center_pos) + half_size
+
+        # 筛选在矩形边界内的点
+        mask = (
+            (pointcloud[:, 0] >= min_bounds[0])
+            & (pointcloud[:, 0] <= max_bounds[0])
+            & (pointcloud[:, 1] >= min_bounds[1])
+            & (pointcloud[:, 1] <= max_bounds[1])
+            & (pointcloud[:, 2] >= min_bounds[2])
+            & (pointcloud[:, 2] <= max_bounds[2])
+        )
+
+        return pointcloud[mask]
+
+    def filter_static_background_points(self, pointcloud, dynamic_obj_infos):
+        """
+        从点云中移除动态物体区域的点云，保留静态背景点云。
+
+        参数:
+            pointcloud: numpy数组，形状为(N, 4)，表示点云数据
+            dynamic_obj_infos: 列表，包含多个动态物体的信息，每个元素是一个字典，包含：
+                - 'center': 物体中心坐标[x, y, z]
+                - 'size': 物体尺寸[l, w, h]
+        返回:
+            静态背景点云数据
+        """
+        if pointcloud is None:
+            return None
+        if pointcloud.ndim != 2 or pointcloud.shape[1] != 4:
+            print(
+                "[Warning] filter_points_in_box: pointcloud shape is not (N, 4), got",
+                pointcloud.shape,
+            )
+            return None
+
+        static_mask = np.ones(pointcloud.shape[0], dtype=bool)
+
+        for obj_info in dynamic_obj_infos:
+            center = obj_info["center"]
+            size = obj_info["size"]
+
+            half_size = np.array(size) / 2
+            min_bounds = np.array(center) - half_size
+            max_bounds = np.array(center) + half_size
+
+            obj_mask = (
+                (pointcloud[:, 0] >= min_bounds[0])
+                & (pointcloud[:, 0] <= max_bounds[0])
+                & (pointcloud[:, 1] >= min_bounds[1])
+                & (pointcloud[:, 1] <= max_bounds[1])
+                & (pointcloud[:, 2] >= min_bounds[2])
+                & (pointcloud[:, 2] <= max_bounds[2])
+            )
+
+            static_mask &= ~obj_mask
+
+        return pointcloud[static_mask]
+
+    def delete_points_in_box_with_corners(self, pointcloud, box_corners):
+        """
+        根据边界框的8个顶点坐标，删除点云中位于该边界框内的点。
+        """
+        if pointcloud is None:
+            return None
+        if pointcloud.ndim != 2 or pointcloud.shape[1] != 3:
+            print(
+                "[Warning] delete_points_in_box_with_corners: pointcloud shape is not (N, 3), got",
+                pointcloud.shape,
+            )
+            return None
+
+        # 计算边界框的最小和最大坐标
+        min_bounds = np.min(box_corners, axis=0)
+        max_bounds = np.max(box_corners, axis=0)
+
+        # 创建掩码，标记不在边界框内的点
+        mask = (
+            (pointcloud[:, 0] < min_bounds[0])
+            | (pointcloud[:, 0] > max_bounds[0])
+            | (pointcloud[:, 1] < min_bounds[1])
+            | (pointcloud[:, 1] > max_bounds[1])
+            | (pointcloud[:, 2] < min_bounds[2])
+            | (pointcloud[:, 2] > max_bounds[2])
+        )
+
+        return pointcloud[mask]
+
+    def get_train_frame_times(self):
+        return self.train_frame_times
+
+    def get_all_dynamic_bboxs(self):
+        """
+        返回所有动态物体的边界框信息
+        每一帧的所有id
+        """
+        if len(self.dynamic_obj_info) == 0:
+            return None
+        all_dynamic_bboxs = []
+        for obj_id, obj_data in self.dynamic_obj_info.items():
+            frame_indices = obj_data["frames"]
+            for idx, frame_idx in enumerate(frame_indices):
+                if frame_idx not in self.train_frame_times:
+                    continue
+                pose_info = obj_data["poses"][idx]
+                size_info = obj_data["sizes"][idx]
+                # 将pose转换到lidar系下， pose是标注文件里的全局世界坐标系
+                l2w_start_inv = np.linalg.inv(self.lidar_to_world_start)
+                pose_world = l2w_start_inv @ pose_info
+                pose_lidar = (
+                    np.linalg.inv(self.l2ws[self.timestep_2_frameid[str(frame_idx)]])
+                    @ pose_world
+                )
+                # 计算bbox的8个顶点坐标(world系下)
+                l, w, h = size_info
+                x_c, y_c, z_c = pose_lidar[:3, 3]
+                R = pose_lidar[:3, :3]
+                corners = np.array(
+                    [
+                        [l / 2, w / 2, h / 2],
+                        [l / 2, -w / 2, h / 2],
+                        [-l / 2, -w / 2, h / 2],
+                        [-l / 2, w / 2, h / 2],
+                        [l / 2, w / 2, -h / 2],
+                        [l / 2, -w / 2, -h / 2],
+                        [-l / 2, -w / 2, -h / 2],
+                        [-l / 2, w / 2, -h / 2],
+                    ]
+                )
+                rotated_corners = (R @ corners.T).T
+                translated_corners = rotated_corners + np.array([x_c, y_c, z_c])
+                # 转换到world系下
+                translated_corners_hom = np.hstack(
+                    [
+                        translated_corners,
+                        np.ones((8, 1), dtype=translated_corners.dtype),
+                    ]
+                )
+                translated_corners_world = (
+                    self.l2ws[self.timestep_2_frameid[str(frame_idx)]]
+                    @ translated_corners_hom.T
+                ).T[:, :3]
+                bbox_info = {
+                    "object_id": obj_id,
+                    "class_name": obj_data["class_name"],
+                    "corners_lidar": translated_corners,
+                    "corners_world": translated_corners_world,
+                    "frame_idx": frame_idx,
+                }
+                all_dynamic_bboxs.append(bbox_info)
+        return all_dynamic_bboxs

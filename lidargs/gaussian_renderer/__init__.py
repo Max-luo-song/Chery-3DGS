@@ -38,8 +38,8 @@ def generate_neural_gaussians(
         )
     # visible_mask是一列数据，每个元素表示对应的anchor是否在视锥内，true 或者 false
     # 判断visible_mask是不是存在True
-    if visible_mask.sum() == 0:
-        print("[ Warning ] No visible Gaussians!")
+    # if visible_mask.sum() == 0:
+    #     print("[ Warning ] No visible Gaussians!")
     feat = pc._anchor_feat[visible_mask]
     anchor = pc.get_anchor[visible_mask]
     grid_offsets = pc._offset[visible_mask]
@@ -159,8 +159,8 @@ def generate_neural_gaussians(
     offsets = offsets * scaling_repeat[:, :3]
     xyz = repeat_anchor + offsets
 
-    if xyz is None or xyz.shape[0] == 0:
-        print("-----error------")
+    # if xyz is None or xyz.shape[0] == 0:
+    #     print("-----error------")
     if is_training:
         return xyz, color, opacity, scaling, rot, neural_opacity, mask
     else:
@@ -190,6 +190,7 @@ def renderComposite(
     init = False  # TODO 是否直接把这部分数据预处理放到loader里
     for model_info in valid_model_info:
         data_type = model_info.model_gaussians.get_anchor.dtype
+        model_id = model_info.model_id
         model_visible_mask = prefilter_voxel(
             model_info.model_view,
             model_info.model_gaussians,
@@ -197,6 +198,8 @@ def renderComposite(
             background,
             max_depth,
         )
+        if model_visible_mask.sum() == 0:
+            print("---error----, model_id, ", model_id)
         (
             model_xyz,
             model_color,
@@ -535,7 +538,7 @@ def prefilter_voxel(
         rotations=rotations,
         cov3D_precomp=cov3D_precomp,
     )
-    if radii_pure.sum() == 0:
-        print("[ Warning ] No Gaussians are visible!")
+    # if radii_pure.sum() == 0:
+    #     print("[ Warning ] No Gaussians are visible!")
 
     return radii_pure > 0

@@ -73,11 +73,20 @@ def GT_readCamerasFromTransforms(
     W_lidar, H_lidar = waymo_dynamic_model.get_lidar_res()
     beam_inclinations = waymo_dynamic_model.get_beam_inclination()
     all_frame_num = waymo_dynamic_model.get_frames_nums()
+    train_frame_times = waymo_dynamic_model.get_train_frame_times()
 
     if model_id == 0:
         occured_frames = [i for i in range(all_frame_num)]
     else:
-        occured_frames = waymo_dynamic_model.get_obj_frames(model_id)
+        occured_frame_ids = waymo_dynamic_model.get_obj_frames(model_id)
+        if len(occured_frame_ids) == 0:
+            return None, None, None
+        occured_frames = []
+        for frame_id in occured_frame_ids:
+            for i in range(all_frame_num):
+                if waymo_dynamic_model.frameid_2_timestep[i] == str(frame_id):
+                    occured_frames.append(i)
+                    break
 
     if len(occured_frames) < 1:
         return None, None, None
