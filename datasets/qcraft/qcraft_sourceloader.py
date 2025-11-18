@@ -143,6 +143,33 @@ class QcraftCameraData(CameraData):
 
         return torch.from_numpy(np.stack(cam_to_worlds, axis=0)).float()
 
+    @classmethod
+    def get_novel_view_camera2worlds(
+        cls, data_path: str, cam_id: str, shift: int, start_timestep: int, end_timestep: int
+    ) -> torch.Tensor:
+        """
+        Returns camera-to-world matrices for the specified camera and time range under novel view for fine tune.
+
+        Args:
+            data_path (str): Path to the dataset.
+            cam_id (str): Camera ID.
+            start_timestep (int): Start timestep.
+            end_timestep (int): End timestep.
+
+        Returns:
+            torch.Tensor: Camera-to-world matrices of shape (num_frames, 4, 4).
+        """
+        # Load lidar poses and compute camera-to-world matrices
+        cam_to_worlds = []
+
+        for t in range(start_timestep, end_timestep):
+            cam2world = np.loadtxt(
+                os.path.join(data_path, "shift_{shift}/novel_caminfos", f"{t:06d}_{cam_id}shift_{shift}.txt")
+            )
+            cam_to_worlds.append(cam2world)
+
+        return torch.from_numpy(np.stack(cam_to_worlds, axis=0)).float()
+
 
 class QcraftPixelSource(ScenePixelSource):
     def __init__(
@@ -197,6 +224,35 @@ class QcraftPixelSource(ScenePixelSource):
 
     # syc
     def load_specified_cameras(
+        self, cam_ids, downscale_when_loading
+    ) -> Dict[int, CameraData]:
+        camera_data = {}
+        for idx, cam_id in enumerate(cam_ids):
+            camera = QcraftCameraData(
+                dataset_name=self.dataset_name,
+                data_path=self.data_path,
+                cam_id=cam_id,
+                start_timestep=self.start_timestep,
+                end_timestep=self.end_timestep,
+                downscale_when_loading=downscale_when_loading[idx],
+                undistort=False,
+                buffer_downscale=self.buffer_downscale,
+                device=self.device,
+                novel_view_mode=True,
+            )
+            camera.load_time(self.normalized_time)
+            unique_img_idx = (
+                torch.arange(len(camera), device=self.device) * len(cam_ids) + idx
+            )
+            camera.set_unique_ids(unique_cam_idx=idx, unique_img_idx=unique_img_idx)
+            logger.info(f"Specified camera {camera.cam_name} loaded.")
+
+            camera_data[cam_id] = camera
+
+        return camera_data
+
+    # bty
+    def load_novel_cameras(
         self, cam_ids, downscale_when_loading
     ) -> Dict[int, CameraData]:
         camera_data = {}
