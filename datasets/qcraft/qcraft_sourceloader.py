@@ -262,7 +262,6 @@ class QcraftPixelSource(ScenePixelSource):
             unique_img_idx = (
                 torch.arange(len(camera), device=self.device) * total_length + idx
             )
-            print("here: ", cam_id, unique_img_idx)
             camera.set_unique_ids(unique_cam_idx=idx, unique_img_idx=unique_img_idx)
             logger.info(f"Camera {camera.cam_name} loaded.")
             self.camera_data[cam_id] = camera
