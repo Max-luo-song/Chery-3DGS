@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Optional
 import logging
 import os
 import json
@@ -44,6 +44,70 @@ SMPLNODE_CLASSES = ["Pedestrian"]
 class QcraftCameraData(CameraData):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        if self.mix_novel_alias and self.mix_novel_alias:
+            self.load_novel_pose()
+        else:
+            self.load_calibrations()
+
+        self.to(self.device)
+
+    def load_novel_pose(self):
+        """
+        Load the camera intrinsics, extrinsics, timestamps, etc.
+        Compute the camera-to-world matrices, lidar-to-world matrices, etc.
+        hard code here
+        """
+        this_intrinsic = np.loadtxt(
+            os.path.join(self.data_path, "intrinsics", f"{self.from_cam_id}.txt")
+        )
+        fx, fy, cx, cy = (
+            this_intrinsic[0],
+            this_intrinsic[1],
+            this_intrinsic[2],
+            this_intrinsic[3],
+        )
+        this_distortions = this_intrinsic[4:]
+
+        # scale intrinsics w.r.t. load size
+        fx, fy = (
+            fx * self.load_size[1] / self.original_size[1],
+            fy * self.load_size[0] / self.original_size[0],
+        )
+        cx, cy = (
+            cx * self.load_size[1] / self.original_size[1],
+            cy * self.load_size[0] / self.original_size[0],
+        )
+
+        _intrinsics = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+        _distortions = np.array(this_distortions)
+
+        cam_to_worlds, lidar_to_worlds, intrinsics, distortions = [], [], [], []
+
+        # we tranform the camera poses w.r.t. the first timestep to make the translation vector of
+        # the first lidar pose as the origin of the world coordinate system.
+        cam_first_pose = np.loadtxt(
+            os.path.join(
+                f"{self.data_path}/novel_views/{self.mix_novel_alias}",
+                f"cam_pose/{self.start_timestep:06d}.txt",
+            )
+        )
+
+        for t in range(self.start_timestep, self.end_timestep):
+            cam2world = np.loadtxt(
+                os.path.join(
+                    f"{self.data_path}/novel_views/{self.mix_novel_alias}",
+                    f"cam_pose/{t:06d}.txt",
+                )
+            )
+            # compute lidar_to_world transformation
+            cam2world = np.linalg.inv(cam_first_pose) @ cam2world
+            cam_to_worlds.append(cam2world)
+            intrinsics.append(_intrinsics)
+            distortions.append(_distortions)
+
+        self.intrinsics = torch.from_numpy(np.stack(intrinsics, axis=0)).float()
+        self.distortions = torch.from_numpy(np.stack(distortions, axis=0)).float()
+        self.cam_to_worlds = torch.from_numpy(np.stack(cam_to_worlds, axis=0)).float()
 
     def load_calibrations(self):
         """
@@ -143,33 +207,6 @@ class QcraftCameraData(CameraData):
 
         return torch.from_numpy(np.stack(cam_to_worlds, axis=0)).float()
 
-    @classmethod
-    def get_novel_view_camera2worlds(
-        cls, data_path: str, cam_id: str, shift: int, start_timestep: int, end_timestep: int
-    ) -> torch.Tensor:
-        """
-        Returns camera-to-world matrices for the specified camera and time range under novel view for fine tune.
-
-        Args:
-            data_path (str): Path to the dataset.
-            cam_id (str): Camera ID.
-            start_timestep (int): Start timestep.
-            end_timestep (int): End timestep.
-
-        Returns:
-            torch.Tensor: Camera-to-world matrices of shape (num_frames, 4, 4).
-        """
-        # Load lidar poses and compute camera-to-world matrices
-        cam_to_worlds = []
-
-        for t in range(start_timestep, end_timestep):
-            cam2world = np.loadtxt(
-                os.path.join(data_path, "shift_{shift}/novel_caminfos", f"{t:06d}_{cam_id}shift_{shift}.txt")
-            )
-            cam_to_worlds.append(cam2world)
-
-        return torch.from_numpy(np.stack(cam_to_worlds, axis=0)).float()
-
 
 class QcraftPixelSource(ScenePixelSource):
     def __init__(
@@ -187,6 +224,8 @@ class QcraftPixelSource(ScenePixelSource):
         self.start_timestep = start_timestep
         self.end_timestep = end_timestep
         self.novel_view_mode = novel_view_mode  # syc
+        self.mix_novel_views = pixel_data_config.mix_novel_views
+        self.mix_novel_cams = pixel_data_config.mix_novel_cams
         self.load_data()
 
     def load_cameras(self):
@@ -194,6 +233,12 @@ class QcraftPixelSource(ScenePixelSource):
             self.start_timestep, self.end_timestep
         )  ### 生成等差数列，目的是获取序列时间，对每一个时间都加载相机
         self.register_normalized_timestamps()  ### 归一化时间戳
+
+        total_length = (
+            len(self.camera_list) + len(self.mix_novel_cams)
+            if self.mix_novel_views
+            else len(self.camera_list)
+        )
 
         for idx, cam_id in enumerate(
             self.camera_list
@@ -215,12 +260,48 @@ class QcraftPixelSource(ScenePixelSource):
             )
             camera.load_time(self.normalized_time)
             unique_img_idx = (
-                torch.arange(len(camera), device=self.device) * len(self.camera_list)
-                + idx
+                torch.arange(len(camera), device=self.device) * total_length + idx
             )
+            print("here: ", cam_id, unique_img_idx)
             camera.set_unique_ids(unique_cam_idx=idx, unique_img_idx=unique_img_idx)
             logger.info(f"Camera {camera.cam_name} loaded.")
             self.camera_data[cam_id] = camera
+
+        if self.mix_novel_views and self.mix_novel_cams:
+            for idx, cam_alias in enumerate(self.mix_novel_cams):
+                # increase id from last normal cam_id
+                this_cam_id = self.camera_list[-1] + idx + 1
+                logger.info(f"Loading mixed novel camera {cam_alias}")
+                same_ds_idx = int(cam_alias.split("_")[-1])
+                camera = QcraftCameraData(
+                    dataset_name=self.dataset_name,
+                    data_path=self.data_path,
+                    cam_id=this_cam_id,
+                    start_timestep=self.start_timestep,
+                    end_timestep=self.end_timestep,
+                    load_dynamic_mask=self.data_cfg.load_dynamic_mask,
+                    load_sky_mask=self.data_cfg.load_sky_mask,
+                    downscale_when_loading=self.data_cfg.downscale_when_loading[0],
+                    undistort=self.data_cfg.undistort,
+                    buffer_downscale=self.buffer_downscale,
+                    device=self.device,
+                    novel_view_mode=self.novel_view_mode,
+                    mix_novel_views=self.mix_novel_views,
+                    mix_novel_alias=cam_alias,
+                )
+                camera.load_time(self.normalized_time)
+                unique_img_idx = (
+                    torch.arange(len(camera), device=self.device) * total_length
+                    + len(self.camera_list)
+                    + idx
+                )
+                print("novel: ", this_cam_id, unique_img_idx)
+                camera.set_unique_ids(
+                    unique_cam_idx=len(self.camera_list) + idx,
+                    unique_img_idx=unique_img_idx,
+                )
+                logger.info(f"Mixed Novel Camera {camera.cam_name} loaded.")
+                self.camera_data[this_cam_id] = camera
 
     # syc
     def load_specified_cameras(
