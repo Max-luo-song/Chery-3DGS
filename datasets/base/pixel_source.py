@@ -261,6 +261,12 @@ class CameraData(object):
             sky_mask_filepaths.append(
                 os.path.join(self.data_path, "sky_masks", f"{t:03d}_{self.cam_id}.png")
             )
+
+        ego_mask_dir = os.path.join(self.data_path, "ego_masks")
+        if not os.path.exists(ego_mask_dir):
+            ego_mask_dir = os.path.join("data", "ego_masks", self.dataset_name)
+        self.ego_mask_dir = ego_mask_dir
+
         self.img_filepaths = np.array(img_filepaths)
         self.dynamic_mask_filepaths = np.array(dynamic_mask_filepaths)
         self.human_mask_filepaths = np.array(human_mask_filepaths)
@@ -297,9 +303,8 @@ class CameraData(object):
         Since in some datasets, the ego car body is visible in the images,
         we need to load the ego car mask to mask out the ego car body.
         """
-        egocar_mask = os.path.join(
-            "data", "ego_masks", self.dataset_name, f"{self.cam_id}.png"
-        )
+        
+        egocar_mask = os.path.join(self.ego_mask_dir, f"{self.cam_id}.png")
         if os.path.exists(egocar_mask):
             egocar_mask = Image.open(egocar_mask).convert("L")
             # resize them to the load_size
