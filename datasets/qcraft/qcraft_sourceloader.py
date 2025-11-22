@@ -89,11 +89,11 @@ class QcraftCameraData(CameraData):
         # we tranform the camera poses w.r.t. the first timestep to make the translation vector of
         # the first lidar pose as the origin of the world coordinate system.
         lidar_to_world_start = np.loadtxt(
-            os.path.join(self.data_path, "lidar_pose", f"{self.start_timestep:03d}.txt")
+            os.path.join(self.data_path, "lidar_pose", f"{self.start_timestep:06d}.txt")
         )
         for t in range(self.start_timestep, self.end_timestep):
             lidar_to_world_current = np.loadtxt(
-                os.path.join(self.data_path, "lidar_pose", f"{t:03d}.txt")
+                os.path.join(self.data_path, "lidar_pose", f"{t:06d}.txt")
             )
             # compute lidar_to_world transformation
             lidar_to_world = (
@@ -138,12 +138,12 @@ class QcraftCameraData(CameraData):
         # Load lidar poses and compute camera-to-world matrices
         cam_to_worlds = []
         lidar_to_world_start = np.loadtxt(
-            os.path.join(data_path, "lidar_pose", f"{start_timestep:03d}.txt")
+            os.path.join(data_path, "lidar_pose", f"{start_timestep:06d}.txt")
         )
 
         for t in range(start_timestep, end_timestep):
             lidar_to_world_current = np.loadtxt(
-                os.path.join(data_path, "lidar_pose", f"{t:03d}.txt")
+                os.path.join(data_path, "lidar_pose", f"{t:06d}.txt")
             )
             lidar_to_world = (
                 np.linalg.inv(lidar_to_world_start) @ lidar_to_world_current
@@ -277,7 +277,7 @@ class QcraftPixelSource(ScenePixelSource):
         instances_model_types = np.ones(num_instances) * -1
 
         lidar_to_world_start = np.loadtxt(
-            os.path.join(self.data_path, "lidar_pose", f"{self.start_timestep:03d}.txt")
+            os.path.join(self.data_path, "lidar_pose", f"{self.start_timestep:06d}.txt")
         )
         ### k最大有500+, 但instances_info只有119
         for index, (k, v) in enumerate(instances_info.items()):
@@ -468,10 +468,10 @@ class QcraftLiDARSource(SceneLidarSource):
         # lidar_pose_filepaths = []
         for t in range(self.start_timestep, self.end_timestep):
             lidar_filepaths.append(
-                os.path.join(self.data_path, lidar_type, f"{t:03d}.bin")
+                os.path.join(self.data_path, lidar_type, "bin", f"{t:06d}.bin")
             )
             # lidar_pose_filepaths.append(
-            #     os.path.join(self.data_path, "lidar_pose", f"{t:03d}.txt")
+            #     os.path.join(self.data_path, "lidar_pose", f"{t:06d}.txt")
             # )
         self.lidar_filepaths = np.array(lidar_filepaths)
         # self.lidar_pose_filepaths = np.array(lidar_pose_filepaths)
@@ -487,11 +487,11 @@ class QcraftLiDARSource(SceneLidarSource):
         # first lidar pose as the origin of the world coordinate system.
         ### 将第一个时间步的 LiDAR 坐标作为世界坐标系的原点
         lidar_to_world_start = np.loadtxt(
-            os.path.join(self.data_path, "lidar_pose", f"{self.start_timestep:03d}.txt")
+            os.path.join(self.data_path, "lidar_pose", f"{self.start_timestep:06d}.txt")
         )
         for t in range(self.start_timestep, self.end_timestep):
             lidar_to_world_current = np.loadtxt(
-                os.path.join(self.data_path, "lidar_pose", f"{t:03d}.txt")
+                os.path.join(self.data_path, "lidar_pose", f"{t:06d}.txt")
             )
             # compute lidar_to_world transformation
             lidar_to_world = (

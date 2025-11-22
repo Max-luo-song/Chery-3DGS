@@ -1083,7 +1083,7 @@ def save_videos(
 
 
 def render_novel_views(
-    trainer,
+    trainer: BasicTrainer,
     render_data: list,
     camera_data: CameraData,
 ) -> list:
@@ -1316,7 +1316,7 @@ def save_single_camera_video(
             # 为每个 timestep 创建目录
             for timestep in range(start_timestep, end_timestep):
                 os.makedirs(
-                    os.path.join(image_save_dir, f"{timestep:03d}"), exist_ok=True
+                    os.path.join(image_save_dir, f"{timestep:06d}"), exist_ok=True
                 )
 
         video_tmp_save_pth = video_save_pth.replace(".mp4", f"_cam{cam_id}_{key}.mp4")
@@ -1370,7 +1370,7 @@ def save_single_camera_video(
             if image_save_dir is not None:
                 imageio.imwrite(
                     os.path.join(
-                        image_save_dir, f"{timestep:03d}", f"{cam_id}_{key}.png"
+                        image_save_dir, f"{timestep:06d}", f"{cam_id}_{key}.png"
                     ),
                     single_frame,
                 )
