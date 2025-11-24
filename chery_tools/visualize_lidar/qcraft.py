@@ -11,7 +11,7 @@ def load_lidar(data_path):
 
     lidar_points = []
     for t in range(total_frames):
-        lidar_path = os.path.join(data_path, "lidar", "bin" f"{t:06d}.bin")
+        lidar_path = os.path.join(data_path, "lidar", "bin", f"{t:06d}.bin")
         lidar_info = np.fromfile(lidar_path, dtype=np.float32).reshape(-1, 5)
         lidar_info = lidar_info[lidar_info[:, -1] == 0]
         lidar_info = lidar_info[:, :4]  # x, y, z, intensity
@@ -95,7 +95,7 @@ if __name__ == "__main__":
     save_dir = os.path.join(output_dir, "lidar_vis")
     os.makedirs(save_dir, exist_ok=True)
 
-    lidar_points_list = load_lidar(data_path=data_path, lidar_type="lidar")
+    lidar_points_list = load_lidar(data_path=data_path)
     intrinsics_list = read_intrinsics(
         data_path=data_path, num_cams=num_cams
     )
@@ -113,7 +113,7 @@ if __name__ == "__main__":
         for frame_id in range(len(lidar_points_list)):
             lidar_points = lidar_points_list[frame_id]
             rgb_image_path = os.path.join(
-                data_path, "images", f"{frame_id:06d}_{cam_id}.jpg"
+                data_path, "images", f"{frame_id:06d}_{cam_id}.png"
             )
             image = cv2.imread(rgb_image_path)
 
