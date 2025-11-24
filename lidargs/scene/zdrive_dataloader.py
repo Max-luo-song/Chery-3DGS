@@ -7,9 +7,9 @@ import json
 import shutil
 
 
-class Chery_Dataloader:
+class ZDrive_Dataloader:
     """
-    Load Chery dataset, output as Waymo format
+    Load ZDrive dataset, output as Waymo format
     """
 
     FOV_HORIZONTAL = 120 * torch.pi / 180.0
@@ -127,6 +127,7 @@ class Chery_Dataloader:
         self.root_path = args.source_path
         self.case = args.caseid
         self.block_id = args.block_id
+
         self.frames_data = self.load_frames_data(train_frame_times)
         print("[ Info ] this case have {} frames totally".format(len(self.frames_data)))
 
@@ -184,6 +185,7 @@ class Chery_Dataloader:
             self.static_pcd = self.load_static_pcd()
 
         self.range_views, self.masks = self.load_rangeview(self.H_lidar, self.W_lidar)
+
         self.novel_poses_setting = None
 
     def load_rangeview(self, H_lidar, W_lidar):
@@ -383,21 +385,15 @@ class Chery_Dataloader:
 
             frame_indices = frame_ann["frame_idx"]  # list of int
             filtered_frame_indices = []
-            obj_to_world_list = []
-            box_sizes = []
             for frame_idx in frame_indices:
                 if frame_idx not in train_frame_times:
                     continue
                 filtered_frame_indices.append(frame_idx)
-                obj_to_world_list.append(
-                    frame_ann["obj_to_world"][frame_ann["frame_idx"].index(frame_idx)]
-                )
-                box_sizes.append(
-                    frame_ann["box_size"][frame_ann["frame_idx"].index(frame_idx)]
-                )
             frame_indices = filtered_frame_indices
             if len(frame_indices) == 0:
                 continue
+            obj_to_world_list = frame_ann["obj_to_world"]  # list of 4x4 matrices
+            box_sizes = frame_ann["box_size"]  # list of [l, w, h]
 
             poses = [np.array(mat, dtype=np.float32) for mat in obj_to_world_list]
             for pose in poses:
@@ -492,11 +488,12 @@ class Chery_Dataloader:
         ):
             print("Warning: No valid frames found for object_id:", object_id)
             return False, None
+
         self.obj_frames_id[str(object_id)] = obj_occurred_frames
         self.obj_o2l[str(object_id)] = obj_b2ls
         # 保存每个obj为一个单独的pcd文件，方便后续查看
         obj_pcd_save_path = os.path.join(
-            self.root_path, "lidar", "dynamic_pcd", "object_whole_pcd"
+            self.root_path, "mclidar", "dynamic_pcd", "object_whole_pcd"
         )
         if not os.path.exists(obj_pcd_save_path):
             os.makedirs(obj_pcd_save_path)
@@ -515,7 +512,7 @@ class Chery_Dataloader:
         """
         加载指定训练帧的点云数据和位姿信息，并按照动态od标注信息，提取动静态点云，返回每帧数据的列表。
         """
-        lidar_filefolder = os.path.join(self.root_path, "lidar")
+        lidar_filefolder = os.path.join(self.root_path, "mclidar")
         bin_files = [f for f in os.listdir(lidar_filefolder) if f.endswith(".bin")]
         bin_files = sorted(bin_files, key=lambda x: int(x.split(".")[0]))
 
@@ -556,18 +553,19 @@ class Chery_Dataloader:
             )
             single_frame_data["lidar2world"] = lidar_to_world
 
-            # x y z intensity lidar_id
+            # x y z intensity timestamp ring lidar_id
             lidar_info = np.fromfile(
-                os.path.join(self.root_path, "lidar", str(i).zfill(3) + ".bin"),
+                os.path.join(self.root_path, "mclidar", str(i).zfill(3) + ".bin"),
                 dtype=np.float32,
-            ).reshape(-1, 5)
+            ).reshape(-1, 7)
 
             # 过滤掉lidar_id不为0的点
-            lidar_info = lidar_info[lidar_info[:, 4] == 0]
+            lidar_info = lidar_info[lidar_info[:, 6] == 0]
 
             # 强度在0-1之间
+            lidar_info[:, 3] = lidar_info[:, 3] / 255.0
             single_frame_data["raw_pcd"] = lidar_info[:, :4]  # x,y,z,intensity
-            single_frame_data["lidar_id"] = lidar_info[:, 4]
+            single_frame_data["lidar_id"] = lidar_info[:, 6]
 
             # 提取动态和静态点云，如果文件存在，则直接加载，否则进行筛选
             dynamic_pcd = []
@@ -640,6 +638,7 @@ class Chery_Dataloader:
                 static_pcd = self.filter_static_background_points(
                     pointcloud_xyz, dynamic_obj_infos
                 )
+                static_pcd = pointcloud_xyz
                 # 保存静态点云到文件
                 static_pcd_path = os.path.join(
                     static_pcd_file_folder, f"{str(i).zfill(3)}_static.txt"
@@ -656,10 +655,10 @@ class Chery_Dataloader:
     def load_static_pcd(self):
         static_pcd = []
         static_pcd_file_path = os.path.join(
-            self.root_path, str(self.block_id) + "_static_scene_all_frames.txt"
+            self.root_path, str(self.block_id) + "_static_scene_all_frames.npy"
         )
         if os.path.exists(static_pcd_file_path):
-            static_pcd = np.loadtxt(static_pcd_file_path)
+            static_pcd = np.load(static_pcd_file_path)
         else:
             # 拼接训练帧点云作为静态场景，后续的高斯初始化需要
             pcd_xyzs = []
@@ -674,18 +673,13 @@ class Chery_Dataloader:
             static_pcd = np.concatenate(pcd_xyzs, axis=0)  # shape: (total_points, 3)
             # 再过滤一次动态od
             all_dynamic_bboxs = self.get_all_dynamic_bboxs()
-            # static_pcd = self.filter_dynamic_objects(static_pcd, all_dynamic_bboxs)
-            np.savetxt(
-                os.path.join(
-                    self.root_path, str(self.block_id) + "_static_scene_all_frames.txt"
-                ),
-                static_pcd,
-            )
-            print("[ Info ] static scene have {} points".format(static_pcd.shape[0]))
+            static_pcd = self.filter_dynamic_objects(static_pcd, all_dynamic_bboxs)
+            np.save(static_pcd_file_path, static_pcd)
+            print(f"[ Info ] static scene have {static_pcd.shape[0]} points")
 
         return static_pcd
 
-    def filter_points_in_box(self, pointcloud, obj_center_pos, size, margin=0.2):
+    def filter_points_in_box(self, pointcloud, obj_center_pos, size):
         """
         筛选出以obj_center_pos为中心、尺寸为size的矩形区域内的点云
 
@@ -707,7 +701,7 @@ class Chery_Dataloader:
             return None
 
         # 计算矩形边界
-        half_size = np.array(size) / 2 + margin
+        half_size = np.array(size) / 2
         min_bounds = np.array(obj_center_pos) - half_size
         max_bounds = np.array(obj_center_pos) + half_size
 
@@ -723,9 +717,7 @@ class Chery_Dataloader:
 
         return pointcloud[mask]
 
-    def filter_static_background_points(
-        self, pointcloud, dynamic_obj_infos, margin=0.2
-    ):
+    def filter_static_background_points(self, pointcloud, dynamic_obj_infos):
         """
         从点云中移除动态物体区域的点云，保留静态背景点云。
 
@@ -752,7 +744,7 @@ class Chery_Dataloader:
             center = obj_info["center"]
             size = obj_info["size"]
 
-            half_size = np.array(size) / 2 + margin
+            half_size = np.array(size) / 2
             min_bounds = np.array(center) - half_size
             max_bounds = np.array(center) + half_size
 

@@ -258,7 +258,7 @@ def judgeWhichBlock(sim_baselidar_to_world_pose, block_id_with_rect, log=None):
     return result_block_id
 
 
-def dataPartitionChery(args, single_block_test=True):
+def dataPartitionChery(args, block_size, single_block_test=True):
     print("[ Info ] start dataPartitionChery")
     lidar_filefolder = os.path.join(args.source_path, "lidar")
     bin_files = [f for f in os.listdir(lidar_filefolder) if f.endswith(".bin")]
@@ -268,7 +268,11 @@ def dataPartitionChery(args, single_block_test=True):
     bin_count = len(bin_files)
 
     all_timestamp = list(range(start_frame, start_frame + bin_count))
-    block_time = {0: all_timestamp[0:100]}
+    # 每隔block_size帧作为一个block, 根据all_timestamp的长度决定block数量
+    block_time = {}
+    for i in range(0, len(all_timestamp), block_size):
+        block_id = i // block_size
+        block_time[block_id] = all_timestamp[i : i + block_size]
 
     block_time_with_extend = block_time
     block_time_without_extend = block_time
