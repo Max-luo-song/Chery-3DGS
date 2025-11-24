@@ -518,6 +518,11 @@ class QcraftProcessor(object):
                 ego_mask = np.zeros((cam.height, cam.width), dtype=np.bool_)
             ego_masks.append(ego_mask)
 
+        # 自车区域
+        half_l = 2.4
+        half_w = 1.2
+        half_h = 1.5
+
         for frame_idx, frame_timestamp in tqdm(
             enumerate(scene_data.frame_timestamps),
             total=len(scene_data.frame_timestamps),
@@ -545,40 +550,35 @@ class QcraftProcessor(object):
                 pc_ego_list.append(pc_ego)
 
                 xyz_ego = pc_ego[:, :3]  # [N, 3]
+                intensity_col = pc_ego[:, 3:4]  # [N, 1]
+
+                # 滤除车身点
+                ego_pointcloud_mask = (
+                    (np.abs(xyz_ego[:, 0]) <= half_l) &
+                    (np.abs(xyz_ego[:, 1]) <= half_w) &
+                    (np.abs(xyz_ego[:, 2]) <= half_h)
+                )
+                print(f"Filtered {ego_pointcloud_mask.sum()} ego car points.")
+
+                xyz_ego = xyz_ego[~ego_pointcloud_mask]
+                intensity_col = intensity_col[~ego_pointcloud_mask]
+
+                # 转换到 LiDAR 坐标系
                 xyz_ego_homo = np.hstack([xyz_ego, np.ones((xyz_ego.shape[0], 1))])  # [N, 4]
                 xyz_lidar_homo = (np.linalg.inv(scene_data.lidar2ego) @ xyz_ego_homo.T).T  # [N, 4]
                 xyz_lidar = xyz_lidar_homo[:, :3]  # [N, 3]
 
-                intensity_col = pc_ego[:, 3:4]  # [N, 1]
                 lidar_id_col = np.full((xyz_lidar.shape[0], 1), lidar_id, dtype=np.float32)  # [N, 1]
                 pc_lidar = np.hstack([xyz_lidar, intensity_col, lidar_id_col])  # [N, 5]
                 pc_lidar_list.append(pc_lidar)
             
-            pc_ego = np.concatenate(pc_ego_list, axis=0)  # x y z intensity
-            pc_lidar =  np.concatenate(pc_lidar_list, axis=0)  # x y z intensity lidar_id
+            pc_ego_raw = np.concatenate(pc_ego_list, axis=0)  # x y z intensity
+            pc_lidar_raw =  np.concatenate(pc_lidar_list, axis=0)  # x y z intensity lidar_id
 
-            ##########################################
-            # 1. 以二进制文件形式保存LiDAR信息
-            ##########################################
-            bin_path = os.path.join(lidar_dir_bin, f"{str(frame_idx).zfill(6)}.bin")
-            pc_lidar.tofile(bin_path)
+            xyzs_ego = pc_ego_raw[:, :3]
 
-            ##########################################
-            # 2. 保存LiDAR condition所需数据
-            ##########################################
-            xyzs_ego = pc_ego[:, :3]
-
-            # 滤除车身点
-            half_l = 2.4
-            half_w = 1.2
-            half_h = 1.5
-
-            ego_pointcloud_mask = (
-                (np.abs(xyzs_ego[:, 0]) > half_l)
-                | (np.abs(xyzs_ego[:, 1]) > half_w)
-                | (np.abs(xyzs_ego[:, 2]) > half_h)
-            )
-            xyzs_ego = xyzs_ego[ego_pointcloud_mask]
+            # 滤除无效点
+            valid_global_mask = np.zeros(xyzs_ego.shape[0], dtype=bool)
 
             pcd_color = np.zeros((xyzs_ego.shape[0], 3), dtype=np.uint8)
             pcd_mask = np.zeros(xyzs_ego.shape[0], dtype=np.bool_)  # 是否已上色
@@ -618,6 +618,8 @@ class QcraftProcessor(object):
                     & (depth_cam > 0)
                     & (~ego_mask_proj)
                 )
+                valid_global_mask |= inliner_mask
+
                 #######################################################
                 points2d_camera = points2d[inliner_mask]
                 points3d_camera = points3d_camera[inliner_mask]
@@ -662,7 +664,6 @@ class QcraftProcessor(object):
             
             # 保存 actor 点云
             pcd_instance_mask = np.zeros(xyzs_ego.shape[0], dtype=np.bool_)
-
             for track_id in frame_instances[str(frame_idx)]:
                 actor_dir = os.path.join(lidar_dir_actor, f"{track_id}")
                 os.makedirs(actor_dir, exist_ok=True)
@@ -711,6 +712,14 @@ class QcraftProcessor(object):
                 pcd_color[valid_background_mask],
                 pcd_mask[valid_background_mask][:, None],
             ) 
+
+            # 保存 LiDAR 二进制文件
+            print(f"Filtered {(~valid_global_mask).sum()}/{pc_lidar_raw.shape[0]} invalid points.")
+            pc_lidar_filtered = pc_lidar_raw[valid_global_mask]
+            pc_lidar_filtered = pc_lidar_filtered.astype(np.float32)
+            
+            bin_path = os.path.join(lidar_dir_bin, f"{str(frame_idx).zfill(6)}.bin")
+            pc_lidar_filtered.tofile(bin_path)
 
         # FIXME(syc): 这个会报错，但是不是必要的数据
         # # 合并 actor full.ply
