@@ -42,7 +42,7 @@ class SceneData:
     ego_pose_data: List[np.ndarray]
     cam2egos: List[np.ndarray]
     intrinsics_matrix: List[np.ndarray]
-    intrinsics_list: List[List[float]]
+    intrinsics_params: List[List[float]]
     lidar2ego: np.ndarray
 
 
@@ -201,9 +201,9 @@ class QcraftProcessor(object):
         ego2lidar = np.linalg.inv(scene_data.lidar2ego)
         for cam_id, cam2ego in tqdm(enumerate(scene_data.cam2egos), total=len(scene_data.cam2egos)):
             cam2lidar = ego2lidar @ cam2ego
-            intrinsic = scene_data.intrinsics_list[cam_id]
+            intrinsic_param = scene_data.intrinsics_params[cam_id]
             np.savetxt(os.path.join(extrinsics_save_dir, f"{cam_id}.txt"), cam2lidar)
-            np.savetxt(os.path.join(intrinsics_save_dir, f"{cam_id}.txt"), intrinsic)
+            np.savetxt(os.path.join(intrinsics_save_dir, f"{cam_id}.txt"), intrinsic_param)
 
     def save_pose(self, scene_data: SceneData, clip_save_dir: str):
         """保存每一帧的位姿"""
@@ -735,10 +735,6 @@ class QcraftProcessor(object):
         #         pass  # No pcd
 
     def _load_scene_data(self, clip_name) -> SceneData:
-        # NOTE(syc): 轻舟数据下有一个子目录
-        # original_clip_dir = os.path.join(self.load_dir, clip_name)
-        # subdirs = os.listdir(original_clip_dir)
-        # clip_dir = os.path.join(original_clip_dir, subdirs[0])
         clip_dir = os.path.join(self.load_dir, clip_name)
 
         frame_timestamps = self._read_frame_timestamps(clip_dir)
@@ -747,7 +743,7 @@ class QcraftProcessor(object):
 
         camera_params = self._read_camera_params(clip_dir)
         cam2egos = self._parse_extrinsics(camera_params)
-        intrinsics_matrix, intrinsics_list = self._parse_intrinsics(camera_params)
+        intrinsics_matrix, intrinsics_params = self._parse_intrinsics(camera_params)
 
         lidar2ego = self._read_lidar2ego(clip_dir)
 
@@ -758,7 +754,7 @@ class QcraftProcessor(object):
             ego_pose_data=ego_pose_data,
             cam2egos=cam2egos,
             intrinsics_matrix=intrinsics_matrix,
-            intrinsics_list=intrinsics_list,
+            intrinsics_params=intrinsics_params,
             lidar2ego=lidar2ego,
         )
 
