@@ -74,6 +74,7 @@ def GT_readCamerasFromTransforms(
     beam_inclinations = waymo_dynamic_model.get_beam_inclination()
     all_frame_num = waymo_dynamic_model.get_frames_nums()
     train_frame_times = waymo_dynamic_model.get_train_frame_times()
+    novel_poses_setting = waymo_dynamic_model.get_novel_poses_setting()
 
     if model_id == 0:
         occured_frames = [i for i in range(all_frame_num)]
@@ -111,15 +112,26 @@ def GT_readCamerasFromTransforms(
         FovY = 2
         l2w = all_l2w[idx]
         w2l = np.linalg.inv(l2w)
+        image_name = waymo_dynamic_model.frameid_2_timestep[idx]
+        trans = np.array([0.0, 0.0, 0.0])
+        if novel_poses_setting is not None:
+            for edit_frame in novel_poses_setting:
+                if edit_frame["frame_id"] == int(image_name):
+                    trans = np.array(edit_frame["trans"])
+                    break
 
         if model_id == 0:
+            w2l[:3, 3] += trans
             R = np.transpose(w2l[:3, :3])
             T = w2l[:3, 3]
             img_mask = waymo_dynamic_model.get_mask(idx)
+            l2w = np.linalg.inv(w2l)
         else:
+            frame_id = waymo_dynamic_model.timestep_2_frameid[image_name]
             object2lidar = waymo_dynamic_model.get_obj2lidar(
-                idx, model_id, newcar_render=False
+                frame_id, model_id, newcar_render=False
             )
+            object2lidar[:3, 3] += trans
             lidar2object = np.linalg.inv(object2lidar)
 
             R = np.transpose(object2lidar[:3, :3])
@@ -135,7 +147,6 @@ def GT_readCamerasFromTransforms(
             @ original_l2w[idx].T
         )[:, :3]
         image_lidar = waymo_dynamic_model.get_rangeview(idx)
-        image_name = waymo_dynamic_model.frameid_2_timestep[idx]
 
         cam_infos.append(
             CameraInfo(
@@ -159,7 +170,7 @@ def GT_readCamerasFromTransforms(
     if waymo_dynamic_model.train:
         if model_id == 0:
             pointcloud = waymo_dynamic_model.get_static_pcd()
-            sample_number = 500000
+            sample_number = 1000000
         else:
             pointcloud = waymo_dynamic_model.get_obj_pcd(model_id)
             sample_number = (

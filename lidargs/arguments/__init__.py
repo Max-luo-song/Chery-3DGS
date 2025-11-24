@@ -3,7 +3,7 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
 #
 # For inquiries contact  george.drettakis@inria.fr
@@ -167,7 +167,7 @@ class OptimizationParams(ParamGroup):
         self.success_threshold = 0.8  # 0.8  Adjust according to your own data
         self.densify_grad_threshold = 0.006
         self.densify_until_num_points = (
-            1000000  # 500000 Adjust according to your own data
+            1500000  # 500000 Adjust according to your own data
         )
 
         self.multistep = False

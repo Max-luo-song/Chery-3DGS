@@ -599,56 +599,6 @@ def train_composite_report(
             depth = depth * depth_distortion_aware
             render_intensity = render_intensity * depth_distortion_aware
 
-        if iteration is not None:
-            depth_numpy = depth.detach().cpu().numpy()
-            intensity_numpy = render_intensity.detach().cpu().numpy()
-            point_with_intensity = pano_to_lidar_with_intensities(
-                depth_numpy[0, :, :],
-                intensity_numpy[0],
-                lidar_K=None,
-                beam_inclinations=scene_view.beam_inclinations.detach().cpu().numpy(),
-            )
-
-            gt_depth_numpy = gt_depth.detach().cpu().numpy()
-            gt_intensity_numpy = gt_intensity.detach().cpu().numpy()
-            gt_point_with_intensity = pano_to_lidar_with_intensities(
-                gt_depth_numpy[0, :, :],
-                gt_intensity_numpy[0],
-                lidar_K=None,
-                beam_inclinations=scene_view.beam_inclinations.detach().cpu().numpy(),
-            )
-
-            # point_with_intensity[:, :3] = (camera_to_world_pose[:3, :3] @ point_with_intensity[:, :3].T).T + camera_to_world_pose[:3, 3]
-            # gt_point_with_intensity[:, :3] = (camera_to_world_pose[:3, :3] @ gt_point_with_intensity[:, :3].T).T + camera_to_world_pose[:3, 3]
-
-            save_path = os.path.join(
-                model_id_scene_info[0].scene.model_path,
-                "render_point_{}".format(iteration),
-                str(model_args.block_id),
-            )
-            os.makedirs(save_path, exist_ok=True)
-            header = "X Y Z Intensity\n"
-            render_save_path = os.path.join(save_path, "render")
-            gt_save_path = os.path.join(save_path, "gt")
-            os.makedirs(render_save_path, exist_ok=True)
-            os.makedirs(gt_save_path, exist_ok=True)
-            np.savetxt(
-                os.path.join(
-                    render_save_path, str(render_timestamp) + "_render_points.txt"
-                ),
-                point_with_intensity,
-                fmt="%.4f",
-                header=header,
-                comments="",
-            )
-            np.savetxt(
-                os.path.join(gt_save_path, str(render_timestamp) + "_gt_points.txt"),
-                gt_point_with_intensity,
-                fmt="%.4f",
-                header=header,
-                comments="",
-            )
-
         l1_test += l1_loss(render_intensity, gt_intensity)
         psnr_test += psnr(render_intensity, gt_intensity).mean().double()
         curr_depth_loss = l1_loss(depth, gt_depth)
@@ -758,6 +708,8 @@ if __name__ == "__main__":
     parser.add_argument("--start_checkpoint", type=str, default=None)
     parser.add_argument("--test_frames_interval", type=int, default=10)
     parser.add_argument("--gpu", type=str, default="-1")
+    parser.add_argument("--dataset", type=str, default="chery")
+    parser.add_argument("--block_size", type=int, default=50)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
@@ -784,8 +736,10 @@ if __name__ == "__main__":
     model_args = lp.extract(args)
 
     # load dynamic info
-    if "chery" in model_path or "orinY" in model_path:
+    if args.dataset == "chery":
         from scene.chery_dataloader import Chery_Dataloader as GT_Dataloader
+    elif args.dataset == "zdrive":
+        from scene.zdrive_dataloader import ZDrive_Dataloader as GT_Dataloader
     else:
         print("ERROR: Unsupported data format.")
         logger.info("\nUnsupported data format.")
@@ -793,14 +747,14 @@ if __name__ == "__main__":
 
     # **dataPartitionSimple**: Divide into a block every 50 frames (simple implementation)
     # **dataPartition** : Divide blocks according to scene scale （You need to adjust the parameters according to the data set）
-    if "chery" in model_path or "orinY" in model_path:
+    if args.dataset == "chery" or args.dataset == "zdrive":
         block_info_with_extend, block_info_without_extend = dataPartitionChery(
-            model_args, single_block_test=True
+            model_args, args.block_size, single_block_test=True
         )
     else:
         block_info_with_extend, block_info_without_extend = dataPartitionSimple(
             model_args, single_block_test=True
-        )  # dataPartition(model_args)
+        )
 
     for block_id, train_frame_times in block_info_with_extend.items():
         gt_dynamic_model = GT_Dataloader(
