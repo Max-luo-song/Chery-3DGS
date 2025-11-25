@@ -547,7 +547,6 @@ class QcraftProcessor(object):
                     [pc_ego[field].astype(np.float32) for field in pc_ego.dtype.names],
                     axis=1,
                 )  # x y z intensity
-                pc_ego_list.append(pc_ego)
 
                 xyz_ego = pc_ego[:, :3]  # [N, 3]
                 intensity_col = pc_ego[:, 3:4]  # [N, 1]
@@ -569,6 +568,10 @@ class QcraftProcessor(object):
                 xyz_lidar = xyz_lidar_homo[:, :3]  # [N, 3]
 
                 lidar_id_col = np.full((xyz_lidar.shape[0], 1), lidar_id, dtype=np.float32)  # [N, 1]
+
+                pc_ego = np.hstack([xyz_lidar, intensity_col, lidar_id_col])  # [N, 5]
+                pc_ego_list.append(pc_ego)
+
                 pc_lidar = np.hstack([xyz_lidar, intensity_col, lidar_id_col])  # [N, 5]
                 pc_lidar_list.append(pc_lidar)
             
