@@ -315,11 +315,23 @@ def renderComposite(
         print("--------------------[ Warning ] No Gaussians are visible!")
 
     depth = allmap[0:1]
-
     if isinstance(insert_objs, list) and len(insert_objs) > 0:
         for each_obj in insert_objs:
             if "sim_pose" in each_obj:
-                latest_xyz = (each_obj["xyz"] @ each_obj["sim_pose"].T)[:, :3]
+                obj_xyz = each_obj["xyz"]
+                xyz_hom = torch.cat(
+                    [
+                        obj_xyz,
+                        torch.ones(
+                            obj_xyz.shape[0],
+                            1,
+                            device=total_xyz.device,
+                            dtype=obj_xyz.dtype,
+                        ),
+                    ],
+                    dim=1,
+                )
+                latest_xyz = (xyz_hom @ each_obj["sim_pose"].T)[:, :3]
                 total_xyz = torch.cat((total_xyz, latest_xyz), dim=0)
             else:
                 total_xyz = torch.cat((total_xyz, each_obj["xyz"][:, :3]), dim=0)
@@ -441,7 +453,16 @@ def render(
     if isinstance(insert_objs, list) and len(insert_objs) > 0:
         for each_obj in insert_objs:
             if "sim_pose" in each_obj:
-                latest_xyz = (each_obj["xyz"] @ each_obj["sim_pose"].T)[:, :3]
+                obj_xyz = each_obj["xyz"]
+                N = obj_xyz.shape[0]
+                xyz_hom = torch.cat(
+                    [
+                        obj_xyz,
+                        torch.ones(N, 1, device=obj_xyz.device, dtype=obj_xyz.dtype),
+                    ],
+                    dim=1,
+                )
+                latest_xyz = (xyz_hom @ each_obj["sim_pose"].T)[:, :3]
                 xyz = torch.cat((xyz, latest_xyz), dim=0)
             else:
                 xyz = torch.cat((xyz, each_obj["xyz"][:, :3]), dim=0)

@@ -4,6 +4,9 @@ import numpy as np
 import sys
 import subprocess
 
+from plyfile import PlyData, PlyElement
+from typing import List, Dict, Tuple, Optional
+
 cmd = "nvidia-smi -q -d Memory |grep -A4 GPU|grep Used"
 result = (
     subprocess.run(cmd, shell=True, stdout=subprocess.PIPE).stdout.decode().split("\n")
@@ -395,6 +398,112 @@ def move_specified_objs(model_id, model_gaussians, edit_obj_info):
     return model_gaussians
 
 
+def read_single_ply_to_obj(
+    ply_file_path: str, obj_class: str = None, sim_pose: Optional[torch.Tensor] = None
+) -> Dict[str, torch.Tensor]:
+    """
+    读取单个 PLY 文件，转换为单个 obj 字典
+    """
+    try:
+        ply_data = PlyData.read(ply_file_path)
+        vertices = ply_data["vertex"]
+        num_vertices = len(vertices)
+    except Exception as e:
+        return None
+
+    # 1. 位置 (x, y, z)
+    xyz = torch.tensor(
+        np.stack([vertices["x"], vertices["y"], vertices["z"]], axis=1),
+        dtype=torch.float32,
+        device="cuda",
+    )
+
+    # 2. 不透明度 (opacity)
+    opacity = torch.tensor(
+        vertices["opacity"], dtype=torch.float32, device="cuda"
+    ).unsqueeze(
+        1
+    )  # (N,) -> (N, 1)
+    opacity = torch.clamp(opacity, 0.0, 1.0)
+    # 不透明度全设为1
+    opacity[:] = 1.0
+
+    # 3. 缩放
+    scaling = torch.tensor(
+        np.stack(
+            [vertices["scale_0"], vertices["scale_1"], vertices["scale_2"]], axis=1
+        ),
+        dtype=torch.float32,
+        device="cuda",
+    )
+    scaling = torch.exp(scaling)
+
+    # 4. 旋转四元数 (rot_0, rot_1, rot_2, rot_3)
+    rot = torch.tensor(
+        np.stack(
+            [
+                vertices["rot_0"],
+                vertices["rot_1"],
+                vertices["rot_2"],
+                vertices["rot_3"],
+            ],
+            axis=1,
+        ),
+        dtype=torch.float32,
+        device="cuda",
+    )
+
+    # 5. LiDAR color: [intensity, raydrop]
+    color = torch.ones((num_vertices, 2), dtype=torch.float32, device="cuda")
+    color[:, 0] = 1.0
+    color[:, 1] = 1.0  # raydrop
+
+    # 6. sim_pose: 确保是 (4,4) tensor 且在 device 上
+    if sim_pose is not None:
+        if isinstance(sim_pose, np.ndarray) or isinstance(sim_pose, list):
+            sim_pose = torch.tensor(
+                sim_pose, dtype=torch.float32, device="cuda"
+            ).reshape(4, 4)
+        else:
+            sim_pose = sim_pose.to(device="cuda", dtype=torch.float32).reshape(4, 4)
+
+    if sim_pose is not None:
+        sim_pose = torch.tensor(sim_pose, dtype=torch.float32).reshape(4, 4)
+
+    # 构造单个 obj 字典
+    single_obj = {
+        "obj_class": obj_class,
+        "xyz": xyz,
+        "color": color,
+        "opacity": opacity,
+        "scaling": scaling,
+        "rot": rot,
+        "sim_pose": sim_pose,
+    }
+
+    return single_obj
+
+
+def batch_read_plys_to_insert_objs(
+    edit_obj_info: EditObjInfo,
+) -> List[Dict[str, torch.Tensor]]:
+    """
+    批量读取多个 PLY 文件，生成 insert_objs 列表（一个文件对应一个 obj）
+
+    Args:
+        edit_obj_info: 包含 add_id_path_pairs 的类实例（存储 (obj_class, 文件路径) 对）
+
+    Returns:
+        insert_objs: 列表，每个元素是一个 obj 字典
+    """
+    insert_objs = []
+    for obj_class, sim_pose, obj_pcd_filepath in edit_obj_info.add_id_path_pairs:
+        single_obj = read_single_ply_to_obj(obj_pcd_filepath, obj_class, sim_pose)
+        if single_obj is not None:
+            insert_objs.append(single_obj)
+    return insert_objs
+
+
 if __name__ == "__main__":
     # Set up command line argument parser
     parser = ArgumentParser(description="Testing script parameters")
@@ -444,15 +553,12 @@ if __name__ == "__main__":
     else:
         for item in args.novel_poses:
             train_frame_times.append(item["frame_id"])
-
-    if args.dataset == "chery" or args.dataset == "zdrive":
-        block_info_with_extend, block_info_without_extend = dataPartitionChery(
-            model_args, args.block_size, single_block_test=True
-        )
-    else:
-        block_info_with_extend, block_info_without_extend = dataPartitionSimple(
-            model_args, single_block_test=True
-        )
+    block_info = {}
+    for frame_id in args.test_frames:
+        block_id = frame_id // args.block_size
+        if block_id not in block_info:
+            block_info[block_id] = []
+        block_info[block_id].append(frame_id)
 
     edit_obj_info = EditObjInfo(
         delete_obj_ids=args.delete["obj_ids"] if hasattr(args, "delete") else [],
@@ -462,15 +568,15 @@ if __name__ == "__main__":
         add_id_path_pairs=args.add["obj_id_path_pairs"] if hasattr(args, "add") else [],
         novel_poses=args.novel_poses if hasattr(args, "novel_poses") else [],
     )
+    objs = batch_read_plys_to_insert_objs(edit_obj_info)
 
-    for block_id, train_frame_times in block_info_with_extend.items():
+    for block_id, train_frame_times in block_info.items():
         model_args.block_id = block_id  # update block id
         gt_dynamic_model = GT_Dataloader(
             model_args, train=False, train_frame_times=train_frame_times
         )
         gt_dynamic_model.set_novel_poses_setting(args.novel_poses)
 
-        objs = None
         render_sets(
             gt_dynamic_model,
             model_args,
