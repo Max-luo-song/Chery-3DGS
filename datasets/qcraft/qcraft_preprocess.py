@@ -392,12 +392,6 @@ class QcraftProcessor(object):
                 mask_vehicle = np.zeros((cam.height, cam.width), dtype=np.bool_)
                 mask_human = np.zeros((cam.height, cam.width), dtype=np.bool_)
 
-                calibration_dict = dict()
-                calibration_dict["extrinsic"] = scene_data.cam2egos[cam_id]
-                calibration_dict["intrinsic"] = scene_data.intrinsics_matrix[cam_id]
-                calibration_dict["height"] = cam.height
-                calibration_dict["width"] = cam.width
-
                 for track_id in visible_objects:
                     info = instances_info[str(track_id)]
                     class_name = info["class_name"]
@@ -408,8 +402,10 @@ class QcraftProcessor(object):
 
                     box_mask = project_label_to_mask(
                         dim=[l, w, h],
-                        obj_pose=obj2ego,
-                        calibration_dict=calibration_dict,
+                        obj2ego=obj2ego,
+                        cam2ego=scene_data.cam2egos[cam_id],
+                        intrinsic=scene_data.intrinsics_matrix[cam_id],
+                        img_shape=(cam.height, cam.width)
                     )
                     if class_name == "Pedestrian":
                         mask_human = np.logical_or(mask_human, box_mask)

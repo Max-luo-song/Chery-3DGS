@@ -60,25 +60,30 @@ def project_points_to_image(points3d, intrinsic) -> np.ndarray:
     points2d = points2d[:, valid_mask].T
     return points2d
 
-def project_label_to_mask(dim, obj_pose, calibration_dict):
+def project_label_to_mask(dim, obj2ego, cam2ego, intrinsic, img_shape):
     bbox_l, bbox_w, bbox_h = dim
     bbox = np.array([[-bbox_l, -bbox_w, -bbox_h], [bbox_l, bbox_w, bbox_h]]) * 0.5
     points = bbox_to_corner3d(bbox)
     points = np.concatenate([points, np.ones_like(points[..., :1])], axis=-1)
-    points_vehicle = points @ obj_pose.T  # 3D bounding box in vehicle frame
-
-    extrinsic = calibration_dict["extrinsic"]
-    intrinsic = calibration_dict["intrinsic"]
-    width = calibration_dict["width"]
-    height = calibration_dict["height"]
-
-    mask = get_bound_2d_mask(
-        corners_3d=points_vehicle[..., :3],
+    points_vehicle = points @ obj2ego.T  # 3D bounding box in vehicle frame
+    width, height = img_shape[1], img_shape[0]
+    points_uv, valid = project_numpy(
+        xyz=points_vehicle[..., :3],
         K=intrinsic,
-        pose=np.linalg.inv(extrinsic),
+        RT=np.linalg.inv(cam2ego),
         H=height,
         W=width,
     )
+    if not valid.any():  # 不可见
+        mask = np.zeros(img_shape, dtype=np.uint8)
+    else:
+        mask = get_bound_2d_mask(
+            corners_3d=points_vehicle[..., :3],
+            K=intrinsic,
+            pose=np.linalg.inv(cam2ego),
+            H=height,
+            W=width,
+        )
     return mask
 
 def project_label_to_image(dim, obj2ego, cam2ego, intrinsic, img_shape):
