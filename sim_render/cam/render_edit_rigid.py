@@ -11,7 +11,7 @@ import torch
 from datasets.driving_dataset import DrivingDataset
 from utils.misc import import_str
 from models.trainers import BasicTrainer
-from models.video_utils import render_edit_rigid, save_videos, render_novel_views
+from models.video_utils import render_edit_rigid, save_videos, render_novel_views, render_legend
 
 logger = logging.getLogger()
 current_time = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
@@ -27,6 +27,7 @@ def do_evaluation(
     render_keys: Optional[List[str]] = None,
     post_fix: str = "",
     log_metrics: bool = True,
+    edit_cfg: OmegaConf = None
 ):
     trainer.set_eval()
 
@@ -38,8 +39,7 @@ def do_evaluation(
             dataset=dataset.test_image_set,
             compute_metrics=False,
             compute_error_map=cfg.render.vis_error,
-            rigid_id=args.rigid_id,
-            edit_value=args.edit_value
+            edit_cfg=edit_cfg,
         )
 
         if log_metrics:
@@ -106,8 +106,7 @@ def do_evaluation(
             dataset=dataset.full_image_set,
             compute_metrics=False,
             compute_error_map=cfg.render.vis_error,
-            rigid_id=args.rigid_id,
-            edit_value=args.edit_value
+            edit_cfg=edit_cfg,
         )
 
         if log_metrics:
@@ -166,6 +165,30 @@ def do_evaluation(
         del render_results, vis_frame_dict
         torch.cuda.empty_cache()
 
+    if edit_cfg.is_legend:
+        image_output_pth = f"{cfg.log_dir}/videos{post_fix}/legend_image.png"
+        video_output_pth = f"{cfg.log_dir}/videos{post_fix}/rigid_legend.mp4"
+        
+        rigid_render_results = render_legend(
+            trainer=trainer,
+            dataset=dataset.full_image_set,
+            compute_error_map=cfg.render.vis_error,
+            image_output_pth=image_output_pth
+        )
+
+        os.makedirs(os.path.dirname(video_output_pth), exist_ok=True)
+        vis_frame_dict = save_videos(
+            rigid_render_results,
+            video_output_pth,
+            layout=dataset.layout,
+            num_timestamps=dataset.num_img_timesteps,
+            keys=["rgbs"],
+            num_cams=dataset.pixel_source.num_cams,
+            save_seperate_video=cfg.logging.save_seperate_video,
+            fps=cfg.render.fps,
+            verbose=True,
+            save_images=False
+        )
 
 def main(args):
     log_dir = os.path.dirname(args.resume_from)
@@ -175,6 +198,9 @@ def main(args):
     for folder in ["videos_eval", "metrics_eval"]:
         os.makedirs(os.path.join(log_dir, folder), exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # edit config
+    edit_cfg = OmegaConf.load(args.edit_config)
 
     # build dataset
     dataset = DrivingDataset(data_cfg=cfg.data)
@@ -237,7 +263,8 @@ def main(args):
         render_keys=render_keys,
         args=args,
         post_fix="_edit_rigid",
-        log_metrics=False
+        log_metrics=False,
+        edit_cfg=edit_cfg
     )
 
     if args.enable_viewer:
@@ -268,17 +295,10 @@ if __name__ == "__main__":
         help="visualize lidar on image",
     )
     parser.add_argument(
-        "--rigid_id",
-        type=int,
+        "--edit_config",
+        type=str,
         default=False,
-        help="id of rigid to be edit",
-    )
-    parser.add_argument(
-        "--edit_value",
-        nargs=3,
-        type=float,
-        default=False,
-        help="edit value apply to rigid",
+        help="config for edit",
     )
 
     # viewer
