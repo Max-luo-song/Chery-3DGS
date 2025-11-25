@@ -2,7 +2,7 @@
 ################################################################################
 scene_idx="clip_1746752396800"
 
-camera_ids=(0 1 2 3 4 5 6)  # camera IDs to use, e.g., (0), (0 2 4)
+camera_ids=(0)  # camera IDs to use, e.g., (0), (0 2 4)
 
 lidar_type="mclidar"  # lidar（运动补偿前）/mclidar（运动补偿后）/visual（纯视觉）
 

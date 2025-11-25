@@ -1,6 +1,6 @@
 # 参数设置
 ################################################################################
-ckpt_path="output/chery_clip_1746752396800/20250930_mclidar+cam0123456+depth_loss/checkpoint_final.pth"
+ckpt_path="output/chery_clip_1746752396800/20251119_mclidar+cam0+depth_loss/checkpoint_final.pth"
 ################################################################################
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source ${SCRIPT_DIR}/utils.sh
