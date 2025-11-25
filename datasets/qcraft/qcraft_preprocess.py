@@ -569,7 +569,7 @@ class QcraftProcessor(object):
 
                 lidar_id_col = np.full((xyz_lidar.shape[0], 1), lidar_id, dtype=np.float32)  # [N, 1]
 
-                pc_ego = np.hstack([xyz_lidar, intensity_col, lidar_id_col])  # [N, 5]
+                pc_ego = np.hstack([xyz_ego, intensity_col, lidar_id_col])  # [N, 5]
                 pc_ego_list.append(pc_ego)
 
                 pc_lidar = np.hstack([xyz_lidar, intensity_col, lidar_id_col])  # [N, 5]
