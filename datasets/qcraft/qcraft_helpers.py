@@ -1,7 +1,14 @@
+import os
 import numpy as np
+import json
 
 from datasets.utils.box_utils import bbox_to_corner3d, get_bound_2d_mask
 from datasets.utils.base_utils import project_numpy
+
+from datasets.qcraft.qcraft_config import (
+    FINAL_CAM_SPECS, ORIGINAL_CAM_NAME_TO_CAM_ID,
+    MAIN_LIDAR_NAME, HAS_360_DEGREE_LIDAR
+)
 
 OPENCV2DATASET = np.array(
     [
@@ -110,5 +117,41 @@ def convert_raw_object_type_to_class_name(obj_type) -> str:
         return "Cyclist"
 
     return "Vehicle"
+
+    
+######################################################################
+# Data Loader
+######################################################################
+
+def image_filename_to_cam(x): return int(x.split('.')[0][-1])
+def image_filename_to_frame(x): return int(x.split('.')[0][:3])
+
+def load_lidar2ego(datadir):
+    ego_pose_dir = os.path.join(datadir, "ego_pose")
+    lidar_pose_dir = os.path.join(datadir, "lidar_pose")
+
+    filename = f"000000.txt"
+    ego_frame_pose = np.loadtxt(os.path.join(ego_pose_dir, filename))
+    lidar_pose = np.loadtxt(os.path.join(lidar_pose_dir, filename))
+
+    lidar2ego = np.linalg.inv(ego_frame_pose) @ lidar_pose
+    return lidar2ego
+
+def load_calibration(datadir):
+    extrinsics_dir = os.path.join(datadir, "extrinsics")
+    intrinsics_dir = os.path.join(datadir, "intrinsics")
+
+    intrinsics = []
+    extrinsics = []
+    for cam_id in FINAL_CAM_SPECS.keys():
+        intrinsic = np.loadtxt(os.path.join(intrinsics_dir, f"{cam_id}.txt"))
+        fx, fy, cx, cy = intrinsic[0], intrinsic[1], intrinsic[2], intrinsic[3]
+        intrinsic = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
+        intrinsics.append(intrinsic)
+
+        cam_to_ego = np.loadtxt(os.path.join(extrinsics_dir, f"{cam_id}.txt"))
+        extrinsics.append(cam_to_ego)
+
+    return extrinsics, intrinsics
 
     
