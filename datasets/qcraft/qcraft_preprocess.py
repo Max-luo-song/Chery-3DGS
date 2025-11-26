@@ -280,8 +280,6 @@ class QcraftProcessor(object):
                 obj_id: str = obj_data["obj_id"]
 
                 obj2ego, box_size = self._get_obj_pose_and_size(obj_data)
-                # NOTE(syc): 为避免box没有把动态物体完全包围，适当放大box
-                new_box_size = [dim + 0.4 for dim in box_size]
                 obj2world: np.ndarray = ego_pose @ obj2ego
 
                 if obj_id not in instances_info:
@@ -300,30 +298,30 @@ class QcraftProcessor(object):
                 frame_annotations["frame_idx"].append(frame_idx)
                 frame_annotations["obj_to_ego"].append(obj2ego.tolist())
                 frame_annotations["obj_to_world"].append(obj2world.tolist())
-                frame_annotations["box_size"].append(new_box_size)
+                frame_annotations["box_size"].append(box_size)
 
-        # TODO(syc)
-        # rough filter stationary objects
-        # if all the annotations of an object are stationary, remove it
-        static_ids = []
-        for obj_id, info in instances_info.items():
-            obj_to_world = instances_info[obj_id]["frame_annotations"]["obj_to_world"]
-            obj_to_world = np.array([
-                np.array(pose, dtype=np.float32).reshape(4, 4)
-                for pose in obj_to_world]
-            )
-            actor_world_postions = obj_to_world[:, :3, 3]
+        # # TODO(syc)
+        # # rough filter stationary objects
+        # # if all the annotations of an object are stationary, remove it
+        # static_ids = []
+        # for obj_id, info in instances_info.items():
+        #     obj_to_world = instances_info[obj_id]["frame_annotations"]["obj_to_world"]
+        #     obj_to_world = np.array([
+        #         np.array(pose, dtype=np.float32).reshape(4, 4)
+        #         for pose in obj_to_world]
+        #     )
+        #     actor_world_postions = obj_to_world[:, :3, 3]
 
-            distance = np.linalg.norm(actor_world_postions[0] - actor_world_postions[-1])
-            stationary = np.any(np.std(actor_world_postions, axis=0) <= 0.5) and distance <= 2
-            if stationary:
-                static_ids.append(info['id'])
+        #     distance = np.linalg.norm(actor_world_postions[0] - actor_world_postions[-1])
+        #     stationary = np.any(np.std(actor_world_postions, axis=0) <= 0.5) and distance <= 2
+        #     if stationary:
+        #         static_ids.append(info['id'])
         
-        print(f"INFO: {len(static_ids)} static objects removed")
-        print(static_ids)
-        for static_id in static_ids:
-            instances_info.pop(static_id)
-        print(f"INFO: Final number of objects: {len(instances_info)}")
+        # print(f"INFO: {len(static_ids)} static objects removed")
+        # print(static_ids)
+        # for static_id in static_ids:
+        #     instances_info.pop(static_id)
+        # print(f"INFO: Final number of objects: {len(instances_info)}")
 
         """
         frame_instances = {
