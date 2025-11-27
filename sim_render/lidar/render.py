@@ -20,6 +20,7 @@ os.system("echo $CUDA_VISIBLE_DEVICES")
 from scene import Scene
 import json
 import time
+import yaml
 from gaussian_renderer import render, prefilter_voxel, renderComposite
 import torchvision
 from tqdm import tqdm
@@ -524,6 +525,68 @@ def batch_read_plys_to_insert_objs(
             insert_objs.append(single_obj)
     return insert_objs
 
+def parse_and_apply_edit_yaml(args, yaml_path: str):
+    """
+    Parse edit_config.yaml and map its fields to args.delete / args.move / args.add.
+    Ignores novel_poses in the yaml. Ensures args.novel_poses exists (empty if absent).
+    """
+    if yaml_path is None:
+        if not hasattr(args, "novel_poses"):
+            args.novel_poses = []
+        return
+
+    if not os.path.exists(yaml_path):
+        raise FileNotFoundError(f"edit yaml not found: {yaml_path}")
+
+    with open(yaml_path, "r") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    nodes = cfg.get("Nodes", {}) or {}
+    rigid = nodes.get("RigidNodes", {}) or {}
+
+    # remove -> args.remove: {"obj_ids": [...]}
+    remove_section = rigid.get("remove", {}) or {}
+    remove_ids = remove_section.get("instance_id", []) or []
+    setattr(args, "remove", {"obj_ids": remove_ids})
+
+    # trajectory -> args.move: {"obj_id_offset_pairs": [[id, [x,y,z]], ...]}
+    traj = rigid.get("trajectory", {}) or {}
+    ids = traj.get("instance_id", []) or []
+    offsets = traj.get("offset", []) or []
+    # normalize offsets into list-of-lists
+    if offsets and isinstance(offsets[0], (int, float)):
+        offsets = [offsets]
+    if offsets and len(offsets) == 1 and len(ids) > 1:
+        offsets = offsets * len(ids)
+    move_pairs = []
+    for i, iid in enumerate(ids):
+        off = offsets[i] if i < len(offsets) else [0.0, 0.0, 0.0]
+        move_pairs.append([iid, off])
+    setattr(args, "move", {"obj_id_offset_pairs": move_pairs})
+
+    # add -> args.add: {"obj_id_path_pairs": [(obj_class, sim_pose(4x4 list)|None, path), ...]}
+    add_section = rigid.get("add", {}) or {}
+    ref_ids = add_section.get("ref_id", []) or []
+    add_objs = add_section.get("add_obj", []) or []
+    add_offsets = add_section.get("offset", []) or []
+    maxlen = max(len(add_objs), len(ref_ids), len(add_offsets))
+    add_pairs = []
+    for i in range(maxlen):
+        ref = ref_ids[i] if i < len(ref_ids) else None
+        path = add_objs[i] if i < len(add_objs) else None
+        off = add_offsets[i] if i < len(add_offsets) else None
+        sim_pose = None
+        if isinstance(off, list) and len(off) == 3:
+            sim_pose = np.eye(4).tolist()
+            sim_pose[0][3] = float(off[0])
+            sim_pose[1][3] = float(off[1])
+            sim_pose[2][3] = float(off[2])
+        add_pairs.append((ref, sim_pose, path))
+    setattr(args, "add", {"obj_id_path_pairs": add_pairs})
+
+    # ensure novel_poses exists
+    if not hasattr(args, "novel_poses"):
+        args.novel_poses = []
 
 if __name__ == "__main__":
     # Set up command line argument parser
@@ -533,18 +596,14 @@ if __name__ == "__main__":
     parser.add_argument("--iteration", default=-1, type=int)
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--test_frames", nargs="+", type=int, default=[])
-    parser.add_argument("--edit_json", type=str, default=None)
+    parser.add_argument("--edit_yaml", type=str, default=None)
     parser.add_argument("--dataset", type=str, default="chery")
     parser.add_argument("--block_size", type=int, default=50)
     args = parser.parse_args(sys.argv[1:])
     out_dir = getattr(args, "output_path", None) or "."
     logger = get_logger(out_dir)
-    # 解析json文件
-    if args.edit_json is not None:
-        with open(args.edit_json, "r") as f:
-            edit_args = json.load(f)
-        for key, value in edit_args.items():
-            setattr(args, key, value)
+    # 解析 YAML 编辑配置并映射到 args（如果提供 --edit_yaml）
+    parse_and_apply_edit_yaml(args, getattr(args, "edit_yaml", None))
     if len(args.test_frames) == 0 and not hasattr(args, "novel_poses"):
         frame_num = len(os.listdir(os.path.join(args.source_path, "lidar")))
         args.test_frames = [x for x in range(0, frame_num, 1)]
@@ -563,20 +622,13 @@ if __name__ == "__main__":
         sys.exit(1)
 
     train_frame_times = []
-
-    # # hard code
-    # args.test_frames = [x for x in range(1, 30, 1)]
-    # args.novel_poses = []
-    # for x in range(1, 30, 1):
-    #     args.novel_poses.append({"frame_id":x, "trans":[0.0, -3.0, 0.0]})
-
     if args.test_frames is not None:
         train_frame_times = args.test_frames
     else:
         for item in args.novel_poses:
             train_frame_times.append(item["frame_id"])
     block_info = {}
-    for frame_id in args.test_frames:
+    for frame_id in train_frame_times:
         block_id = frame_id // args.block_size
         if block_id not in block_info:
             block_info[block_id] = []
