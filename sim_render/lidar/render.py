@@ -17,7 +17,6 @@ os.environ["CUDA_VISIBLE_DEVICES"] = str(
 
 os.system("echo $CUDA_VISIBLE_DEVICES")
 
-sys.path.append("/scene_reconstruction/lidargs/")
 from scene import Scene
 import json
 import time
@@ -43,6 +42,17 @@ from utils.data_partition_utils import (
     dataPartitionChery,
 )
 import math
+import logging
+logger = logging.getLogger("render")
+logger.setLevel(logging.INFO)
+# avoid propagating to root logger (prevents duplicate printing)
+logger.propagate = False
+if not logger.handlers:
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s: %(message)s")
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
 
 cpu_count = os.cpu_count()
 torch.set_num_threads(cpu_count)
@@ -80,19 +90,30 @@ class EditObjInfo(NamedTuple):
 
 def get_logger(path):
     import logging
-
-    logger = logging.getLogger()
+    # use the same named logger to avoid duplicates
+    logger = logging.getLogger("render")
     logger.setLevel(logging.INFO)
-    fileinfo = logging.FileHandler(os.path.join(path, "outputs.log"))
-    fileinfo.setLevel(logging.INFO)
-    controlshow = logging.StreamHandler()
-    controlshow.setLevel(logging.INFO)
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s: %(message)s")
-    fileinfo.setFormatter(formatter)
-    controlshow.setFormatter(formatter)
+    logger.propagate = False
 
-    logger.addHandler(fileinfo)
-    logger.addHandler(controlshow)
+    log_file = os.path.join(path, "outputs.log")
+    # add FileHandler only if an identical file handler hasn't been added
+    has_file = any(
+        isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == os.path.abspath(log_file)
+        for h in logger.handlers
+    )
+    if not has_file:
+        fileinfo = logging.FileHandler(log_file)
+        fileinfo.setLevel(logging.INFO)
+        formatter = logging.Formatter("%(asctime)s - %(levelname)s: %(message)s")
+        fileinfo.setFormatter(formatter)
+        logger.addHandler(fileinfo)
+
+    # add StreamHandler only if none present
+    if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+        controlshow = logging.StreamHandler()
+        controlshow.setLevel(logging.INFO)
+        controlshow.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s: %(message)s"))
+        logger.addHandler(controlshow)
 
     return logger
 
@@ -110,8 +131,8 @@ def render_set(
     insert_objs,
 ):
     path_name = dataset.model_path.split("/")
-    render_path = os.path.join(dataset.model_path, "renders")
-    gt_path = os.path.join(dataset.model_path, "gt")
+    render_path = os.path.join(dataset.output_path, "renders")
+    gt_path = os.path.join(dataset.output_path, "gt")
     os.makedirs(render_path, exist_ok=True)
     os.makedirs(gt_path, exist_ok=True)
 
@@ -516,7 +537,8 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", type=str, default="chery")
     parser.add_argument("--block_size", type=int, default=50)
     args = parser.parse_args(sys.argv[1:])
-    logger = get_logger(args.model_path)
+    out_dir = getattr(args, "output_path", None) or "."
+    logger = get_logger(out_dir)
     # 解析json文件
     if args.edit_json is not None:
         with open(args.edit_json, "r") as f:
