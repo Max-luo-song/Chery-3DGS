@@ -22,10 +22,6 @@ import json
 from pathlib import Path
 from plyfile import PlyData, PlyElement
 
-try:
-    import laspy
-except:
-    print("No laspy")
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
 import cv2

@@ -78,6 +78,8 @@ class ModelParams(ParamGroup):
         self.eval = False
         self.lod = 0
 
+        self._output_path = ""
+
         self.appearance_dim = 0
         self.lowpoly = False
         self.ds = 1
@@ -95,6 +97,12 @@ class ModelParams(ParamGroup):
     def extract(self, args):
         g = super().extract(args)
         g.source_path = os.path.abspath(g.source_path)
+        # ensure output_path is absolute and available
+        if hasattr(g, "output_path") and g.output_path:
+            g.output_path = os.path.abspath(g.output_path)
+        else:
+            # fallback to model_path if output_path not provided
+            g.output_path = os.path.abspath(g.model_path) if hasattr(g, "model_path") else os.getcwd()
         return g
 
 
