@@ -1,0 +1,84 @@
+# 参数设置
+################################################################################
+gpu=0
+
+scene_idx="20251025_163358_QCOYSD504206"
+
+# camera IDs to use, e.g., (0), (0 2 4)
+# camera_ids=(0 1 2 3 4 5 6 7 8 9 10)  # 全相机
+# camera_ids=(0 1 2 3 4 5 7 8 10) # 去除小分辨率 6 9
+# camera_ids=(1 2 3 4 5 6 7 8 9 10) #去除cam0广角
+# camera_ids=(4 5 7 8) #去除小分辨率+保留ego_mask侧视
+# camera_ids=(4 5 7 8 10) #去除小分辨率+保留ego_mask侧视
+# camera_ids=(0) # 单独最广前视
+# camera_ids=(1) # 单独最广前视
+# camera_ids=(2 3) # 两个单独前视
+
+# camera_ids=(1,2,3) # 三个单独前视
+# camera_ids=(7) # 单独最广前视
+# camera_ids=(1 4 5 7 8 10) # 一个前 4个侧 一个后 渲染
+# camera_ids=(2 3 4 5 7 8 10) # 除了12
+# camera_ids=(0 1 2 3) # 所有前视
+camera_ids=(0 1 4 7) # 前视+侧视
+# camera_ids=(0 1) # 两个前视
+# camera_ids=(0 1 5 8) # 两个前视+后侧视
+# camera_ids=(0 1 4) # 两个前视
+# camera_ids=(0 1 7) # 两个前视
+
+lidar_type="lidar"  # lidar（运动补偿前）/visual（纯视觉）
+
+# config_file="configs/omnire_extended_cam_lidar.yaml"
+config_file="configs/omnire_extended_cam_lidar_wo_depth_loss.yaml"
+dataset_config="qcraft/4cams_${lidar_type}"
+# extra_config_info="+depth_loss"  # 额外信息，如 depth_loss
+extra_config_info=""  # 额外信息，如 depth_loss
+
+start_timestep=0 # start frame index for training
+end_timestep=-1 # end frame index, -1 for the last frame
+################################################################################
+
+# Pick an avaliable gpu
+source scripts/utils.sh
+if [ "${gpu}" = "-1" ]; then
+    gpu=$(pick_gpu)
+    if [ -z "${gpu}" ]; then
+        echo "no gpu found"
+        exit 1
+    fi
+fi
+echo "Using GPU: ${gpu}"
+
+
+output_root="output"
+project_name="qcraft_${scene_idx}"
+
+date_str=$(date +%Y%m%d)
+run_name="${date_str}_${lidar_type}+cam$(IFS="_"; echo "${camera_ids[*]}")${extra_config_info}"
+
+run_dir="${output_root}/${project_name}/${run_name}"
+
+# resume_from="output/qcraft_20251025_163358_QCOYSD504206/20251125_lidar+cam4_5_7_8_10/checkpoint_final.pth"
+# 检查输出目录是否存在，防止覆盖
+if [ -d "$run_dir" ]; then
+    echo "警告：目录 $run_dir 已存在！删除现有目录..."
+    rm -rf "$run_dir"
+fi
+mkdir -p "$run_dir"
+
+# 备份当前脚本到输出目录
+script_name=$(basename "$0")
+backup_path="${run_dir}/${script_name}"
+cp "$0" "$backup_path"
+
+# 启动训练
+export PYTHONPATH=$(pwd)
+CUDA_VISIBLE_DEVICES=${gpu} python tools/train.py \
+    --config_file $config_file \
+    --output_root $output_root \
+    --project $project_name \
+    --run_name $run_name \
+    dataset=$dataset_config \
+    data.scene_idx=$scene_idx \
+    data.pixel_source.cameras="[$(IFS=','; echo "${camera_ids[*]}")]" \
+    data.start_timestep=$start_timestep \
+    data.end_timestep=$end_timestep
