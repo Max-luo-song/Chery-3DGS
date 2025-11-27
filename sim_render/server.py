@@ -65,6 +65,8 @@ class TCPServer:
 
                 # render cam images
                 output = inference.cam_renderer_manager.render_from_pose(pose_msg)
+                # render lidar points
+                inference.lidar_renderer_manager.render_from_pose(pose_msg)
 
                 try:
                     for cam_id, image_path in output.items():
@@ -102,6 +104,11 @@ def main(args):
         resume_from=args.resume_from,
         source_path=args.source_path
     )
+    inference.init_renderer_lidar(
+        lidar_checkpoint_path=args.lidar_checkpoint_path,
+        source_path=args.source_path,
+        output_dir=args.output_dir
+    )
 
     server = TCPServer()
     server.start()
@@ -112,7 +119,7 @@ if __name__ == "__main__":
     # eval
     parser.add_argument(
         "--resume_from",
-        default="/home/workspace/scene_reconstruction_traj/output/qcraft_20251025_163358_QCOYSD504206_1595_1610/20251118_lidar+cam0_1_2_3_4_5_7_8_10/checkpoint_final.pth",
+        default="/nas_thoru/oldbak/zyj/data/20251118_lidar+cam0_1_2_3_4_5_7_8_10/checkpoint_final.pth",
         help="path to checkpoint to resume from",
         type=str,
         required=False,
@@ -121,6 +128,20 @@ if __name__ == "__main__":
         "--source_path",
         default="/nas_thoru/oldbak/zyj/data/processed_new/training/20251025_163358_QCOYSD504206_1595_1610",
         help="data source path",
+        type=str,
+        required=False,
+    )
+    parser.add_argument(
+        "--lidar_checkpoint_path",
+        default="/nas_thoru/users/yangtao/processed_new/test/20251025_163358_QCOYSD504206_1595_1610",
+        help="path to LiDAR checkpoint to resume from",
+        type=str,
+        required=False,
+    )
+    parser.add_argument(
+        "--output_dir",
+        default="./outputs",
+        help="output directory for rendered results",
         type=str,
         required=False,
     )
