@@ -1,6 +1,7 @@
 # server.py
 # -*- coding: utf-8 -*-
 import argparse
+import struct
 import socket
 import threading
 import Pose_pb2
@@ -63,8 +64,23 @@ class TCPServer:
                       f"x={pose_msg.x}, y={pose_msg.y}, yaw={pose_msg.yaw}")
 
                 # render cam images
-                inference.cam_renderer_manager.render_from_pose(pose_msg)
+                output = inference.cam_renderer_manager.render_from_pose(pose_msg)
 
+                try:
+                    for cam_id, image_path in output.items():
+                        # 读取图片
+                        with open(image_path, 'rb') as f:
+                            image_data = f.read()
+
+                        # 发送数据长度
+                        conn.sendall(struct.pack('>I', len(image_data)))
+                        # 发送图片数据
+                        conn.sendall(image_data)
+
+                        print(f"图片发送成功: {image_path}")
+
+                except Exception as e:
+                    print(f"发送失败: {e}")
                 conn.send(b"OK")
 
         except Exception as e:

@@ -52,8 +52,9 @@ class CamRendererManager:
 
         print("[Render] Pose:\n", pose)
 
-        output_paths = self.renderer.render_single_frame(cam2world)
-        print("[Render] Output:", output_paths)
+        output = self.renderer.render_single_frame(cam2world)
+        print("[Render] Output:", output)
+        return output
 
 
 # initialized only once

@@ -57,7 +57,7 @@ class Renderer:
     @torch.no_grad()
     def render_single_frame(self, pose_cam2world: np.ndarray, ref_cam_id=0):
         """
-        输入外部 4×4 位姿，对所有相机渲染一帧
+        输入外部 4*4 位姿，对所有相机渲染一帧
         """
         render_results = {}
 
