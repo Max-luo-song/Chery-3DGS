@@ -1,0 +1,29 @@
+{
+    "version": "1.0",
+    "description": "渲染配置，包括新视角pose和需要编辑的前景物体",
+    "novel_poses": [
+        {
+            "frame_id": 16, 
+            "trans": [0.0, 0.0, 0.0]
+        }
+    ],
+    "delete": {
+        "obj_ids": [2]
+    },
+    "move": {
+        "obj_id_offset_pairs": [
+        ]
+    },
+    "add": {
+        "obj_id_path_pairs": [
+            ["vehicle", 
+            [
+                1.0, 0.0, 0.0, 45.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, -1.0,
+                0.0, 0.0, 0.0, 1.0
+            ],
+            "/home/not0513/data/assets/2024_09_10_18_14_13_pc_3346_rotate.ply"]
+        ]
+    }
+}

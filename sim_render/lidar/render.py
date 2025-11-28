@@ -1,9 +1,11 @@
 import os
 import torch
-
 import numpy as np
 import sys
 import subprocess
+
+from plyfile import PlyData, PlyElement
+from typing import List, Dict, Tuple, Optional
 
 cmd = "nvidia-smi -q -d Memory |grep -A4 GPU|grep Used"
 result = (
@@ -15,10 +17,10 @@ os.environ["CUDA_VISIBLE_DEVICES"] = str(
 
 os.system("echo $CUDA_VISIBLE_DEVICES")
 
-sys.path.append("/scene_reconstruction/lidargs/")
 from scene import Scene
 import json
 import time
+import yaml
 from gaussian_renderer import render, prefilter_voxel, renderComposite
 import torchvision
 from tqdm import tqdm
@@ -36,8 +38,22 @@ from scene.cameras import Camera
 import open3d as o3d
 
 # from utils.obj_utils import get_obj_type, loadStaticObj
-from utils.data_partition_utils import getBlockInfo
+from utils.data_partition_utils import (
+    dataPartitionSimple,
+    dataPartitionChery,
+)
 import math
+import logging
+logger = logging.getLogger("render")
+logger.setLevel(logging.INFO)
+# avoid propagating to root logger (prevents duplicate printing)
+logger.propagate = False
+if not logger.handlers:
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s: %(message)s")
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
 
 cpu_count = os.cpu_count()
 torch.set_num_threads(cpu_count)
@@ -66,6 +82,43 @@ class ValidModeInfo(NamedTuple):
     need_train: bool
 
 
+class EditObjInfo(NamedTuple):
+    delete_obj_ids: list
+    obj_id_offset_pairs: list
+    add_id_path_pairs: list
+    novel_poses: list
+
+
+def get_logger(path):
+    import logging
+    # use the same named logger to avoid duplicates
+    logger = logging.getLogger("render")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    log_file = os.path.join(path, "outputs.log")
+    # add FileHandler only if an identical file handler hasn't been added
+    has_file = any(
+        isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == os.path.abspath(log_file)
+        for h in logger.handlers
+    )
+    if not has_file:
+        fileinfo = logging.FileHandler(log_file)
+        fileinfo.setLevel(logging.INFO)
+        formatter = logging.Formatter("%(asctime)s - %(levelname)s: %(message)s")
+        fileinfo.setFormatter(formatter)
+        logger.addHandler(fileinfo)
+
+    # add StreamHandler only if none present
+    if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+        controlshow = logging.StreamHandler()
+        controlshow.setLevel(logging.INFO)
+        controlshow.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s: %(message)s"))
+        logger.addHandler(controlshow)
+
+    return logger
+
+
 def render_set(
     gt_dynamic_model,
     dataset,
@@ -77,17 +130,21 @@ def render_set(
     pipeline,
     background,
     insert_objs,
-    insert_dynamic_obj=False,
 ):
     path_name = dataset.model_path.split("/")
-    render_path = os.path.join(dataset.model_path, "renders")
-    gt_path = os.path.join(dataset.model_path, "gt")
+    render_path = os.path.join(dataset.output_path, "renders")
+    gt_path = os.path.join(dataset.output_path, "gt")
     os.makedirs(render_path, exist_ok=True)
     os.makedirs(gt_path, exist_ok=True)
 
     name_list = []
     per_view_dict = {}
-    t_list = []
+    t_list = []  # 存储每帧渲染时间
+    total_frames = len(views)  # 总渲染帧数
+
+    # 记录总渲染开始时间
+    total_render_start = time.time()
+    original_l2ws = gt_dynamic_model.l2ws
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
 
         render_timestamp = view.image_name
@@ -128,8 +185,13 @@ def render_set(
         )
         torch.cuda.synchronize()
         t1 = time.time()
-
-        t_list.append(t1 - t0)
+        # 输出当前进程占用的显存（单位：MB）
+        mem_allocated = torch.cuda.memory_allocated() / 1024 / 1024
+        mem_reserved = torch.cuda.memory_reserved() / 1024 / 1024
+        logger.info(
+            f"[GPU] 当前帧显存占用: allocated={mem_allocated:.2f} MB, reserved={mem_reserved:.2f} MB"
+        )
+        t_list.append(t1 - t0)  # 记录单帧渲染时间
 
         rendering = render_pkg["render"]
         render_intensity = rendering[0:1, ...]
@@ -186,14 +248,42 @@ def render_set(
             )[:, :3]
             gt_point_with_intensity[:, :3] = gt_points
 
+        point_with_intensity_world = point_with_intensity
+        gt_point_with_intensity_world = gt_point_with_intensity
+        point_with_intensity_world[:, :3] = (
+            np.pad(point_with_intensity[:, :3], ((0, 0), (0, 1)), constant_values=1)
+            @ camera_to_world_pose.T
+        )[:, :3]
+        original_l2w = original_l2ws[idx]
+        gt_point_with_intensity_world[:, :3] = (
+            np.pad(gt_point_with_intensity[:, :3], ((0, 0), (0, 1)), constant_values=1)
+            @ original_l2w.T
+        )[:, :3]
         np.savetxt(
             os.path.join(render_path, "{}.txt".format(render_timestamp)),
-            point_with_intensity,
+            point_with_intensity_world,
         )
         np.savetxt(
             os.path.join(gt_path, "{}.txt".format(render_timestamp)),
-            gt_point_with_intensity,
+            gt_point_with_intensity_world,
         )
+
+    # 计算总渲染时间
+    total_render_time = time.time() - total_render_start
+
+    # 计算帧率 (FPS = 总帧数 / 总时间)
+    fps = total_frames / total_render_time if total_render_time > 0 else 0
+
+    # 打印帧率信息
+    logger.info(f"\n渲染完成:")
+    logger.info(f"总渲染帧数: {total_frames}")
+    logger.info(f"总渲染时间: {total_render_time:.4f} 秒")
+    logger.info(f"平均帧率 (FPS): {fps:.4f}")
+
+    # 计算单帧平均渲染时间
+    if t_list:
+        avg_frame_time = sum(t_list) / len(t_list)
+        logger.info(f"单帧平均渲染时间: {avg_frame_time:.4f} 秒")
 
 
 def render_sets(
@@ -201,15 +291,14 @@ def render_sets(
     dataset: ModelParams,
     iteration: int,
     pipeline: PipelineParams,
-    insert_static_obj: bool,
-    insert_dynamic_obj: bool,
-    insert_objs=None,
-    obj_type=None,
+    edit_obj_info,
+    insert_objs,
+    logger,
 ):
     model_id_list = [0]
     if gt_dynamic_model.get_dynamic_obj_id_list() is not None:
         model_id_list.extend(gt_dynamic_model.get_dynamic_obj_id_list())
-    print("model_id_list ", model_id_list)
+    model_id_list = delete_specified_objs(model_id_list, edit_obj_info)
 
     with torch.no_grad():
         static_views = None
@@ -239,32 +328,31 @@ def render_sets(
                 load_iteration=iteration,
                 shuffle=False,
             )
+            if not model_scene.init_status:
+                logger.info(f"model_id {model_id} init_status is False")
+                continue
 
-            if model_scene.init_status:
-
-                time_poses = {}
-                total_views = model_scene.getTotalCameras()
-                print("total_views ", len(total_views))
-
-                if model_id == 0:
-                    static_views = total_views
-
-                for view in total_views:
-                    timestamp = view.image_name
-                    camera_pose = np.eye(4)
-                    camera_pose[:3, :3] = np.transpose(view.R)
-                    camera_pose[:3, 3] = view.T
-                    time_poses[timestamp] = TimePose(
-                        camera_pose=camera_pose,
-                        view=view,
-                        valid_mask=view.img_mask,
-                        gt_mask=view.original_image,
-                    )
-
-                model_id_scene_info[model_id] = GaussianView(
-                    gaussians=model_gaussians, scene=model_scene, time_poses=time_poses
+            time_poses = {}
+            total_views = model_scene.getTotalCameras()
+            if model_id == 0:
+                static_views = total_views
+            for view in total_views:
+                timestamp = view.image_name
+                camera_pose = np.eye(4)
+                camera_pose[:3, :3] = np.transpose(view.R)
+                camera_pose[:3, 3] = view.T
+                time_poses[timestamp] = TimePose(
+                    camera_pose=camera_pose,
+                    view=view,
+                    valid_mask=view.img_mask,
+                    gt_mask=view.original_image,
                 )
-
+            model_gaussians = move_specified_objs(
+                model_id, model_gaussians, edit_obj_info
+            )
+            model_id_scene_info[model_id] = GaussianView(
+                gaussians=model_gaussians, scene=model_scene, time_poses=time_poses
+            )
             model_gaussians.eval()
         test_views = []
         test_timestamp = []
@@ -301,6 +389,205 @@ def render_sets(
         )
 
 
+def delete_specified_objs(model_id_list, edit_obj_info):
+    if edit_obj_info is not None:
+        for delete_id in edit_obj_info.delete_obj_ids:
+            if delete_id in model_id_list:
+                model_id_list.remove(delete_id)
+    logger.info(f"model_id_list {model_id_list}")
+    return model_id_list
+
+
+def move_specified_objs(model_id, model_gaussians, edit_obj_info):
+    transform_R = torch.eye(
+        3,
+        device=model_gaussians._anchor.device,
+        dtype=model_gaussians._anchor.dtype,
+    )
+    if edit_obj_info is not None:
+        for move_pair in edit_obj_info.obj_id_offset_pairs:
+            if move_pair[0] == model_id:
+                transform_T = torch.tensor(
+                    move_pair[1],
+                    device=model_gaussians._anchor.device,
+                    dtype=model_gaussians._anchor.dtype,
+                )
+                new_anchor = (
+                    model_gaussians._anchor @ transform_R.T
+                ) + transform_T.reshape(1, 3)
+                model_gaussians._anchor.data.copy_(new_anchor)
+
+    return model_gaussians
+
+
+def read_single_ply_to_obj(
+    ply_file_path: str, obj_class: str = None, sim_pose: Optional[torch.Tensor] = None
+) -> Dict[str, torch.Tensor]:
+    """
+    读取单个 PLY 文件，转换为单个 obj 字典
+    """
+    try:
+        ply_data = PlyData.read(ply_file_path)
+        vertices = ply_data["vertex"]
+        num_vertices = len(vertices)
+    except Exception as e:
+        return None
+
+    # 1. 位置 (x, y, z)
+    xyz = torch.tensor(
+        np.stack([vertices["x"], vertices["y"], vertices["z"]], axis=1),
+        dtype=torch.float32,
+        device="cuda",
+    )
+
+    # 2. 不透明度 (opacity)
+    opacity = torch.tensor(
+        vertices["opacity"], dtype=torch.float32, device="cuda"
+    ).unsqueeze(
+        1
+    )  # (N,) -> (N, 1)
+    opacity = torch.clamp(opacity, 0.0, 1.0)
+    # 不透明度全设为1
+    opacity[:] = 1.0
+
+    # 3. 缩放
+    scaling = torch.tensor(
+        np.stack(
+            [vertices["scale_0"], vertices["scale_1"], vertices["scale_2"]], axis=1
+        ),
+        dtype=torch.float32,
+        device="cuda",
+    )
+    scaling = torch.exp(scaling)
+
+    # 4. 旋转四元数 (rot_0, rot_1, rot_2, rot_3)
+    rot = torch.tensor(
+        np.stack(
+            [
+                vertices["rot_0"],
+                vertices["rot_1"],
+                vertices["rot_2"],
+                vertices["rot_3"],
+            ],
+            axis=1,
+        ),
+        dtype=torch.float32,
+        device="cuda",
+    )
+
+    # 5. LiDAR color: [intensity, raydrop]
+    color = torch.ones((num_vertices, 2), dtype=torch.float32, device="cuda")
+    color[:, 0] = 1.0
+    color[:, 1] = 1.0  # raydrop
+
+    # 6. sim_pose: 确保是 (4,4) tensor 且在 device 上
+    if sim_pose is not None:
+        if isinstance(sim_pose, np.ndarray) or isinstance(sim_pose, list):
+            sim_pose = torch.tensor(
+                sim_pose, dtype=torch.float32, device="cuda"
+            ).reshape(4, 4)
+        else:
+            sim_pose = sim_pose.to(device="cuda", dtype=torch.float32).reshape(4, 4)
+
+    if sim_pose is not None:
+        sim_pose = torch.tensor(sim_pose, dtype=torch.float32).reshape(4, 4)
+
+    # 构造单个 obj 字典
+    single_obj = {
+        "obj_class": obj_class,
+        "xyz": xyz,
+        "color": color,
+        "opacity": opacity,
+        "scaling": scaling,
+        "rot": rot,
+        "sim_pose": sim_pose,
+    }
+
+    return single_obj
+
+
+def batch_read_plys_to_insert_objs(
+    edit_obj_info: EditObjInfo,
+) -> List[Dict[str, torch.Tensor]]:
+    """
+    批量读取多个 PLY 文件，生成 insert_objs 列表（一个文件对应一个 obj）
+
+    Args:
+        edit_obj_info: 包含 add_id_path_pairs 的类实例（存储 (obj_class, 文件路径) 对）
+
+    Returns:
+        insert_objs: 列表，每个元素是一个 obj 字典
+    """
+    insert_objs = []
+    for obj_class, sim_pose, obj_pcd_filepath in edit_obj_info.add_id_path_pairs:
+        single_obj = read_single_ply_to_obj(obj_pcd_filepath, obj_class, sim_pose)
+        if single_obj is not None:
+            insert_objs.append(single_obj)
+    return insert_objs
+
+def parse_and_apply_edit_yaml(args, yaml_path: str):
+    """
+    Parse edit_config.yaml and map its fields to args.delete / args.move / args.add.
+    Ignores novel_poses in the yaml. Ensures args.novel_poses exists (empty if absent).
+    """
+    if yaml_path is None:
+        if not hasattr(args, "novel_poses"):
+            args.novel_poses = []
+        return
+
+    if not os.path.exists(yaml_path):
+        raise FileNotFoundError(f"edit yaml not found: {yaml_path}")
+
+    with open(yaml_path, "r") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    nodes = cfg.get("Nodes", {}) or {}
+    rigid = nodes.get("RigidNodes", {}) or {}
+
+    # remove -> args.remove: {"obj_ids": [...]}
+    remove_section = rigid.get("remove", {}) or {}
+    remove_ids = remove_section.get("instance_id", []) or []
+    setattr(args, "remove", {"obj_ids": remove_ids})
+
+    # trajectory -> args.move: {"obj_id_offset_pairs": [[id, [x,y,z]], ...]}
+    traj = rigid.get("trajectory", {}) or {}
+    ids = traj.get("instance_id", []) or []
+    offsets = traj.get("offset", []) or []
+    # normalize offsets into list-of-lists
+    if offsets and isinstance(offsets[0], (int, float)):
+        offsets = [offsets]
+    if offsets and len(offsets) == 1 and len(ids) > 1:
+        offsets = offsets * len(ids)
+    move_pairs = []
+    for i, iid in enumerate(ids):
+        off = offsets[i] if i < len(offsets) else [0.0, 0.0, 0.0]
+        move_pairs.append([iid, off])
+    setattr(args, "move", {"obj_id_offset_pairs": move_pairs})
+
+    # add -> args.add: {"obj_id_path_pairs": [(obj_class, sim_pose(4x4 list)|None, path), ...]}
+    add_section = rigid.get("add", {}) or {}
+    ref_ids = add_section.get("ref_id", []) or []
+    add_objs = add_section.get("add_obj", []) or []
+    add_offsets = add_section.get("offset", []) or []
+    maxlen = max(len(add_objs), len(ref_ids), len(add_offsets))
+    add_pairs = []
+    for i in range(maxlen):
+        ref = ref_ids[i] if i < len(ref_ids) else None
+        path = add_objs[i] if i < len(add_objs) else None
+        off = add_offsets[i] if i < len(add_offsets) else None
+        sim_pose = None
+        if isinstance(off, list) and len(off) == 3:
+            sim_pose = np.eye(4).tolist()
+            sim_pose[0][3] = float(off[0])
+            sim_pose[1][3] = float(off[1])
+            sim_pose[2][3] = float(off[2])
+        add_pairs.append((ref, sim_pose, path))
+    setattr(args, "add", {"obj_id_path_pairs": add_pairs})
+
+    # ensure novel_poses exists
+    if not hasattr(args, "novel_poses"):
+        args.novel_poses = []
+
 if __name__ == "__main__":
     # Set up command line argument parser
     parser = ArgumentParser(description="Testing script parameters")
@@ -308,41 +595,68 @@ if __name__ == "__main__":
     pipeline = PipelineParams(parser)
     parser.add_argument("--iteration", default=-1, type=int)
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--insert_static_obj", action="store_true")
-    parser.add_argument("--insert_dynamic_obj", action="store_true")
-    parser.add_argument("--blockinfo", type=str, default=None)
     parser.add_argument("--test_frames", nargs="+", type=int, default=[])
-    parser.add_argument("--test_poses", type=str, default=None)
+    parser.add_argument("--edit_yaml", type=str, default=None)
+    parser.add_argument("--dataset", type=str, default="chery")
+    parser.add_argument("--block_size", type=int, default=50)
     args = parser.parse_args(sys.argv[1:])
-    if args.test_frames is None and args.test_poses is None:
-        print("Please set test_frames or test_poses_file")
-        sys.exit(1)
-    print("Rendering " + args.model_path)
+    out_dir = getattr(args, "output_path", None) or "."
+    logger = get_logger(out_dir)
+    # 解析 YAML 编辑配置并映射到 args（如果提供 --edit_yaml）
+    parse_and_apply_edit_yaml(args, getattr(args, "edit_yaml", None))
+    if len(args.test_frames) == 0 and not hasattr(args, "novel_poses"):
+        frame_num = len(os.listdir(os.path.join(args.source_path, "lidar")))
+        args.test_frames = [x for x in range(0, frame_num, 1)]
+    logger.info("Rendering " + args.model_path)
 
     # Initialize system state (RNG)
     safe_state(args.quiet)
     model_args = model.extract(args)
 
-    if "chery" in args.model_path or "orinY" in args.model_path:
+    if args.dataset == "chery":
         from scene.chery_dataloader import Chery_Dataloader as GT_Dataloader
+    elif args.dataset == "zdrive":
+        from scene.zdrive_dataloader import ZDrive_Dataloader as GT_Dataloader
     else:
-        print("ERROR: Unsupported data format.")
         logger.info("\nUnsupported data format.")
         sys.exit(1)
 
-    block_id = 0
-    train_frame_times = args.test_frames
-    gt_dynamic_model = GT_Dataloader(
-        model_args, train=False, train_frame_times=train_frame_times
+    train_frame_times = []
+    if args.test_frames is not None:
+        train_frame_times = args.test_frames
+    else:
+        for item in args.novel_poses:
+            train_frame_times.append(item["frame_id"])
+    block_info = {}
+    for frame_id in train_frame_times:
+        block_id = frame_id // args.block_size
+        if block_id not in block_info:
+            block_info[block_id] = []
+        block_info[block_id].append(frame_id)
+
+    edit_obj_info = EditObjInfo(
+        delete_obj_ids=args.delete["obj_ids"] if hasattr(args, "delete") else [],
+        obj_id_offset_pairs=(
+            args.move["obj_id_offset_pairs"] if hasattr(args, "move") else []
+        ),
+        add_id_path_pairs=args.add["obj_id_path_pairs"] if hasattr(args, "add") else [],
+        novel_poses=args.novel_poses if hasattr(args, "novel_poses") else [],
     )
-    model_args.block_id = block_id
-    objs = None
-    render_sets(
-        gt_dynamic_model,
-        model_args,
-        args.iteration,
-        pipeline.extract(args),
-        args.insert_static_obj,
-        args.insert_dynamic_obj,
-        objs,
-    )
+    objs = batch_read_plys_to_insert_objs(edit_obj_info)
+
+    for block_id, train_frame_times in block_info.items():
+        model_args.block_id = block_id  # update block id
+        gt_dynamic_model = GT_Dataloader(
+            model_args, train=False, train_frame_times=train_frame_times
+        )
+        gt_dynamic_model.set_novel_poses_setting(args.novel_poses)
+
+        render_sets(
+            gt_dynamic_model,
+            model_args,
+            args.iteration,
+            pipeline.extract(args),
+            edit_obj_info,
+            objs,
+            logger,
+        )

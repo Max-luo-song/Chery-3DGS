@@ -1,9 +1,10 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import logging
 import random
-
+import math
 import torch
 from torch.nn import Parameter
+from torch.nn.functional import normalize, sigmoid
 
 from models.modules import ConditionalDeformNetwork
 from models.gaussians.basics import *
@@ -15,6 +16,8 @@ import matplotlib.cm as cm
 import os
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+
+from plyfile import PlyData, PlyElement
 
 logger = logging.getLogger()
 
@@ -389,9 +392,6 @@ class RigidNodes(VanillaGaussians):
         trans_per_pts = trans_cur_frame[self.point_ids[..., 0]]
         
         # transform the means to world space
-        # means = torch.bmm(
-        #     rot_per_pts, means.unsqueeze(-1)
-        # ).squeeze(-1) + trans_per_pts
         means = torch.bmm(
             rot_per_pts.float(),  # 确保是 float32
             means.unsqueeze(-1).float()
@@ -412,15 +412,87 @@ class RigidNodes(VanillaGaussians):
         _quats = self.quat_act(quats)
         return quat_mult(global_quats_per_pts, _quats)
 
-    def get_gaussians(
-        self, cam: dataclass_camera, 
-        is_legend: Optional[bool] = False, 
-        image_output_pth: Optional[str]=None,
-        rigid_id: Optional[int]=None,
-        edit_value: Optional[list]=None,
-    ) -> Dict[str, torch.Tensor]:
+    def load_ply_as_gs(self,
+                   ply_path: str,
+                   device: torch.device = torch.device('cpu'),
+                   sh_degree: int = 3,
+                   scale_factor: float = 1.0):
+        """
+        读取 3DGS PLY，并返回与本网络一致的字段 (线性 scale, 原始 opacity)。
+        """
+        plydata = PlyData.read(ply_path)
+        v      = plydata['vertex']
+        names  = v.data.dtype.names
+        N      = v.count
 
+        def num_sh_bases(deg: int) -> int:
+            return (deg + 1) ** 2
+
+        def col(name, dtype=torch.float32, vd=1):
+            return torch.from_numpy(v[name]).to(dtype).view(N, vd)
+
+        # ---------------- means -----------------
+        means = torch.stack([col('x').squeeze(),
+                         col('y').squeeze(),
+                         col('z').squeeze()], 1).to(device) * scale_factor  # (N,3)
+
+        # ---------------- normals (optional) ----
+        normals = None
+        if all(k in names for k in ('nx', 'ny', 'nz')):
+            normals = torch.stack([col('nx').squeeze(),
+                               col('ny').squeeze(),
+                               col('nz').squeeze()], 1).to(device)
+
+        # ---------------- scales --------
+        scales = torch.stack([col('scale_0').squeeze(),
+                          col('scale_1').squeeze(),
+                          col('scale_2').squeeze()], 1).to(device) * scale_factor  # (N,3)
+
+        # ---------------- quats -----------------
+        quats = torch.stack([col('rot_0').squeeze(),
+                         col('rot_1').squeeze(),
+                         col('rot_2').squeeze(),
+                         col('rot_3').squeeze()], 1).to(device)
+
+        # ---------------- opacity (原始值) -------
+        opacities = col('opacity').to(device)            # (N,1) or (N,)
+
+        # ---------------- SH 0 阶 ----------------
+        f_dc = torch.stack([col('f_dc_0').squeeze(),
+                        col('f_dc_1').squeeze(),
+                        col('f_dc_2').squeeze()], 1).to(device)  # (N,3,1)
+
+        # ---------------- SH 高阶 ----------------
+        exp_rest_dim = num_sh_bases(sh_degree) - 1       # e.g. 15 for L=3
+        rest_names = sorted([n for n in names if n.startswith('f_rest_')],
+                        key=lambda s: int(s.split('_')[-1]))
+
+        if len(rest_names) == 0:
+            f_rest = torch.zeros((N, exp_rest_dim, 3), device=device)
+        else:
+            # 按列收集 → reshape
+            f_rest_raw = torch.stack([col(n).squeeze() for n in rest_names], 1) # (N, K)
+            if f_rest_raw.shape[1] % 3 != 0:
+                raise ValueError("f_rest_* 列数不是 3 的倍数")
+            f_rest = f_rest_raw.view(N, exp_rest_dim, 3).to(device) # (N,K,3)
+
+        # ---------------- 打包 --------------------
+        asset = dict(
+            means          = Parameter(means),
+            scales         = Parameter(scales),          
+            quats          = Parameter(quats),
+            opacities      = Parameter(opacities),
+            features_dc    = Parameter(f_dc),
+            features_rest  = Parameter(f_rest),
+            normals        = normals,
+            num_points     = N,
+            sh_degree      = sh_degree
+        )
+        return asset
+
+    def get_gaussians(self, cam: dataclass_camera) -> Dict[str, torch.Tensor]:
         filter_mask = torch.ones_like(self._means[:, 0], dtype=torch.bool)
+        # filter_mask = (self.point_ids.squeeze(-1) != 1)
         self.filter_mask = filter_mask
         # NOTE: hack here, need to consider a gaussian filter for efficient rendering
         
@@ -443,13 +515,13 @@ class RigidNodes(VanillaGaussians):
         activated_opacities = self.get_opacity * valid_mask.float().unsqueeze(-1)
         activated_scales = self.get_scaling
         activated_rotations = self.quat_act(world_quats)
-        actovated_colors = rgbs
-        
+        activated_colors = rgbs
+    
         # collect gaussians information
         gs_dict = dict(
             _means=world_means[filter_mask],
             _opacities=activated_opacities[filter_mask],
-            _rgbs=actovated_colors[filter_mask],
+            _rgbs=activated_colors[filter_mask],
             _scales=activated_scales[filter_mask],
             _quats=activated_rotations[filter_mask],
         )
@@ -465,40 +537,27 @@ class RigidNodes(VanillaGaussians):
             "_scales": activated_scales[filter_mask],
         }
 
-        if is_legend:
-            gs_dict = self.edit_legned_gaussians(gs_dict, image_output_pth)
-        if rigid_id and edit_value is not None:
-            gs_dict = self.edit_legned_gaussians(gs_dict, image_output_pth)
-
         return gs_dict
 
-    def edit_gaussians(
+    def edit_trajectory(
         self,
-        gs_dict: Dict,
-        rigid_id: int,
-        edit_value: list
-    ) -> Dict[str, torch.Tensor]: 
-        unique_vals, counts = torch.unique(self.point_ids, return_counts=True)
-        if instance_idx not in unique_vals:
-            raise ValueError(f"Invalid instance id: {instance_idx}, the valid instance id include: {unique_vals}")
-
-        instance_mask = (self.point_ids.squeeze(-1) == instance_idx)
-
-        shift = torch.tensor(
-            edit_value, dtype=gs_dict["_means"].dtype, device=gs_dict["_means"].device
-        ).view(1, 3)                      
-
-        # 3. 直接平移
-        gs_dict["_means"][instance_mask] += shift
+        instance_id: int,
+        offset: list,
+        ) -> Dict[str, torch.Tensor]: 
         
-        return gs_dict
+        unique_vals, counts = torch.unique(self.point_ids, return_counts=True)
+        if instance_id not in unique_vals:
+            raise ValueError(f"Invalid instance id: {instance_id}, the valid instance id include: {unique_vals}")
+
+        offset = torch.tensor(offset, device=self.instances_trans.device, dtype=self.instances_trans.dtype)
+        self.instances_trans[:, instance_id:instance_id+1, :] += offset
 
     def generate_legend_image(
         self,
         ids: torch.Tensor,        # shape (N,)
         colors: torch.Tensor,     # shape (N,3) float 0~1
         image_output_pth: str
-    )    -> np.ndarray:
+        ) -> np.ndarray:
         """
         依据 ids 与 colors 生成 legend png，并返回 numpy(H,W,3,uint8)。
 
@@ -536,30 +595,31 @@ class RigidNodes(VanillaGaussians):
 
         plt.close(fig)
 
-    def edit_legned_gaussians(
+    def color_legned_gaussians(
         self,
-        gs_dict: Dict,
         image_output_pth: str
-    ) -> Dict[str, torch.Tensor]: 
+        ) -> Dict[str, torch.Tensor]: 
         unique_vals, counts = torch.unique(self.point_ids, return_counts=True)
 
         # To find instance
         N = len(unique_vals)
         cmap = cm.get_cmap('gist_ncar')          # 连续调色板
         colors_np = cmap(np.linspace(0, 1, N, endpoint=False))[:, :3]   # (N,3)  float 0~1
-        
+
         colors = torch.from_numpy(colors_np).to(
-            dtype=gs_dict["_rgbs"].dtype,          # 通常是 torch.float32 或 float16
-            device=gs_dict["_rgbs"].device         # same GPU
+            dtype=self._features_dc.dtype,          # 通常是 torch.float32 或 float16
+            device=self._features_dc.device         # same GPU
         )
         
-        for unique_val in unique_vals:
+        # colors_sh_format = colors - 0.5
+        colors_logit_format = torch.logit(torch.clamp(colors, 1e-6, 1-1e-6))
+
+        for index, unique_val in enumerate(unique_vals):
             instance_mask = (self.point_ids.squeeze(-1) == unique_val)
-            gs_dict["_rgbs"][instance_mask, :] = colors[unique_val]
+            self._features_dc[instance_mask, :] = colors_logit_format[index]
+        self.ctrl_cfg.sh_degree=0
 
         self.generate_legend_image(unique_vals, colors, image_output_pth)
-        
-        return gs_dict
 
     def get_instance_activated_gs_dict(self, ins_id: int) -> Dict[str, torch.Tensor]:
         pts_mask = self.point_ids[..., 0] == ins_id
@@ -696,15 +756,226 @@ class RigidNodes(VanillaGaussians):
             # keeps original point ids
             self.point_ids = torch.cat([self.point_ids, torch.full_like(new_gaussian["point_ids"], ins_id)], dim=0)
     
-    def export_gaussians_to_ply(self, alpha_thresh: float, instance_id: List[int] = None) -> Dict[str, torch.Tensor]:
-        pts_mask = self.point_ids[..., 0] == instance_id
+    def replace_instance_with_ply(self,
+                              target_id: int,          # 要被替换掉的旧实例 id
+                              ply_path: str,           # 新 *.ply
+                              new_id:   int = None):   # 新实例在场景里想用的 id；默认沿用旧 id
+        """
+        用 ply 文件中的 3D-Gaussian 资产替换掉场景里的一个实例
+        ----------------------------------------------------------
+        1. 读 ply -> 得到 means / scales / quats / features / opacities
+        2. 删掉旧实例 target_id 的全部高斯
+        3. 把新高斯 append 回各个张量，并生成 point_ids
+        """
+
+        def quat_mul(q1, q2):
+            """
+            Hamilton 乘法：两个 (N,4) 四元数 → (N,4)
+            约定顺序 [w, x, y, z]
+            """
+            w1, x1, y1, z1 = q1.unbind(-1)
+            w2, x2, y2, z2 = q2.unbind(-1)
+            w = w1*w2 - x1*x2 - y1*y2 - z1*z2
+            x = w1*x2 + x1*w2 + y1*z2 - z1*y2
+            y = w1*y2 - x1*z2 + y1*w2 + z1*x2
+            z = w1*z2 + x1*y2 - y1*x2 + z1*w2
+            return torch.stack([w, x, y, z], dim=-1)
+
+
+        def apply_RT_to_gs(gs, R=torch.eye(3), t=None):
+            """
+            就地对 gs 字典做刚体变换:
+                x' = R x + t
+                q' = R ⊗ q
+            """
+            dev = gs["means"].device
+            R = R.to(dev)
+            if t is not None:
+                t = t.to(dev)
+
+            # means
+            gs["means"].data = (R @ gs["means"].T).T
+            if t is not None:
+                gs["means"].data += t
+
+            # quats
+            rot_q = matrix_to_quaternion(R)
+            rot_q = rot_q.expand(gs["quats"].shape[0], -1)
+            gs["quats"].data = normalize(quat_mul(rot_q, gs["quats"]), dim=-1)
         
-        means = self._means[pts_mask]
-        direct_color = self.colors[pts_mask]
+        # 1. 读取 ply
+        gs = self.load_ply_as_gs(ply_path, device=self.device, sh_degree=self.sh_degree, scale_factor=1.0)
+ 
+        R = torch.tensor([
+            [1,0,0],
+            [0,1,0],
+            [0,0,1]], dtype=torch.float32)
         
-        activated_opacities = self.get_opacity[pts_mask]
-        mask = activated_opacities.squeeze() > alpha_thresh
-        return {
-            "positions": means[mask],
-            "colors": direct_color[mask],
-        }
+        t_final = torch.tensor([0.0, 0.0, 0.3], device=self.device)
+
+        apply_RT_to_gs(gs, R, t_final)   # 先旋转再做最终平移
+        
+        # 2. 删旧实例
+        self.remove_instances([target_id])
+
+        # 3. 新实例 id（如果想用同一个 id 就复用）
+        if new_id is None:
+            new_id = target_id
+
+        N_new = gs["means"].shape[0]
+        new_point_ids = torch.full((N_new, 1),
+                               new_id,
+                               device=self.device)
+        
+        self._means         = Parameter(torch.cat([self._means, gs["means"]], dim=0))
+        self._scales        = Parameter(torch.cat([self._scales, gs["scales"]], dim=0))
+        self._quats         = Parameter(torch.cat([self._quats, gs["quats"]], dim=0))
+        self._opacities     = Parameter(torch.cat([self._opacities, gs["opacities"]], dim=0))
+        self._features_dc   = Parameter(torch.cat([self._features_dc, gs["features_dc"]], dim=0))
+        self._features_rest = Parameter(torch.cat([self._features_rest, gs["features_rest"]], dim=0))
+        self.point_ids      = torch.cat([self.point_ids, new_point_ids], dim=0)
+
+        print(f"[info] instance {target_id} 已被来自 {ply_path} 的 {N_new} 个高斯替换")
+
+    def add_instance_with_ply(self,
+                              target_id: int,          # 要被替换掉的旧实例 id
+                              ply_path: str,  
+                              offset: list,         
+                            ):
+        # 读取 ply
+        unique_vals = torch.unique(self.point_ids)
+
+        new_id = max(unique_vals) + 1
+        pad = torch.ones((self.instances_fv.shape[0], new_id-self.instances_fv.shape[1]+1),
+            dtype=torch.bool,
+            device=self.instances_fv.device)
+        self.instances_fv = torch.cat([self.instances_fv, pad], dim=1)
+
+        gs = self.load_ply_as_gs(ply_path, device=self.device, sh_degree=self.sh_degree, scale_factor=1.0)
+
+        N_new = gs["means"].shape[0]
+        new_point_ids = torch.full((N_new, 1),
+            new_id,
+            device=self.device)
+        
+        self._means         = Parameter(torch.cat([self._means, gs["means"]], dim=0))
+        self._scales        = Parameter(torch.cat([self._scales, gs["scales"]], dim=0))
+        self._quats         = Parameter(torch.cat([self._quats, gs["quats"]], dim=0))
+        self._opacities     = Parameter(torch.cat([self._opacities, gs["opacities"]], dim=0))
+        self._features_dc   = Parameter(torch.cat([self._features_dc, gs["features_dc"]], dim=0))
+        self._features_rest = Parameter(torch.cat([self._features_rest, gs["features_rest"]], dim=0))
+        
+        new_instance_trans = self.instances_trans[:, target_id:target_id+1, :].clone()   # (199, 1, 3)
+        new_instance_quats = self.instances_quats[:, target_id:target_id+1, :].clone()   # (199, 1, 4)
+        new_instance_trans += torch.tensor(offset, device=self.device)
+        
+        new_trans_param = Parameter(
+            torch.cat([self.instances_trans, new_instance_trans], dim=1))
+        new_quat_param  = Parameter(
+            torch.cat([self.instances_quats, new_instance_quats], dim=1))
+
+        self.instances_trans = new_trans_param
+        self.instances_quats = new_quat_param
+        self.point_ids = torch.cat([self.point_ids, new_point_ids], dim=0)
+        print(f"[info] 已添加 instance {new_id} ，来自 {ply_path} 的 {N_new} 个高斯")
+
+    def export_instance_to_ply(self,
+        path: str,
+        instance_id: Optional[int] = None,
+        alpha_thresh: float = 0.001,):
+        """
+        导出指定实例(们)的高斯资产为 3DGS PLY。
+
+        Args:
+            path          : 输出文件路径
+            instance_id  : int；若 None 则导出全部
+        """
+
+        # --- 构造全局 mask -------------------------------------------------
+        ids = self.point_ids[..., 0]                      # (N,)
+        if instance_id is None:
+            mask_inst = torch.ones_like(ids, dtype=torch.bool)
+        else:
+            mask_inst = ids == instance_id                # (N,)
+
+        alphas = self.get_opacity.squeeze(-1)  # (N,)
+        mask_alpha = alphas > alpha_thresh
+
+        mask = mask_inst & mask_alpha                     # (N,)
+
+        if mask.sum() == 0:
+            print(f"[export_instance_to_ply] nothing to export for id {instance_id}")
+            return
+
+        # 3. 取数据并转 CPU
+        m = self._means[mask].cpu().numpy()                   # (M,3)
+
+        sigma = self._scales[mask].cpu().numpy()
+
+        q  = self._quats[mask].cpu().numpy()                  # (M,4)
+        op = self._opacities[mask].cpu().numpy().squeeze()    # (M,)  logit
+
+        fdc    = self._features_dc[mask].cpu().numpy()        # (M,3)
+        frest  = self._features_rest[mask].cpu().numpy()      # (M,K,3)
+        M, K   = frest.shape[0], frest.shape[1]
+
+        # 4. 组织结构化数组
+        dtype_list = [
+            ('x','f4'), ('y','f4'), ('z','f4'),
+            ('nx','f4'), ('ny','f4'), ('nz','f4'),
+            ('f_dc_0','f4'), ('f_dc_1','f4'), ('f_dc_2','f4'),
+        ]
+
+        for k in range(K*3):
+            dtype_list.append((f'f_rest_{k}','f4'))
+
+        dtype_list += [
+            ('opacity','f4'),
+            ('scale_0','f4'), ('scale_1','f4'), ('scale_2','f4'),
+            ('rot_0','f4'), ('rot_1','f4'), ('rot_2','f4'), ('rot_3','f4'),
+        ]
+
+        arr = np.empty(M, dtype=dtype_list)
+
+        # pos
+        arr['x'], arr['y'], arr['z'] = m[:,0], m[:,1], m[:,2]
+
+        # normals = 0
+        arr['nx'].fill(0); arr['ny'].fill(0); arr['nz'].fill(0)
+
+        # dc
+        arr['f_dc_0'], arr['f_dc_1'], arr['f_dc_2'] = fdc[:,0], fdc[:,1], fdc[:,2]
+
+        # rest
+        if K > 0:
+            frest_flat = frest.reshape(M, -1)   # (M,K*3)
+            for k in range(K*3):
+                arr[f'f_rest_{k}'] = frest_flat[:,k]
+
+        # opacity (logit)
+        arr['opacity'] = op
+
+        # scale
+        arr['scale_0'], arr['scale_1'], arr['scale_2'] = sigma[:,0], sigma[:,1], sigma[:,2]
+
+        # quat
+        arr['rot_0'], arr['rot_1'], arr['rot_2'], arr['rot_3'] = q[:,0], q[:,1], q[:,2], q[:,3]
+
+        # 5. 写 PLY
+        ply_el = PlyElement.describe(arr, 'vertex')
+        PlyData([ply_el], text=False).write(path)
+
+        print(f"[export_instance_to_ply] saved {arr.shape[0]} gaussians to {path}")
+
+    # def export_gaussians_to_ply(self, alpha_thresh: float, instance_id: List[int] = None) -> Dict[str, torch.Tensor]:
+    #     pts_mask = self.point_ids[..., 0] == instance_id
+        
+    #     means = self._means[pts_mask]
+    #     direct_color = self.colors[pts_mask]
+        
+    #     activated_opacities = self.get_opacity[pts_mask]
+    #     mask = activated_opacities.squeeze() > alpha_thresh
+    #     return {
+    #         "positions": means[mask],
+    #         "colors": direct_color[mask],
+    #     }
