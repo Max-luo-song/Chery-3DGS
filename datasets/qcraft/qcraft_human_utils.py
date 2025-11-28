@@ -10,15 +10,9 @@ from utils.geometry import (
     get_corners,
     project_camera_points_to_image
 )
-from .qcraft_sourceloader import (
-    SMPLNODE_CLASSES,
-    OPENCV2DATASET,
-    AVAILABLE_CAM_LIST,
-)
+from .qcraft_sourceloader import SMPLNODE_CLASSES
 
 logger = logging.getLogger()
-
-CAMERA_LIST = AVAILABLE_CAM_LIST
 
 # TODO(ziyu): Refactor human utils scripts for all datasets into a single, unified module
 # Implement dataset-specific loaders for intrinsic and extrinsic parameters
@@ -109,8 +103,7 @@ def project_human_boxes(
             
             # load extrinsic
             cam_to_lidar = np.loadtxt(os.path.join(extrinsics_dir, f"{cam_id}.txt"))
-            cam_to_lidar = cam_to_lidar @ OPENCV2DATASET
-            lidar_to_world = np.loadtxt(os.path.join(poses_dir, f"{str(frame_id).zfill(3)}.txt"))
+            lidar_to_world = np.loadtxt(os.path.join(poses_dir, f"{frame_id:06d}.txt"))
             cam2world = lidar_to_world @ cam_to_lidar
             
             # load intrinsic
@@ -121,7 +114,7 @@ def project_human_boxes(
             
             # load image
             ori_image = cv2.imread(
-                os.path.join(images_dir, f"{str(frame_id).zfill(3)}_{cam_id}.jpg")
+                os.path.join(images_dir, f"{frame_id:06d}_{cam_id}.jpg")
             )
             image = ori_image.copy()
             H, W = image.shape[:2]

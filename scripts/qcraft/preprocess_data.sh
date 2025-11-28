@@ -1,6 +1,6 @@
 # 参数设置
 ################################################################################
-scene_id="20251103_134932_QLC0N1000623_12337_12352"
+scene_id="20251105_152839_QCOYSD504206_1240_1255"
 ################################################################################
 
 export PYTHONPATH=$(pwd)
@@ -11,4 +11,5 @@ python datasets/preprocess.py \
     --split training \
     --scene_ids $scene_id \
     --workers 2 \
-    --process_keys images lidar calib pose dynamic_masks objects track_vis
+    --process_keys ego_masks images calib pose objects dynamic_masks lidar \
+    --skip_front_wide_side_cameras

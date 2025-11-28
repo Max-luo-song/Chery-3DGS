@@ -14,6 +14,7 @@ from pytorch3d.transforms import matrix_to_quaternion
 from datasets.base.scene_dataset import ModelType
 from datasets.base.lidar_source import SceneLidarSource
 from datasets.base.pixel_source import ScenePixelSource, CameraData
+from datasets.qcraft.qcraft_helpers import load_available_camera_ids
 
 logger = logging.getLogger()
 
@@ -24,10 +25,6 @@ OBJECT_CLASS_NODE_MAPPING = {
     "Cyclist": ModelType.DeformableNodes,
 }
 SMPLNODE_CLASSES = ["Pedestrian"]
-
-# OpenCV to Dataset coordinate transformation
-# opencv coordinate system: x right, y down, z front
-OPENCV2DATASET = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
 
 # Qcraft Camera List:
 # 0 : "front_wide_110",      广角前视 FOV110
@@ -43,9 +40,6 @@ OPENCV2DATASET = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1
 # 10 : "rear_right_99",      右后 FOV99
 # 11 : "rear_right_30",      右后 FOV30
 # 12 : "rear_50",            后视 FOV50
-
-AVAILABLE_CAM_LIST = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-
 
 class QcraftCameraData(CameraData):
     def __init__(self, **kwargs):
@@ -79,9 +73,6 @@ class QcraftCameraData(CameraData):
         cam_to_main_lidar = np.loadtxt(
             os.path.join(self.data_path, "extrinsics", f"{self.cam_id}.txt")
         )
-        # covnert rays from opencv coordinate system to Qcraft coordinate system.
-        cam_to_main_lidar = cam_to_main_lidar @ OPENCV2DATASET
-
         # compute per-image poses and intrinsics
         cam_to_worlds, lidar_to_worlds = [], []
         intrinsics, distortions = [], []
@@ -133,7 +124,6 @@ class QcraftCameraData(CameraData):
         cam_to_lidar = np.loadtxt(
             os.path.join(data_path, "extrinsics", f"{cam_id}.txt")
         )
-        cam_to_lidar = cam_to_lidar @ OPENCV2DATASET
 
         # Load lidar poses and compute camera-to-world matrices
         cam_to_worlds = []
@@ -363,9 +353,11 @@ class QcraftPixelSource(ScenePixelSource):
         self.instances_model_types = instances_model_types
 
         if self.data_cfg.load_smpl:
+            cam_ids = load_available_camera_ids(self.data_path)
+
             # Collect camera-to-world matrices for all available cameras
             cam_to_worlds = {}
-            for cam_id in AVAILABLE_CAM_LIST:
+            for cam_id in cam_ids:
                 cam_to_worlds[cam_id] = QcraftCameraData.get_camera2worlds(
                     self.data_path, str(cam_id), self.start_timestep, self.end_timestep
                 )

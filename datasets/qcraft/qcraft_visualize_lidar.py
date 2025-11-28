@@ -1,8 +1,10 @@
+import argparse
 import os
 import matplotlib.cm as cm
 import imageio
 import numpy as np
 import cv2
+from qcraft_helpers import load_calibration, load_available_camera_ids
 
 
 def load_lidar(data_path):
@@ -18,35 +20,6 @@ def load_lidar(data_path):
         lidar_points.append(lidar_info)
 
     return lidar_points
-
-
-def read_intrinsics(data_path, num_cams=13, downscale=1):
-    intrinsics_matrix = []
-
-    for cam_id in range(num_cams):
-        intrinsic = np.loadtxt(os.path.join(data_path, "intrinsics", f"{cam_id}.txt"))
-        fx, fy, cx, cy = intrinsic[0], intrinsic[1], intrinsic[2], intrinsic[3]
-
-        # scale intrinsics w.r.t. load size
-        fx, fy = fx / downscale, fy / downscale
-        cx, cy = cx / downscale, cy / downscale
-
-        intrinsics_matrix.append(np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]]))
-
-    return intrinsics_matrix
-
-
-def read_lidar2cam_list(data_path, num_cams=13):
-    lidar2cam_list = []
-    for cam_id in range(num_cams):
-        # load camera extrinsics
-        cam_to_main_lidar = np.loadtxt(
-            os.path.join(data_path, "extrinsics", f"{cam_id}.txt")
-        )
-        lidar2cam = np.linalg.inv(cam_to_main_lidar)
-        lidar2cam_list.append(lidar2cam)
-
-    return lidar2cam_list
 
 
 def visualize_lidar(image, lidar_points, intrinsics, lidar2cam):
@@ -88,37 +61,40 @@ def visualize_lidar(image, lidar_points, intrinsics, lidar2cam):
 
 
 if __name__ == "__main__":
-    data_path = "data/qcraft/processed/training/20250902_163634_Q3703"
-    output_dir = "output/qcraft_20250902_163634_Q3703"
-    num_cams = 13
+    parser = argparse.ArgumentParser(description="将 masks 可视化并保存为视频。")
+    parser.add_argument("--data_dir", type=str, help="Path to the input data directory.")
+    parser.add_argument("--output_dir", type=str, help="Path to the output directory.")
+    args = parser.parse_args()
+
+    data_dir = args.data_dir
+    output_dir = args.output_dir
+
+    cam_ids = load_available_camera_ids(data_dir)
 
     save_dir = os.path.join(output_dir, "lidar_vis")
     os.makedirs(save_dir, exist_ok=True)
 
-    lidar_points_list = load_lidar(data_path=data_path)
-    intrinsics_list = read_intrinsics(
-        data_path=data_path, num_cams=num_cams
-    )
-    lidar2cam_list = read_lidar2cam_list(data_path=data_path, num_cams=num_cams)
+    lidar_points_list = load_lidar(data_path=data_dir)
+    cam2lidars, intrinsics = load_calibration(data_dir, cam_ids)
 
-    for cam_id in range(num_cams):
+    for cam_id in cam_ids:
         print(f"Visualizing lidar for cam {cam_id}...")
 
         video_path = os.path.join(save_dir, f"cam_{cam_id}.mp4")
         writer = imageio.get_writer(video_path, mode="I", fps=10)
 
-        intrinsics = intrinsics_list[cam_id]
-        lidar2cam = lidar2cam_list[cam_id]
+        intrinsic = intrinsics[cam_id]
+        lidar2cam = np.linalg.inv(cam2lidars[cam_id])
 
         for frame_id in range(len(lidar_points_list)):
             lidar_points = lidar_points_list[frame_id]
             rgb_image_path = os.path.join(
-                data_path, "images", f"{frame_id:06d}_{cam_id}.png"
+                data_dir, "images", f"{frame_id:06d}_{cam_id}.png"
             )
             image = cv2.imread(rgb_image_path)
 
             vis_image = visualize_lidar(
-                image.copy(), lidar_points, intrinsics, lidar2cam
+                image.copy(), lidar_points, intrinsic, lidar2cam
             )
 
             # # save image

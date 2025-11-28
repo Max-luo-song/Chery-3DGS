@@ -105,13 +105,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if args.dataset == "qcraft":
-        from datasets.qcraft.qcraft_human_utils import project_human_boxes, CAMERA_LIST
-    elif args.dataset == "chery":
-        # TODO(syc)
-        # from datasets.chery.chery_human_utils import project_human_boxes, CAMERA_LIST
-        pass
-    elif args.dataset == "waymo":
+    if args.dataset == "waymo":
         from datasets.waymo.waymo_human_utils import project_human_boxes, CAMERA_LIST
     elif args.dataset == "pandaset":
         from datasets.pandaset.pandaset_human_utils import project_human_boxes, CAMERA_LIST
@@ -143,6 +137,12 @@ if __name__ == "__main__":
     for scene_id in scene_ids_list:
         try:
             scene_dir = f'{args.data_root}/{str(scene_id).zfill(3)}'
+
+            if args.dataset == "qcraft":
+                from datasets.qcraft.qcraft_human_utils import project_human_boxes
+                from datasets.qcraft.qcraft_helpers import load_available_camera_ids
+                CAMERA_LIST = load_available_camera_ids(scene_dir)
+
             extract_humanpose(
                 scene_dir=scene_dir,
                 projection_fn=project_human_boxes,

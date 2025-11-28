@@ -163,6 +163,12 @@ if __name__ == "__main__":
             "objects"
         ],
     )
+    parser.add_argument(
+        "--skip_front_wide_side_cameras",
+        action="store_true",
+        help="Skip front wide side cameras"
+    )
+
     args = parser.parse_args()
     if args.dataset != 'nuscenes' and args.interpolate_N > 0:
         parser.error("interpolate_N > 0 is only allowed when dataset is 'nuscenes'")
@@ -199,6 +205,7 @@ if __name__ == "__main__":
             process_keys=args.process_keys,
             process_id_list=scene_ids_list,
             workers=args.workers,
+            skip_front_wide_side_cameras=args.skip_front_wide_side_cameras,
         )
     elif args.dataset == "waymo":
         from datasets.waymo.waymo_preprocess import WaymoProcessor
