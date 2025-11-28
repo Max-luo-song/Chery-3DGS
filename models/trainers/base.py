@@ -339,14 +339,44 @@ class BasicTrainer(nn.Module):
         
         return camera_dict
 
+    def color_legend(
+        self,
+        image_output_pth: Optional[str] = False
+    ):
+        self.models["RigidNodes"].color_legned_gaussians(image_output_pth=image_output_pth)
+
+    def edit_gaussians(
+        self,
+        edit_cfg: OmegaConf = None
+    ):
+        for class_name in edit_cfg.Nodes:
+            if "trajectory" in edit_cfg.Nodes[class_name].keys():
+                assert(len(edit_cfg.Nodes[class_name].trajectory.instance_id)==len(edit_cfg.Nodes[class_name].trajectory.offset))
+                for instance_id, offset in zip(edit_cfg.Nodes[class_name].trajectory.instance_id, edit_cfg.Nodes[class_name].trajectory.offset):
+                    self.models[class_name].edit_trajectory(
+                        instance_id=instance_id,
+                        offset=offset)
+            if "remove" in edit_cfg.Nodes[class_name].keys():
+                self.models[class_name].remove_instances(remove_id_list=edit_cfg.Nodes[class_name].remove.instance_id)
+            if "replace" in edit_cfg.Nodes[class_name].keys():
+                assert(len(edit_cfg.Nodes[class_name].replace.target_id)==len(edit_cfg.Nodes[class_name].replace.replace_obj))
+                for target_id, replace_obj in zip(edit_cfg.Nodes[class_name].replace.target_id, edit_cfg.Nodes[class_name].replace.replace_obj):
+                    print(type(replace_obj))
+                    if isinstance(replace_obj, str):
+                        self.models[class_name].replace_instance_with_ply(target_id=target_id, ply_path=replace_obj)
+                    if isinstance(replace_obj, int):
+                        self.models[class_name].replace_instances(replace_dict={target_id: replace_obj})
+                    else:
+                        raise ValueError("replace_obj只能是int或者str")
+            if "add" in edit_cfg.Nodes[class_name].keys():
+                assert(len(edit_cfg.Nodes[class_name].add.ref_id)==len(edit_cfg.Nodes[class_name].add.add_obj))==len(edit_cfg.Nodes[class_name].add.offset)
+                for ref_id, add_obj, offset in zip(edit_cfg.Nodes[class_name].add.ref_id, edit_cfg.Nodes[class_name].add.add_obj, edit_cfg.Nodes[class_name].add.offset):
+                    self.models[class_name].add_instance_with_ply(target_id=ref_id, ply_path=add_obj, offset=offset)
+
     def collect_gaussians(
         self,
         cam: dataclass_camera,
         image_ids: torch.Tensor, # leave it here for future use
-        is_legend: Optional[bool] = False,
-        image_output_pth: Optional[str] = False,
-        rigid_id: Optional[int] = None,
-        edit_value: Optional[list] = None
     ) -> dataclass_gs:
         gs_dict = {
             "_means": [],
@@ -357,13 +387,7 @@ class BasicTrainer(nn.Module):
             "class_labels": [],
         }
         for class_name in self.gaussian_classes.keys():
-            if class_name == "RigidNodes" and is_legend:
-                gs = self.models[class_name].get_gaussians(cam=cam, is_legend=is_legend, image_output_pth=image_output_pth)
-            elif class_name == "RigidNodes" and rigid_id is not None:
-                gs = self.models[class_name].get_gaussians(cam=cam, rigid_id=rigid_id, edit_value=edit_value)
-            else:
-                gs = self.models[class_name].get_gaussians(cam)
-
+            gs = self.models[class_name].get_gaussians(cam)
             if gs is None:
                 continue
     
@@ -399,7 +423,6 @@ class BasicTrainer(nn.Module):
         cam: dataclass_camera,
         **kwargs,
     ) -> Dict[str, torch.Tensor]:
-    
         def render_fn(opaticy_mask=None, return_info=False):
             renders, alphas, info = rasterization(
                 means=gs.means,

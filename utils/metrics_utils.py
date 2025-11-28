@@ -14,9 +14,8 @@ import torch.nn.functional as F
 import lpips
 from skimage.metrics import structural_similarity
 
-sys.path.append("/scene_reconstruction/third_party/")
-from chamfer3D.dist_chamfer_3D import chamfer_3DDist
-from chamfer3D.fscore import fscore
+from third_party.chamfer3D.dist_chamfer_3D import chamfer_3DDist
+from third_party.chamfer3D.fscore import fscore
 
 
 class PSNRMeter:

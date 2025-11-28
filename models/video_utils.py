@@ -19,6 +19,7 @@ from utils.visualization import (
 )
 
 from chery_tools.pinhole2fisheye.utils.pinhole2fisheye import pinhole2fisheye
+from omegaconf import OmegaConf
 
 logger = logging.getLogger()
 
@@ -112,8 +113,7 @@ def render_edit_rigid(
     trainer: BasicTrainer = None,
     compute_metrics: bool = False,
     compute_error_map: bool = False,
-    rigid_id: int = None,
-    edit_value: list = None,
+    edit_cfg: OmegaConf = None,
     vis_indices: Optional[List[int]] = None,
 ):
     """
@@ -154,6 +154,10 @@ def render_edit_rigid(
     with torch.no_grad():
         indices = vis_indices if vis_indices is not None else range(len(dataset))
         camera_downscale = trainer._get_downscale_factor()
+        
+        # edit gaussians
+        trainer.edit_gaussians(edit_cfg=edit_cfg)
+
         for i in tqdm(indices, desc=f"rendering {dataset.split}", dynamic_ncols=True):
             # get image and camera infos
             image_infos, cam_infos = dataset.get_image(i, camera_downscale)
@@ -511,6 +515,11 @@ def render_legend(
     with torch.no_grad():
         indices = vis_indices if vis_indices is not None else range(len(dataset))
         camera_downscale = trainer._get_downscale_factor()
+        
+        trainer.color_legend(
+            image_output_pth=image_output_pth
+        )
+
         for i in tqdm(indices, desc=f"rendering {dataset.split}", dynamic_ncols=True):
             # get image and camera infos
             image_infos, cam_infos = dataset.get_image(i, camera_downscale)
@@ -524,8 +533,6 @@ def render_legend(
             results = trainer(
                 image_infos,
                 cam_infos,
-                is_legend=True,
-                image_output_pth=image_output_pth,
             )
 
             # ------------- clip rgb ------------- #

@@ -198,10 +198,6 @@ class MultiTrainer(BasicTrainer):
         image_infos: Dict[str, torch.Tensor],
         camera_infos: Dict[str, torch.Tensor],
         novel_view: bool = False,
-        is_legend: Optional[bool] = False,
-        image_output_pth: Optional[str] = None,
-        rigid_id: Optional[int] = None,
-        edit_value: Optional[list] = None
     ) -> Dict[str, torch.Tensor]:
         """Forward pass of the model
 
@@ -242,10 +238,6 @@ class MultiTrainer(BasicTrainer):
         gs = self.collect_gaussians(
             cam=processed_cam,
             image_ids=image_infos["img_idx"].flatten()[0],
-            is_legend = is_legend,
-            image_output_pth=image_output_pth,
-            rigid_id=rigid_id,
-            edit_value=edit_value
         )
 
         # render gaussians

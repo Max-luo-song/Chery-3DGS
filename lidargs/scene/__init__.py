@@ -16,8 +16,6 @@ from utils.system_utils import searchForMaxIteration
 from scene.dataset_readers import sceneLoadTypeCallbacks
 from scene.gaussian_model import GaussianModel
 from arguments import ModelParams
-from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
-
 
 class Scene:
 
@@ -73,6 +71,8 @@ class Scene:
         self.cameras_extent = 1.0  # scene_info.nerf_normalization["radius"]
 
         for resolution_scale in resolution_scales:
+            from utils.camera_utils import cameraList_from_camInfos
+
             self.train_cameras[resolution_scale] = cameraList_from_camInfos(
                 scene_info.train_cameras, resolution_scale, args
             )
