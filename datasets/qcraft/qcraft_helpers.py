@@ -110,7 +110,7 @@ def convert_raw_object_type_to_class_name(obj_type) -> str:
     if obj_type == "Pedestrian":
         return "Pedestrian"
 
-    if obj_type in ["Motorcycle", "Bicycle"]:
+    if obj_type in ["Motorcycle", "Bicycle", "BicycleRider"]:
         return "Cyclist"
 
     return "Vehicle"

@@ -178,10 +178,12 @@ class QcraftProcessor(object):
         camera_timestamp = dict()
         for frame_idx, cam_images in tqdm(enumerate(scene_data.images), total=len(scene_data.images)):
             for cam_idx, img in cam_images.items():
+                # Save image
                 save_path = os.path.join(image_save_dir, f"{frame_idx:06d}_{cam_idx}.png")  # 000000_0, 000000_1, ...
                 img.save(save_path)
 
-            camera_timestamp[f"{frame_idx:06d}_{cam_idx}"] = scene_data.frame_timestamps[frame_idx]
+                # Timestamp
+                camera_timestamp[f"{frame_idx:06d}_{cam_idx}"] = scene_data.frame_timestamps[frame_idx]
 
         # Save timestamps
         camera_timestamp_save_path = os.path.join(image_save_dir, "timestamps.json")
