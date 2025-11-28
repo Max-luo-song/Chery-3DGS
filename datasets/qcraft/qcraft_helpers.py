@@ -1,14 +1,11 @@
 import os
 import numpy as np
 import json
+from typing import List, Dict
 
 from datasets.utils.box_utils import bbox_to_corner3d, get_bound_2d_mask
 from datasets.utils.base_utils import project_numpy
 
-from datasets.qcraft.qcraft_config import (
-    FINAL_CAM_SPECS, ORIGINAL_CAM_NAME_TO_CAM_ID,
-    MAIN_LIDAR_NAME, HAS_360_DEGREE_LIDAR
-)
 
 OPENCV2DATASET = np.array(
     [
@@ -126,6 +123,17 @@ def convert_raw_object_type_to_class_name(obj_type) -> str:
 def image_filename_to_cam(x): return int(x.split('.')[0][-1])
 def image_filename_to_frame(x): return int(x.split('.')[0][:3])
 
+def load_sensor_info(datadir) -> Dict[int, str]:
+    sensor_info_path = os.path.join(datadir, "sensor_info.json")
+    with open(sensor_info_path, "r") as f:
+        sensor_info = json.load(f)
+    return sensor_info
+
+def load_available_camera_ids(datadir) -> List[int]:
+    sensor_info = load_sensor_info(datadir)
+    cam_ids = [int(cam_id) for cam_id in sensor_info["camera_specs"]]
+    return cam_ids
+    
 def load_lidar2ego(datadir):
     ego_pose_dir = os.path.join(datadir, "ego_pose")
     lidar_pose_dir = os.path.join(datadir, "lidar_pose")
@@ -137,21 +145,19 @@ def load_lidar2ego(datadir):
     lidar2ego = np.linalg.inv(ego_frame_pose) @ lidar_pose
     return lidar2ego
 
-def load_calibration(datadir):
+def load_calibration(datadir, cam_ids: List[int]):
     extrinsics_dir = os.path.join(datadir, "extrinsics")
     intrinsics_dir = os.path.join(datadir, "intrinsics")
 
-    intrinsics = []
-    extrinsics = []
-    for cam_id in FINAL_CAM_SPECS.keys():
+    intrinsics = dict()
+    extrinsics = dict()
+    for cam_id in cam_ids:
         intrinsic = np.loadtxt(os.path.join(intrinsics_dir, f"{cam_id}.txt"))
         fx, fy, cx, cy = intrinsic[0], intrinsic[1], intrinsic[2], intrinsic[3]
         intrinsic = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
-        intrinsics.append(intrinsic)
+        intrinsics[cam_id] = intrinsic
 
         cam_to_ego = np.loadtxt(os.path.join(extrinsics_dir, f"{cam_id}.txt"))
-        extrinsics.append(cam_to_ego)
+        extrinsics[cam_id] = cam_to_ego
 
     return extrinsics, intrinsics
-
-    

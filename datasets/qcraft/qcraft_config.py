@@ -1,10 +1,5 @@
 from dataclasses import dataclass
-from typing import List
-
-# ==================== 配置信息 ======================
-HAS_360_DEGREE_LIDAR = False  # 量产车为 False
-NO_FRONT_WIDE_SIDE_CAMERAS = False
-# ==================================================
+from typing import List, Dict
 
 
 @dataclass(frozen=True)
@@ -17,7 +12,7 @@ class CamSpec:
 
 
 # ---------- 完整 13-cam 规格 ----------
-_ALL_CAM_SPECS: List[CamSpec] = [
+ALL_CAM_SPECS: List[CamSpec] = [
     CamSpec(
         key="CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_H110",
         name="front_wide_110",
@@ -116,15 +111,4 @@ SIDE_WIDE_KEYS = {
     "CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_RIGHT_H60",
 }
 
-if NO_FRONT_WIDE_SIDE_CAMERAS:
-    FINAL_CAM_SPECS = [c for c in _ALL_CAM_SPECS if c.key not in SIDE_WIDE_KEYS]
-else:
-    FINAL_CAM_SPECS = _ALL_CAM_SPECS
-
-FINAL_CAM_SPECS = {cam_id: c for cam_id, c in enumerate(FINAL_CAM_SPECS)}
-ORIGINAL_CAM_NAME_TO_CAM_ID = {c.key : cam_id for cam_id, c in FINAL_CAM_SPECS.items()}
-
-if HAS_360_DEGREE_LIDAR:
-    MAIN_LIDAR_NAME = "LDR_CENTER"
-else:
-    MAIN_LIDAR_NAME = "LDR_FRONT"
+LIDAR_CANDIDATES = ["LDR_CENTER", "LDR_FRONT"]

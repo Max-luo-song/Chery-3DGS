@@ -12,10 +12,7 @@ def parse_lidar_pcd_file(pcd_path, return_fields=False):
 
             if line.startswith("DATA"):
                 data_type = line.split()[1]
-                if data_type != "binary":
-                    raise ValueError("仅支持 binary 数据格式")
                 break
-
             if line:
                 header.append(line)
 
@@ -40,34 +37,29 @@ def parse_lidar_pcd_file(pcd_path, return_fields=False):
             typ = types[i]
 
             if typ == "F":
-                np_type = np.float32 if size == 4 else np.float64 if size == 8 else None
+                np_type = np.float32 if size == 4 else np.float64
             elif typ == "U":
                 np_type = (
                     np.uint8
                     if size == 1
-                    else (
-                        np.uint16
-                        if size == 2
-                        else (
-                            np.uint32 if size == 4 else np.uint64 if size == 8 else None
-                        )
-                    )
+                    else np.uint16
+                    if size == 2
+                    else np.uint32
+                    if size == 4
+                    else np.uint64
                 )
             elif typ == "I":
                 np_type = (
                     np.int8
                     if size == 1
-                    else (
-                        np.int16
-                        if size == 2
-                        else np.int32 if size == 4 else np.int64 if size == 8 else None
-                    )
+                    else np.int16
+                    if size == 2
+                    else np.int32
+                    if size == 4
+                    else np.int64
                 )
             else:
                 raise ValueError(f"不支持的类型: {typ}")
-
-            if np_type is None:
-                raise ValueError(f"无效的大小 {size} 对于类型 {typ}")
 
             for j in range(count):
                 field_name = f"{field}_{j}" if count > 1 else field
@@ -75,9 +67,37 @@ def parse_lidar_pcd_file(pcd_path, return_fields=False):
 
         dtype = np.dtype(dtype_list)
 
-        # 读取数据
-        data = np.fromfile(f, dtype=dtype, count=points)
+        # 根据 data_type 读取数据
+        if data_type.lower() == "ascii":
+            # 读取剩余所有行
+            content = f.read().decode("utf-8").strip().splitlines()
+            data_list = []
+            for line in content:
+                parts = line.strip().split()
+                if not parts:
+                    continue
+                # 将字符串转为 float 或 int
+                data_list.append([float(p) for p in parts])
+            data_np = np.array(data_list, dtype=np.float32)
 
+            # 如果字段数不一致（部分行缺失），做下安全检查
+            if data_np.shape[1] != len(dtype_list):
+                raise ValueError(
+                    f"数据列数 {data_np.shape[1]} 与头部字段数 {len(dtype_list)} 不匹配"
+                )
+
+            # 转成结构化数组
+            structured_data = np.zeros(data_np.shape[0], dtype=dtype)
+            for i, name in enumerate(dtype.names):
+                structured_data[name] = data_np[:, i]
+            data = structured_data
+
+        elif data_type.lower() == "binary":
+            data = np.fromfile(f, dtype=dtype, count=points)
+
+        else:
+            raise ValueError(f"未知的数据类型: {data_type}")
+        
         if return_fields:
             return data, fields
         return data
