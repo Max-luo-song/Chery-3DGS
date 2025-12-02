@@ -100,6 +100,8 @@ class LidarRendererManager:
         output_paths = self.renderer.render_single_frame(lidar2world)
         print("[Render] Output:", output_paths)
 
+        return output_paths
+
 # initialized only once
 cam_renderer_manager: CamRendererManager = None
 lidar_renderer_manager: LidarRendererManager = None
