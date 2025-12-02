@@ -5,6 +5,7 @@ import time
 import Pose_pb2
 import socket
 import random
+import os
 
 def data():
     # 1. 创建Protobuf消息对象并填充数据
@@ -55,12 +56,89 @@ class TCPClient:
 
             #time.sleep(100)
             # 接收响应
-            response = self.socket.recv(1024)
-            print(f"服务器响应: {response.decode('utf-8')}")
+            # response = self.socket.recv(1024)
+            # print(f"服务器响应: {response.decode('utf-8')}")
             return True
 
         except Exception as e:
             print(f"发送消息失败: {e}")
+            return False
+
+    def recv_all(self, n: int) -> bytes:
+        """从 socket 中严格读取 n 字节，若连接提前关闭则抛出异常。"""
+        data = b""
+        while len(data) < n:
+            packet = self.socket.recv(n - len(data))
+            if not packet:
+                raise ConnectionError("连接在读取时被关闭")
+            data += packet
+        return data
+
+    def _save_image(self, data_bytes: bytes, name: str, index: int, img_dir: str) -> str:
+        ext = ''
+        if '.' in name:
+            ext = os.path.splitext(name)[1]
+        else:
+            if data_bytes[:4] == b'\x89PNG':
+                ext = '.png'
+            elif data_bytes[:3] == b'\xff\xd8\xff':
+                ext = '.jpg'
+            else:
+                ext = '.bin'
+        fname = os.path.join(img_dir, f"{int(time.time())}_{index}{ext}")
+        with open(fname, 'wb') as wf:
+            wf.write(data_bytes)
+        return fname
+
+    def _save_lidar(self, data_bytes: bytes, name: str, lidar_dir: str) -> str:
+        fname = os.path.join(lidar_dir, name)
+        with open(fname, 'wb') as wf:
+            wf.write(data_bytes)
+        return fname
+
+    def receive_items(self) -> bool:
+        """接收并保存服务器发来的 items（type/name/len/data）"""
+        try:
+            header = self.recv_all(4)
+            num_items = int.from_bytes(header, 'big')
+            print(f"将接收 {num_items} 项目")
+
+            out_dir = './realtime_output/received'
+            img_dir = os.path.join(out_dir, 'images')
+            lidar_dir = os.path.join(out_dir, 'lidar')
+            os.makedirs(img_dir, exist_ok=True)
+            os.makedirs(lidar_dir, exist_ok=True)
+
+            for i in range(num_items):
+                typ = self.recv_all(1)[0]
+                name_len = int.from_bytes(self.recv_all(4), 'big')
+                name = self.recv_all(name_len).decode('utf-8')
+                size = int.from_bytes(self.recv_all(4), 'big')
+                data_bytes = self.recv_all(size)
+
+                if typ == 1:
+                    fname = self._save_image(data_bytes, name, i, img_dir)
+                    print(f"收到图片并保存为: {fname}")
+                elif typ == 2:
+                    fname = self._save_lidar(data_bytes, name, lidar_dir)
+                    print(f"收到Lidar文件并保存为: {fname}")
+                else:
+                    print(f"未知类型 {typ} 接收到，保存为原始文件")
+                    fname = os.path.join(out_dir, f"item_{i}.bin")
+                    with open(fname, 'wb') as wf:
+                        wf.write(data_bytes)
+
+            # 读取结束状态（长度前缀 + 内容）
+            status_len = int.from_bytes(self.recv_all(4), 'big')
+            status = self.recv_all(status_len)
+            try:
+                print(f"服务器响应: {status.decode('utf-8')}")
+            except Exception:
+                print(f"服务器响应 (binary): {status}")
+
+            return True
+        except Exception as e:
+            print(f"接收项目时出错: {e}")
             return False
 
     def send_message(self, message):
@@ -95,8 +173,14 @@ if __name__ == "__main__":
         messages = ["Hello, Server!", "测试消息2", "测试消息3"]
 
         for msg in range(1,11):
-            #client.send_message(msg)
-            client.send_message_pb()
+            # 发送 protobuf 消息
+            ok = client.send_message_pb()
+            if not ok:
+                print("发送失败，跳出循环")
+                break
+
+            # receive
+            client.receive_items()
 
         client.close()
 
