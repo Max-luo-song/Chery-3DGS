@@ -48,7 +48,7 @@ class Renderer:
         min_transform = None
 
         for idx in range(frame_num):
-            lidar_pose_txt = os.path.join(source_path, "lidar_pose", f"{idx:03d}.txt")
+            lidar_pose_txt = os.path.join(source_path, "lidar_pose", f"{idx:06d}.txt")
             frame_transform = load_transform_matrix(txt_path=lidar_pose_txt)
             dist = np.linalg.norm(pose[0:3, 3] - frame_transform[0:3, 3])
             if dist < min_dist:
@@ -70,7 +70,7 @@ class Renderer:
             计算当前pose到全部帧中的最近帧（获取动态障碍物），计算新pose和最近帧的相对变换
             渲染新pose下的LiDAR点云
         """
-        bin_files = [f for f in os.listdir(os.path.join(self.model_params.source_path, "lidar")) if f.endswith(".bin")]
+        bin_files = [f for f in os.listdir(os.path.join(self.model_params.source_path, "lidar", "bin")) if f.endswith(".bin")]
         frame_num = len(bin_files)
         frame_idx, rel_transfrom = self.find_nearest_frame(pose, frame_num, self.model_params.source_path)
         novel_pose = [{"frame_id": frame_idx, "trans": rel_transfrom[:3, 3].T}]
