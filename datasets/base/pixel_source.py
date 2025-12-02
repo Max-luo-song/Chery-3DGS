@@ -12,6 +12,7 @@ from PIL import Image
 import torch
 from torch import Tensor
 from datasets.dataset_meta import DATASETS_CONFIG
+from datasets.qcraft.qcraft_config import ALL_CAM_SPECS
 
 logger = logging.getLogger()
 
@@ -136,16 +137,19 @@ class CameraData(object):
         self.device = device
         self.novel_view_mode = novel_view_mode  # syc
 
-        self.cam_name = DATASETS_CONFIG[dataset_name][cam_id]["camera_name"]
-        self.original_size = DATASETS_CONFIG[dataset_name][cam_id]["original_size"]
+        if self.dataset_name == "qcraft":
+            self.cam_name = ALL_CAM_SPECS[cam_id].name
+            self.original_size = (ALL_CAM_SPECS[cam_id].height, ALL_CAM_SPECS[cam_id].width)
+            self.is_fisheye = False  # hard-coded
+        else:
+            self.cam_name = DATASETS_CONFIG[dataset_name][cam_id]["camera_name"]
+            self.original_size = DATASETS_CONFIG[dataset_name][cam_id]["original_size"]
+            self.is_fisheye = DATASETS_CONFIG[dataset_name][cam_id].get("is_fisheye", False)  # syc
+
         self.load_size = [
             int(self.original_size[0] / downscale_when_loading),
             int(self.original_size[1] / downscale_when_loading),
         ]
-
-        self.is_fisheye = DATASETS_CONFIG[dataset_name][cam_id].get(
-            "is_fisheye", False
-        )  # syc
 
         # Load the images, dynamic masks, sky masks, etc.
         self.create_all_filelist()
@@ -231,36 +235,75 @@ class CameraData(object):
 
         # Note: we assume all the files in waymo dataset are synchronized
         for t in range(self.start_timestep, self.end_timestep):
-            img_filepaths.append(
-                os.path.join(self.data_path, "images", f"{t:03d}_{self.cam_id}.jpg")
-            )
-            dynamic_mask_filepaths.append(
-                os.path.join(
-                    self.data_path,
-                    dynamic_mask_dir,
-                    "all",
-                    f"{t:03d}_{self.cam_id}.png",
+            # NOTE(syc): 目前仅轻舟数据修改为06d格式
+            if self.dataset_name == "qcraft":
+                img_filepaths.append(
+                    os.path.join(self.data_path, "images", f"{t:06d}_{self.cam_id}.png")
                 )
-            )
-            human_mask_filepaths.append(
-                os.path.join(
-                    self.data_path,
-                    dynamic_mask_dir,
-                    "human",
-                    f"{t:03d}_{self.cam_id}.png",
+                dynamic_mask_filepaths.append(
+                    os.path.join(
+                        self.data_path,
+                        dynamic_mask_dir,
+                        "all",
+                        f"{t:06d}_{self.cam_id}.png",
+                    )
                 )
-            )
-            vehicle_mask_filepaths.append(
-                os.path.join(
-                    self.data_path,
-                    dynamic_mask_dir,
-                    "vehicle",
-                    f"{t:03d}_{self.cam_id}.png",
+                human_mask_filepaths.append(
+                    os.path.join(
+                        self.data_path,
+                        dynamic_mask_dir,
+                        "human",
+                        f"{t:06d}_{self.cam_id}.png",
+                    )
                 )
-            )
-            sky_mask_filepaths.append(
-                os.path.join(self.data_path, "sky_masks", f"{t:03d}_{self.cam_id}.png")
-            )
+                vehicle_mask_filepaths.append(
+                    os.path.join(
+                        self.data_path,
+                        dynamic_mask_dir,
+                        "vehicle",
+                        f"{t:06d}_{self.cam_id}.png",
+                    )
+                )
+                sky_mask_filepaths.append(
+                    os.path.join(self.data_path, "sky_masks", f"{t:06d}_{self.cam_id}.png")
+                )
+            else:
+                img_filepaths.append(
+                    os.path.join(self.data_path, "images", f"{t:03d}_{self.cam_id}.jpg")
+                )
+                dynamic_mask_filepaths.append(
+                    os.path.join(
+                        self.data_path,
+                        dynamic_mask_dir,
+                        "all",
+                        f"{t:03d}_{self.cam_id}.png",
+                    )
+                )
+                human_mask_filepaths.append(
+                    os.path.join(
+                        self.data_path,
+                        dynamic_mask_dir,
+                        "human",
+                        f"{t:03d}_{self.cam_id}.png",
+                    )
+                )
+                vehicle_mask_filepaths.append(
+                    os.path.join(
+                        self.data_path,
+                        dynamic_mask_dir,
+                        "vehicle",
+                        f"{t:03d}_{self.cam_id}.png",
+                    )
+                )
+                sky_mask_filepaths.append(
+                    os.path.join(self.data_path, "sky_masks", f"{t:03d}_{self.cam_id}.png")
+                )
+
+        ego_mask_dir = os.path.join(self.data_path, "ego_masks")
+        if not os.path.exists(ego_mask_dir):
+            ego_mask_dir = os.path.join("data", "ego_masks", self.dataset_name)
+        self.ego_mask_dir = ego_mask_dir
+
         self.img_filepaths = np.array(img_filepaths)
         self.dynamic_mask_filepaths = np.array(dynamic_mask_filepaths)
         self.human_mask_filepaths = np.array(human_mask_filepaths)
@@ -297,9 +340,8 @@ class CameraData(object):
         Since in some datasets, the ego car body is visible in the images,
         we need to load the ego car mask to mask out the ego car body.
         """
-        egocar_mask = os.path.join(
-            "data", "ego_masks", self.dataset_name, f"{self.cam_id}.png"
-        )
+        
+        egocar_mask = os.path.join(self.ego_mask_dir, f"{self.cam_id}.png")
         if os.path.exists(egocar_mask):
             egocar_mask = Image.open(egocar_mask).convert("L")
             # resize them to the load_size

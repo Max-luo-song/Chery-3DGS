@@ -28,22 +28,32 @@ def extract_humanpose(
     """
     # project human boxes to 2D image space
     GTTracks_meta = projection_fn(
-        scene_dir, camera_list=camera_list,
-        save_temp=save_temp, verbose=verbose,
-        narrow_width_ratio=0.2, fps=fps
+        scene_dir,
+        camera_list=camera_list,
+        save_temp=save_temp,
+        verbose=verbose,
+        narrow_width_ratio=0.2,
+        fps=fps,
     )
-    
+
     # run 4DHuman to get predicted human tracks with SMPL parameters
     PredTracks_meta = run_4DHumans(
-        scene_dir, camera_list=camera_list,
-        save_temp=save_temp, verbose=verbose, fps=fps
+        scene_dir,
+        camera_list=camera_list,
+        save_temp=save_temp,
+        verbose=verbose,
+        fps=fps,
     )
-    
+
     # match the predicted tracks with the ground truth tracks
     smpl_meta = match_and_postprocess(
-        scene_dir, camera_list=camera_list,
-        GTTracksDict=GTTracks_meta, PredTracksDict=PredTracks_meta,
-        save_temp=save_temp, verbose=verbose, fps=fps
+        scene_dir,
+        camera_list=camera_list,
+        GTTracksDict=GTTracks_meta,
+        PredTracksDict=PredTracks_meta,
+        save_temp=save_temp,
+        verbose=verbose,
+        fps=fps,
     )
     
     joblib.dump(
@@ -94,7 +104,7 @@ if __name__ == "__main__":
         help="FPS for the visualization video if verbose is True",
     )
     args = parser.parse_args()
-    
+
     if args.dataset == "waymo":
         from datasets.waymo.waymo_human_utils import project_human_boxes, CAMERA_LIST
     elif args.dataset == "pandaset":
@@ -123,10 +133,16 @@ if __name__ == "__main__":
             scene_ids_list = [line.strip().split(" ")[0] for line in split_file]
     else:
         scene_ids_list = np.arange(args.start_idx, args.start_idx + args.num_scenes)
-    
+
     for scene_id in scene_ids_list:
         try:
             scene_dir = f'{args.data_root}/{str(scene_id).zfill(3)}'
+
+            if args.dataset == "qcraft":
+                from datasets.qcraft.qcraft_human_utils import project_human_boxes
+                from datasets.qcraft.qcraft_helpers import load_available_camera_ids
+                CAMERA_LIST = load_available_camera_ids(scene_dir)
+
             extract_humanpose(
                 scene_dir=scene_dir,
                 projection_fn=project_human_boxes,
