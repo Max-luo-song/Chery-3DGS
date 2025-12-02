@@ -111,9 +111,7 @@ if __name__ == "__main__":
             "segformer.b5.1024x1024.city.160k.py",
         )
     if args.checkpoint is None:
-        args.checkpoint = os.path.join(
-            args.segformer_path, "pretrained", "segformer.b5.1024x1024.city.160k.pth"
-        )
+        args.checkpoint = os.path.join(args.segformer_path, "pretrained", "segformer.b5.1024x1024.city.160k.pth")
 
     if args.scene_ids is not None:
         scene_ids_list = args.scene_ids
@@ -144,32 +142,26 @@ if __name__ == "__main__":
         if not os.path.exists(sky_mask_dir):
             os.makedirs(sky_mask_dir)
 
+        road_mask_dir = os.path.join(args.data_root, scene_id, "road_masks")
+        if not os.path.exists(road_mask_dir):
+            os.makedirs(road_mask_dir)
+
         # create dynamic mask dir
         if args.process_dynamic_mask:
-            rough_human_mask_dir = os.path.join(
-                args.data_root, scene_id, "dynamic_masks", "human"
-            )
-            rough_vehicle_mask_dir = os.path.join(
-                args.data_root, scene_id, "dynamic_masks", "vehicle"
-            )
+            rough_human_mask_dir = os.path.join(args.data_root, scene_id, "dynamic_masks", "human")
+            rough_vehicle_mask_dir = os.path.join(args.data_root, scene_id, "dynamic_masks", "vehicle")
 
-            all_mask_dir = os.path.join(
-                args.data_root, scene_id, "fine_dynamic_masks", "all"
-            )
+            all_mask_dir = os.path.join(args.data_root, scene_id, "fine_dynamic_masks", "all")
             if not os.path.exists(all_mask_dir):
                 os.makedirs(all_mask_dir)
-            human_mask_dir = os.path.join(
-                args.data_root, scene_id, "fine_dynamic_masks", "human"
-            )
+            human_mask_dir = os.path.join(args.data_root, scene_id, "fine_dynamic_masks", "human")
             if not os.path.exists(human_mask_dir):
                 os.makedirs(human_mask_dir)
-            vehicle_mask_dir = os.path.join(
-                args.data_root, scene_id, "fine_dynamic_masks", "vehicle"
-            )
+            vehicle_mask_dir = os.path.join(args.data_root, scene_id, "fine_dynamic_masks", "vehicle")
             if not os.path.exists(vehicle_mask_dir):
                 os.makedirs(vehicle_mask_dir)
 
-        flist = sorted(glob(os.path.join(img_dir, "*")))
+        flist = sorted(glob(os.path.join(img_dir, "*.png")))
         for fpath in tqdm(flist, f"scene[{scene_id}]"):
             fbase = os.path.splitext(os.path.basename(os.path.normpath(fpath)))[0]
 
@@ -178,16 +170,13 @@ if __name__ == "__main__":
             # else:
             #     mask_fpath = os.path.join(mask_dir, f"{fbase}.npz")
 
-            if args.ignore_existing and os.path.exists(
-                os.path.join(args.data_root, scene_id, "fine_dynamic_masks")
-            ):
+            if args.ignore_existing and os.path.exists(os.path.join(args.data_root, scene_id, "fine_dynamic_masks")):
                 continue
 
             # ---- Inference and save outputs
             result = inference_segmentor(model, fpath)
-            mask = result[0].astype(
-                np.uint8
-            )  # NOTE: in the settings of "cityscapes", there are 19 classes at most.
+            # NOTE: in the settings of "cityscapes", there are 19 classes at most.
+            mask = result[0].astype(np.uint8)
             # if args.no_compress:
             #     np.save(mask_fpath, mask)
             # else:
@@ -195,16 +184,15 @@ if __name__ == "__main__":
 
             # save sky mask
             sky_mask = np.isin(mask, [10])
-            imageio.imwrite(
-                os.path.join(sky_mask_dir, f"{fbase}.png"),
-                sky_mask.astype(np.uint8) * 255,
-            )
+            imageio.imwrite(os.path.join(sky_mask_dir, f"{fbase}.png"), sky_mask.astype(np.uint8) * 255)
+
+            road_mask = np.isin(mask, [0])
+            imageio.imwrite(os.path.join(road_mask_dir, f"{fbase}.png"), road_mask.astype(np.uint8)*255)
+            
 
             if args.process_dynamic_mask:
                 # save human masks
-                rough_human_mask_path = os.path.join(
-                    rough_human_mask_dir, f"{fbase}.png"
-                )
+                rough_human_mask_path = os.path.join(rough_human_mask_dir, f"{fbase}.png")
                 if not os.path.exists(rough_human_mask_path):
                     continue
 
@@ -217,9 +205,7 @@ if __name__ == "__main__":
                 )
 
                 # save vehicle mask
-                rough_vehicle_mask_path = os.path.join(
-                    rough_vehicle_mask_dir, f"{fbase}.png"
-                )
+                rough_vehicle_mask_path = os.path.join(rough_vehicle_mask_dir, f"{fbase}.png")
                 rough_vehicle_mask = imageio.imread(rough_vehicle_mask_path) > 0
                 vehicle_mask = np.isin(mask, dataset_classes_in_sematic["Vehicle"])
                 valid_vehicle_mask = np.logical_and(vehicle_mask, rough_vehicle_mask)

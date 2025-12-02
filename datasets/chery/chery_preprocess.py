@@ -453,7 +453,7 @@ class CheryProcessor(object):
             for cam_idx in range(len(lidar2cams)):
                 # 将 vehicle 和 human 掩码合并到 all 掩码中
                 masks_all[cam_idx] = np.maximum(
-                    masks_all[cam_idx], masks_vehicle[cam_idx]
+                    masks_human[cam_idx], masks_vehicle[cam_idx]
                 )
 
             # 保存掩码图像

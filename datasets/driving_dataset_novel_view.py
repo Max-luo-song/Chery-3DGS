@@ -45,10 +45,10 @@ class DrivingDatasetNovelView(SceneDataset):
             self.data_path = os.path.join(self.data_cfg.data_root, self.scene_idx)
 
         assert os.path.exists(self.data_path), f"{self.data_path} does not exist"
-        if os.path.exists(os.path.join(self.data_path, "ego_pose")):
-            total_frames = len(os.listdir(os.path.join(self.data_path, "ego_pose")))
-        elif os.path.exists(os.path.join(self.data_path, "lidar_pose")):
+        if os.path.exists(os.path.join(self.data_path, "lidar_pose")):
             total_frames = len(os.listdir(os.path.join(self.data_path, "lidar_pose")))
+        elif os.path.exists(os.path.join(self.data_path, "ego_pose")):
+            total_frames = len(os.listdir(os.path.join(self.data_path, "ego_pose")))
         else:
             raise ValueError(
                 "Unable to determine the total number of frames. Neither 'ego_pose' nor 'lidar_pose' directories found."
