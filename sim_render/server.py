@@ -2,12 +2,14 @@
 # -*- coding: utf-8 -*-
 import argparse
 import struct
+import traceback
 import socket
 import threading
 import Pose_pb2
 
 import inference
-
+import os
+import glob
 
 class TCPServer:
     def __init__(self, host='0.0.0.0', port=9999):
@@ -66,24 +68,58 @@ class TCPServer:
                 # render cam images
                 output = inference.cam_renderer_manager.render_from_pose(pose_msg)
                 # render lidar points
-                inference.lidar_renderer_manager.render_from_pose(pose_msg)
+                lidar_output = inference.lidar_renderer_manager.render_from_pose(pose_msg)
+                lidar_render_result_path = os.path.join(lidar_output, "renders")
+                lidar_txt_files = glob.glob(os.path.join(lidar_render_result_path, "*.txt"))
 
                 try:
+                    # 构建要发送的 items 列表，每项是 (type_code, name, bytes)
+                    # type_code: 1=image, 2=lidar
+                    items = []
+
                     for cam_id, image_path in output.items():
-                        # 读取图片
                         with open(image_path, 'rb') as f:
                             image_data = f.read()
+                        name = str(cam_id)
+                        items.append((1, name, image_data))
 
-                        # 发送数据长度
-                        conn.sendall(struct.pack('>I', len(image_data)))
-                        # 发送图片数据
-                        conn.sendall(image_data)
+                    for txt_file in lidar_txt_files:
+                        with open(txt_file, 'rb') as f:
+                            txt_data = f.read()
+                        name = os.path.basename(txt_file)
+                        items.append((2, name, txt_data))
 
-                        print(f"图片发送成功: {image_path}")
+                    # 先发送 item 数量
+                    conn.sendall(struct.pack('>I', len(items)))
+
+                    # 发送每一项：1字节type + 4字节name_len + name + 4字节data_len + data
+                    for typ, name, data_bytes in items:
+                        try:
+                            conn.sendall(bytes([typ]))
+                            name_b = name.encode('utf-8')
+                            conn.sendall(struct.pack('>I', len(name_b)))
+                            conn.sendall(name_b)
+                            conn.sendall(struct.pack('>I', len(data_bytes)))
+                            conn.sendall(data_bytes)
+                        except (ConnectionResetError, BrokenPipeError) as e:
+                            print(f"发送时连接被重置或断开: {e}")
+                            break
+
+                        if typ == 1:
+                            print(f"图片发送成功: {name}")
+                        else:
+                            print(f"Lidar数据发送成功: {name}")
 
                 except Exception as e:
                     print(f"发送失败: {e}")
-                conn.send(b"OK")
+                    traceback.print_exc()
+                # 发送结束状态（长度前缀 + 内容）
+                try:
+                    status = b"OK"
+                    conn.sendall(struct.pack('>I', len(status)))
+                    conn.sendall(status)
+                except Exception:
+                    pass
 
         except Exception as e:
             print(f"[Socket] Error with {addr}: {e}")
@@ -140,7 +176,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--output_dir",
-        default="./outputs",
+        default="./realtime_output",
         help="output directory for rendered results",
         type=str,
         required=False,
