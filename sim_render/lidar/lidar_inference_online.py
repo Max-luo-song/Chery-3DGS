@@ -106,9 +106,9 @@ class Renderer:
 if __name__ == "__main__":
     # Example usage
     renderer = Renderer(
-        lidar_checkpoint_path="/nas_thoru/users/yangtao/processed_new/test/20251025_163358_QCOYSD504206_1595_1610",
-        source_path="/nas_thoru/users/yangtao/processed_new/training/20251025_163358_QCOYSD504206_1595_1610",
-        output_dir="./outputs"
+        lidar_checkpoint_path="/nas_thoru/users/yangtao/qcraft/processed/test/20251025_163358_QCOYSD504206_1595_1610",
+        source_path="/nas_thoru/users/yangtao/qcraft/processed/training/20251025_163358_QCOYSD504206_1595_1610",
+        output_dir="./realtime_output"
     )
 
     # Example pose (4x4 transformation matrix)

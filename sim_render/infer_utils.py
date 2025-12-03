@@ -52,4 +52,33 @@ def extract_lidar_extrinsics(json_path):
 
     return result
 
+def euler_to_rotation_matrix(yaw, pitch, roll):
+    # Z 轴旋转（yaw）
+    R_z = np.array(
+        [[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]]
+    )
+    # Y 轴旋转（pitch）
+    R_y = np.array(
+        [
+            [np.cos(pitch), 0, np.sin(pitch)],
+            [0, 1, 0],
+            [-np.sin(pitch), 0, np.cos(pitch)],
+        ]
+    )
+    # X 轴旋转（roll）
+    R_x = np.array(
+        [[1, 0, 0], [0, np.cos(roll), -np.sin(roll)], [0, np.sin(roll), np.cos(roll)]]
+    )
+
+    R = R_z @ R_y @ R_x
+    return R
+
+# 将欧拉角和位置转换为4x4变换矩阵
+def pose_to_transform_matrix(x, y, z, yaw, pitch, roll):
+    R = euler_to_rotation_matrix(yaw, pitch, roll)
+    T = np.array([x, y, z])
+    T_matrix = np.eye(4)
+    T_matrix[:3, :3] = R
+    T_matrix[:3, 3] = T
+    return T_matrix
 
