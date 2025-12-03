@@ -162,14 +162,14 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--source_path",
-        default="/nas_thoru/oldbak/zyj/data/processed_new/training/20251025_163358_QCOYSD504206_1595_1610",
+        default="/nas_thoru/oldbak/lcy/scene_reconstruction/data/qcraft/processed/training/20251025_163358_QCOYSD504206_1595_1610",
         help="data source path",
         type=str,
         required=False,
     )
     parser.add_argument(
         "--lidar_checkpoint_path",
-        default="/nas_thoru/users/yangtao/processed_new/test/20251025_163358_QCOYSD504206_1595_1610",
+        default="/nas_thoru/users/yangtao/qcraft/processed/test/20251025_163358_QCOYSD504206_1595_1610",
         help="path to LiDAR checkpoint to resume from",
         type=str,
         required=False,
