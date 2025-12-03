@@ -342,9 +342,10 @@ class Chery_Dataloader:
     def get_fov_down(self):
         return self.FOV_DOWN
 
-    def load_dynamic_obj_id_list(self, train_frame_times):
+    def load_dynamic_obj_id_list(self, train_frame_times, item_id_2_obj_id):
         """
         加载每个时间帧的动态障碍物 ID 列表
+        json包含的是动态OD的序号，非id，需要根据item_id_2_obj_id中的id映射回来
 
         返回:
             frame_object_ids: list of str, 包含所有动态障碍物的 ID
@@ -354,9 +355,13 @@ class Chery_Dataloader:
             data = json.load(f)
 
         frame_object_ids = {}
-        for frame_idx, obj_ids in data.items():
+        for frame_idx, item_ids in data.items():
             if int(frame_idx) not in train_frame_times:
                 continue
+            obj_ids = []
+            for id in item_ids:
+                if str(id) in item_id_2_obj_id:
+                    obj_ids.append(item_id_2_obj_id[str(id)])
             frame_object_ids[int(frame_idx)] = obj_ids
         return frame_object_ids
 
@@ -365,7 +370,8 @@ class Chery_Dataloader:
         加载动态障碍物标注 JSON 文件
 
         返回:
-            annotations: dict, key 为 object_id (str), value 为 dict 包含：
+            item_id_2_obj_id: dict, key 为 序号 (str), value 为 obj_id (str)
+            annotations: dict, key 为 obj_id (str), value 为 dict 包含：
                 - class_name: str
                 - frames: list of int (出现的帧索引)
                 - poses: list of np.ndarray (4x4 齐次变换矩阵, 到第一帧的世界坐标)
@@ -376,11 +382,12 @@ class Chery_Dataloader:
             data = json.load(f)
 
         annotations = {}
+        item_id_2_obj_id = {}
         inv_start = np.linalg.inv(self.lidar_to_world_start)
-        for obj_id, obj_data in data.items():
+        for item_id, obj_data in data.items():
             class_name = obj_data["class_name"]
+            obj_id = obj_data["id"]
             frame_ann = obj_data["frame_annotations"]
-
             frame_indices = frame_ann["frame_idx"]  # list of int
             filtered_frame_indices = []
             obj_to_world_list = []
@@ -403,7 +410,7 @@ class Chery_Dataloader:
             for pose in poses:
                 pose = inv_start @ pose
             sizes = [list(sz) for sz in box_sizes]
-
+            item_id_2_obj_id[item_id] = obj_id
             annotations[obj_id] = {
                 "class_name": class_name,
                 "frames": frame_indices,
@@ -411,7 +418,7 @@ class Chery_Dataloader:
                 "sizes": sizes,
             }
 
-        return annotations
+        return item_id_2_obj_id, annotations
 
     def load_dynamic_pcd(self, object_id):
         """
@@ -427,7 +434,7 @@ class Chery_Dataloader:
         for frame in obj_occurred_frames:
             dynamic_obj_path = (
                 self.root_path
-                + "/lidar"
+                + "/lidar/bin"
                 + "/dynamic_pcd/"
                 + str(frame).zfill(3)
                 + "/"
@@ -496,7 +503,7 @@ class Chery_Dataloader:
         self.obj_o2l[str(object_id)] = obj_b2ls
         # 保存每个obj为一个单独的pcd文件，方便后续查看
         obj_pcd_save_path = os.path.join(
-            self.root_path, "lidar", "dynamic_pcd", "object_whole_pcd"
+            self.root_path, "lidar", "bin", "dynamic_pcd", "object_whole_pcd"
         )
         if not os.path.exists(obj_pcd_save_path):
             os.makedirs(obj_pcd_save_path)
@@ -515,7 +522,7 @@ class Chery_Dataloader:
         """
         加载指定训练帧的点云数据和位姿信息，并按照动态od标注信息，提取动静态点云，返回每帧数据的列表。
         """
-        lidar_filefolder = os.path.join(self.root_path, "lidar")
+        lidar_filefolder = os.path.join(self.root_path, "lidar", "bin")
         bin_files = [f for f in os.listdir(lidar_filefolder) if f.endswith(".bin")]
         bin_files = sorted(bin_files, key=lambda x: int(x.split(".")[0]))
 
@@ -527,12 +534,12 @@ class Chery_Dataloader:
         frames_data = []
         self.lidar_to_world_start = np.loadtxt(
             os.path.join(
-                lidarpose_filefolder, str(bin_files[0].split(".")[0]).zfill(3) + ".txt"
+                lidarpose_filefolder, str(bin_files[0].split(".")[0]).zfill(6) + ".txt"
             )
         )
-
-        self.dynamic_obj_list = self.load_dynamic_obj_id_list(train_frame_times)
-        self.dynamic_obj_info = self.load_dynamic_obj_info(train_frame_times)
+        dynamic_item_id_2_obj_id, self.dynamic_obj_info = self.load_dynamic_obj_info(train_frame_times)
+        self.dynamic_obj_list = self.load_dynamic_obj_id_list(train_frame_times, dynamic_item_id_2_obj_id)
+        
         for i in range(self.start_frame, self.start_frame + frame_cnt):
             """
             1. log_time_stamp
@@ -548,7 +555,7 @@ class Chery_Dataloader:
             single_frame_data["log_time_stamp"] = i
 
             lidar_pose_i_path = os.path.join(
-                lidarpose_filefolder, str(i).zfill(3) + ".txt"
+                lidarpose_filefolder, str(i).zfill(6) + ".txt"
             )
             lidar_to_world_current = np.loadtxt(lidar_pose_i_path)
             lidar_to_world = (
@@ -558,7 +565,7 @@ class Chery_Dataloader:
 
             # x y z intensity lidar_id
             lidar_info = np.fromfile(
-                os.path.join(self.root_path, "lidar", str(i).zfill(3) + ".bin"),
+                os.path.join(self.root_path, "lidar", "bin", str(i).zfill(6) + ".bin"),
                 dtype=np.float32,
             ).reshape(-1, 5)
 
