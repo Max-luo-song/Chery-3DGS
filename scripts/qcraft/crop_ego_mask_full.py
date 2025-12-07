@@ -29,7 +29,7 @@ CAMERA_CONFIGS = {
         "camera_name": "front_wide_110",
         "original_size": (342, 1024),
         "crop_strategy": "bottom",
-        "egocar_visible": True,
+        "egocar_visible": False,
         "is_fisheye": False,
     },
     1: {
@@ -41,14 +41,16 @@ CAMERA_CONFIGS = {
     },
     4: {
         "camera_name": "front_left_99",
-        "original_size": (512, 772),
+        # "original_size": (512, 772),
+        "original_size": (512, 200),
         "crop_strategy": "right",
         "egocar_visible": False,
         "is_fisheye": False,
     },
     7: {
         "camera_name": "front_right_99",
-        "original_size": (512, 765),
+        # "original_size": (512, 765),1024
+        "original_size": (512, 200),
         "crop_strategy": "left",
         "egocar_visible": False,
         "is_fisheye": False,

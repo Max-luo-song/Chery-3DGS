@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python scripts/qcraft/crop_ego_mask.py:*)",
+      "Bash(yes:*)",
+      "Bash(bash scripts/qcraft/train.sh:*)",
+      "Bash(python:*)",
+      "Bash(cat:*)",
+      "Bash(chmod:*)",
+      "Bash(find:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

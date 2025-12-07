@@ -131,24 +131,24 @@ class MultiTrainer(BasicTrainer):
                     sampled_pts, sampled_color, sampled_time = \
                         torch.empty(0, 3).to(self.device), torch.empty(0, 3).to(self.device), None
                 
-                random_pts = []
-                num_near_pts = init_cfg.get('near_randoms', 0)
-                if num_near_pts > 0: # uniformly sample points inside the scene's sphere
-                    num_near_pts *= 3 # since some invisible points will be filtered out
-                    random_pts.append(uniform_sample_sphere(num_near_pts, self.device))
-                num_far_pts = init_cfg.get('far_randoms', 0)
-                if num_far_pts > 0: # inverse distances uniformly from (0, 1 / scene_radius)
-                    num_far_pts *= 3
-                    random_pts.append(uniform_sample_sphere(num_far_pts, self.device, inverse=True))
+                # random_pts = []
+                # num_near_pts = init_cfg.get('near_randoms', 0)
+                # if num_near_pts > 0: # uniformly sample points inside the scene's sphere
+                #     num_near_pts *= 3 # since some invisible points will be filtered out
+                #     random_pts.append(uniform_sample_sphere(num_near_pts, self.device))
+                # num_far_pts = init_cfg.get('far_randoms', 0)
+                # if num_far_pts > 0: # inverse distances uniformly from (0, 1 / scene_radius)
+                #     num_far_pts *= 3
+                #     random_pts.append(uniform_sample_sphere(num_far_pts, self.device, inverse=True))
                 
-                if num_near_pts + num_far_pts > 0:
-                    random_pts = torch.cat(random_pts, dim=0) 
-                    random_pts = random_pts * self.scene_radius + self.scene_origin
-                    visible_mask = dataset.check_pts_visibility(random_pts)
-                    valid_pts = random_pts[visible_mask]
+                # if num_near_pts + num_far_pts > 0:
+                #     random_pts = torch.cat(random_pts, dim=0) 
+                #     random_pts = random_pts * self.scene_radius + self.scene_origin
+                #     visible_mask = dataset.check_pts_visibility(random_pts)
+                #     valid_pts = random_pts[visible_mask]
                     
-                    sampled_pts = torch.cat([sampled_pts, valid_pts], dim=0)
-                    sampled_color = torch.cat([sampled_color, torch.rand(valid_pts.shape, ).to(self.device)], dim=0)
+                #     sampled_pts = torch.cat([sampled_pts, valid_pts], dim=0)
+                #     sampled_color = torch.cat([sampled_color, torch.rand(valid_pts.shape, ).to(self.device)], dim=0)
                 
                 processed_init_pts = dataset.filter_pts_in_boxes(
                     seed_pts=sampled_pts,

@@ -2,14 +2,14 @@
 ################################################################################
 gpu=0
 
-ckpt_path="output/qcraft_20251025_163358_QCOYSD504206/20251125_lidar+cam0_1/checkpoint_final.pth"
+ckpt_path="output/qcraft_20251025_163358_QCOYSD504206/20251125_lidar+cam0_1_2_3_4_5_6_7_8_9_10/checkpoint_final.pth"
 
 traj_types=(
     # original_traj
     left_shift_1m
-    # left_shift_2m
+    left_shift_2m
     left_shift_3m
-    # left_shift_5m
+    left_shift_5m
     # right_shift_1m
     # right_shift_3m
     # right_shift_5m
@@ -18,10 +18,10 @@ traj_types=(
     # change_lane_3.5m
 )
 
-# cam_ids=(0 1 2 3 4 5 6 7 8 9 10)
-# downscales=(1 1 1 1 1 1 1 1 1 1 1)
-cam_ids=(0 1)
-downscales=(1 1)
+cam_ids=(0 1 2 3 4 5 6 7 8 9 10)
+downscales=(1 1 1 1 1 1 1 1 1 1 1)
+# cam_ids=(0 1 4 7)
+# downscales=(1 1 1 1)
 
 fps=10
 

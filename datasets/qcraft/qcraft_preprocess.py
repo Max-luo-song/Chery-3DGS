@@ -66,7 +66,8 @@ QCRAFT_CAMERA_CROP_OFFSETS = {
     0: (0, 0, "down0"),
     1: (0, 0, "down1"),
     4: (0, 0, "right"),   # 裁剪右侧，可能需要额外信息
-    7: (259, 0, "left"),  # 裁剪左侧
+    # 7: (259, 0, "left"),  # 裁剪左侧
+    7: (824, 0, "left"),  # 裁剪左侧
 }
 
 @dataclass

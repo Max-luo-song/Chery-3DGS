@@ -102,7 +102,7 @@ DATASETS_CONFIG = {
         # },
         4: {
             "camera_name": "front_left_99",  # 左前 FOV99
-            "original_size": (512, 772),
+            "original_size": (512, 200),
             "egocar_visible": False,
             "is_fisheye": False,
         },
@@ -126,7 +126,7 @@ DATASETS_CONFIG = {
         # },
         7: {
             "camera_name": "front_right_99",  # 右前 FOV99
-            "original_size": (512, 765),
+            "original_size": (512, 200),
             "egocar_visible": False,
             "is_fisheye": False,
         },

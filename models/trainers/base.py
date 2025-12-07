@@ -537,7 +537,7 @@ class BasicTrainer(nn.Module):
         
         # if "egocar_masks" in image_infos:
         #     # in the case of egocar, we need to mask out the egocar region
-        #     valid_loss_mask = (1.0 - image_infos["egocar_masks"]).float()
+        #     valid_loss_mask = (1.0 - image_infos["egocar_masks"]).float() # 背景为1，自车为0
         # else:
         valid_loss_mask = torch.ones_like(image_infos["sky_masks"])
             
