@@ -12,7 +12,7 @@ import torch
 from tools.eval import do_evaluation
 from utils.misc import import_str
 from utils.backup import backup_project
-from utils.logging import MetricLogger, setup_logging
+from utils.logging_utils import MetricLogger, setup_logging
 from models.video_utils import render_images, save_videos
 from datasets.driving_dataset import DrivingDataset
 

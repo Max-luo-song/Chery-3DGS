@@ -15,111 +15,113 @@ class Chery_Dataloader:
     FOV_HORIZONTAL = 120 * torch.pi / 180.0
     FOV_UP = 7.0 * torch.pi / 180.0  # 向上7度
     FOV_DOWN = 13.0 * torch.pi / 180.0  # 总共20度垂直视场
-    NUM_BEAMS = 100  # 128线
-    W_LIDAR = 2400  # 水平分辨率
+    NUM_BEAMS = 100  # 100线
+    W_LIDAR = 1200  # 水平分辨率
     H_LIDAR = 100  # 垂直分辨率
-    BEAM_INCLINATIONS = [
-        -13.03,
-        -11.82,
-        -10.84,
-        -10.03,
-        -9.47,
-        -9.07,
-        -8.66,
-        -8.25,
-        -7.88,
-        -7.47,
-        -7.07,
-        -6.66,
-        -6.26,
-        -5.86,
-        -5.45,
-        -5.05,
-        -4.64,
-        -4.55,
-        -4.45,
-        -4.34,
-        -4.23,
-        -4.14,
-        -4.04,
-        -3.94,
-        -3.83,
-        -3.73,
-        -3.64,
-        -3.53,
-        -3.42,
-        -3.33,
-        -3.23,
-        -3.13,
-        -3.02,
-        -2.92,
-        -2.83,
-        -2.72,
-        -2.62,
-        -2.52,
-        -2.42,
-        -2.32,
-        -2.21,
-        -2.12,
-        -2.02,
-        -1.91,
-        -1.81,
-        -1.71,
-        -1.61,
-        -1.51,
-        -1.41,
-        -1.31,
-        -1.21,
-        -1.11,
-        -1.01,
-        -0.91,
-        -0.81,
-        -0.71,
-        -0.61,
-        -0.51,
-        -0.41,
-        -0.30,
-        -0.20,
-        -0.10,
-        0.00,
-        0.10,
-        0.20,
-        0.30,
-        0.40,
-        0.50,
-        0.60,
-        0.70,
-        0.81,
-        0.91,
-        1.00,
-        1.11,
-        1.21,
-        1.31,
-        1.41,
-        1.51,
-        1.61,
-        1.71,
-        1.81,
-        1.91,
-        2.01,
-        2.11,
-        2.21,
-        2.31,
-        2.41,
-        2.52,
-        2.62,
-        3.03,
-        3.43,
-        3.84,
-        4.24,
-        4.65,
-        5.05,
-        5.46,
-        5.87,
-        6.28,
-        6.69,
-        7.09,
+    # beam inclination(data_frame_car_info.json)
+    ELEVATION = [
+      6.8984375,
+      6.5,
+      6.09765625,
+      5.6953125,
+      5.27734375,
+      4.86328125,
+      4.45703125,
+      4.05859375,
+      3.6328125,
+      3.234375,
+      2.828125,
+      2.41796875,
+      2.21484375,
+      2.01953125,
+      1.81640625,
+      1.60546875,
+      1.42578125,
+      1.21484375,
+      1.01953125,
+      0.80859375,
+      0.62109375,
+      0.41015625,
+      0.21484375,
+      0.00390625,
+      -0.203125,
+      -0.390625,
+      -0.609375,
+      -0.79296875,
+      -1.01171875,
+      -1.19921875,
+      -1.41015625,
+      -1.59765625,
+      -1.796875,
+      -2,
+      -2.1953125,
+      -2.40625,
+      -2.6015625,
+      -2.80859375,
+      -3.00390625,
+      -3.2265625,
+      -3.4609375,
+      -3.6484375,
+      -3.8671875,
+      -4.0546875,
+      -4.27734375,
+      -4.45703125,
+      -4.6875,
+      -4.8671875,
+      -5.28125,
+      -5.69921875,
+      -6.1015625,
+      -6.50390625,
+      -6.91015625,
+      -7.31640625,
+      -7.71875,
+      -8.1171875,
+      -8.49609375,
+      -8.8984375,
+      -9.3046875,
+      -9.71875,
+      -10.26171875,
+      -11.0859375,
+      -12.0859375,
+      -13.31640625,
+      2.31640625,
+      2.1171875,
+      1.91796875,
+      1.7109375,
+      1.515625,
+      1.3203125,
+      1.1171875,
+      0.9140625,
+      0.71484375,
+      0.515625,
+      0.3125,
+      0.109375,
+      -0.1015625,
+      -0.296875,
+      -0.5,
+      -0.69921875,
+      -0.90234375,
+      -1.10546875,
+      -1.3046875,
+      -1.50390625,
+      -1.69921875,
+      -1.8984375,
+      -2.09765625,
+      -2.30078125,
+      -2.50390625,
+      -2.70703125,
+      -2.90625,
+      -3.11328125,
+      -3.34375,
+      -3.5546875,
+      -3.7578125,
+      -3.9609375,
+      -4.16796875,
+      -4.3671875,
+      -4.57421875,
+      -4.77734375
     ]
+    BEAM_INCLINATIONS = np.sort(np.array(ELEVATION)) * torch.pi / 180 # 从小到大排列，弧度制
     MIN_OBJ_POINT_NUM = 100
 
     def __init__(self, args, train=True, train_frame_times=None, dtype=np.float32):
@@ -127,13 +129,15 @@ class Chery_Dataloader:
         self.root_path = args.source_path
         self.case = args.caseid
         self.block_id = args.block_id
+        # 存储预处理后的静态背景点云初始化文件、分割后的动态od点云
+        self.preprocess_path = os.path.join(args.source_path, "lidar_preprocessed_data")
+        if not os.path.exists(self.preprocess_path):
+            os.makedirs(self.preprocess_path)
         self.frames_data = self.load_frames_data(train_frame_times)
         print("[ Info ] this case have {} frames totally".format(len(self.frames_data)))
 
         # 注意这里是顺序是从小到大，即从 -fov_down 到 +fov_up, 而且是弧度制
-        self.beam_inclinations = np.linspace(
-            -self.FOV_DOWN, self.FOV_UP, self.NUM_BEAMS, dtype=np.float32
-        )
+        self.beam_inclinations = self.BEAM_INCLINATIONS
 
         # 假设雷达位置就是自车位置
         R = np.eye(3, dtype=np.float32)
@@ -197,8 +201,10 @@ class Chery_Dataloader:
                 local_points_with_intensities=self.pcds[frame_idx],
                 lidar_H=H_lidar,
                 lidar_W=W_lidar,
+                lidar_K=None,
                 beam_inclinations=self.beam_inclinations,
                 max_depth=self.max_depth,
+                lidar_hfov=2 * np.pi / 3,
             )
             range_view = np.zeros((H_lidar, W_lidar, 3))
             range_view[:, :, 1] = intensities
@@ -433,8 +439,7 @@ class Chery_Dataloader:
         empty_frame_list = []
         for frame in obj_occurred_frames:
             dynamic_obj_path = (
-                self.root_path
-                + "/lidar/bin"
+                self.preprocess_path
                 + "/dynamic_pcd/"
                 + str(frame).zfill(3)
                 + "/"
@@ -503,7 +508,7 @@ class Chery_Dataloader:
         self.obj_o2l[str(object_id)] = obj_b2ls
         # 保存每个obj为一个单独的pcd文件，方便后续查看
         obj_pcd_save_path = os.path.join(
-            self.root_path, "lidar", "bin", "dynamic_pcd", "object_whole_pcd"
+            self.preprocess_path, "dynamic_pcd", "object_whole_pcd"
         )
         if not os.path.exists(obj_pcd_save_path):
             os.makedirs(obj_pcd_save_path)
@@ -580,9 +585,9 @@ class Chery_Dataloader:
             dynamic_pcd = []
             static_pcd = []
             dynamic_pcd_file_folder = os.path.join(
-                lidar_filefolder, "dynamic_pcd", str(i).zfill(3)
+                self.preprocess_path, "dynamic_pcd", str(i).zfill(3)
             )
-            static_pcd_file_folder = os.path.join(lidar_filefolder, "static_pcd")
+            static_pcd_file_folder = os.path.join(self.preprocess_path, "static_pcd")
             if not os.path.exists(static_pcd_file_folder):
                 os.makedirs(static_pcd_file_folder)
             if not os.path.exists(dynamic_pcd_file_folder):
@@ -663,7 +668,7 @@ class Chery_Dataloader:
     def load_static_pcd(self):
         static_pcd = []
         static_pcd_file_path = os.path.join(
-            self.root_path, str(self.block_id) + "_static_scene_all_frames.txt"
+            self.preprocess_path, str(self.block_id) + "_static_scene_all_frames.txt"
         )
         if os.path.exists(static_pcd_file_path):
             static_pcd = np.loadtxt(static_pcd_file_path)
@@ -680,11 +685,11 @@ class Chery_Dataloader:
                 pcd_xyzs.append(pcd_xyz)
             static_pcd = np.concatenate(pcd_xyzs, axis=0)  # shape: (total_points, 3)
             # 再过滤一次动态od
-            all_dynamic_bboxs = self.get_all_dynamic_bboxs()
+            # all_dynamic_bboxs = self.get_all_dynamic_bboxs()
             # static_pcd = self.filter_dynamic_objects(static_pcd, all_dynamic_bboxs)
             np.savetxt(
                 os.path.join(
-                    self.root_path, str(self.block_id) + "_static_scene_all_frames.txt"
+                    self.preprocess_path, str(self.block_id) + "_static_scene_all_frames.txt"
                 ),
                 static_pcd,
             )

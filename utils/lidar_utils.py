@@ -75,6 +75,7 @@ def lidar_to_pano_with_intensities(
     cam_pos=None,
     beam_inclinations=None,
     max_depth=80,
+    lidar_hfov=2 * np.pi / 3,
     ground=None,
     is_correction=False,
     sensor_id=None,
@@ -115,8 +116,8 @@ def lidar_to_pano_with_intensities(
             continue
 
         x, y, z = local_point
-        beta = np.pi - np.arctan2(y, x)
-        c = int(round(beta / (2 * np.pi / lidar_W)))
+        beta = lidar_hfov / 2 - np.arctan2(y, x)
+        c = int(round(beta / (lidar_hfov / lidar_W)))
 
         if use_beam_inclinations:
             alpha = np.arctan2(z, np.sqrt(x**2 + y**2 + z**2))
@@ -236,7 +237,7 @@ def lidar_to_pano_with_grad(
 
 
 def pano_to_lidar_with_intensities(
-    pano: np.ndarray, intensities, lidar_K=None, beam_inclinations=None
+    pano: np.ndarray, intensities, lidar_K=None, beam_inclinations=None, lidar_hfov=2 * np.pi / 3
 ):
     """
     Args:
@@ -244,6 +245,7 @@ def pano_to_lidar_with_intensities(
         intensities: (H, W), float32.
         lidar_K: lidar intrinsics (fov_up, fov)
         beam_inclinations: beam_inclinations (H,)
+        lidar_hfov: lidar horizontal fov
 
     Return:
         local_points_with_intensities: (N, 4), float32, in lidar frame.
@@ -253,7 +255,7 @@ def pano_to_lidar_with_intensities(
     i, j = np.meshgrid(
         np.arange(W, dtype=np.float32), np.arange(H, dtype=np.float32), indexing="xy"
     )
-    beta = -(i - W / 2.0) / W * 2.0 * np.pi
+    beta = -(i - W / 2.0) / W * lidar_hfov
     if beam_inclinations is not None:
         alpha = np.expand_dims(beam_inclinations[::-1], 1).repeat(W, 1)
     else:

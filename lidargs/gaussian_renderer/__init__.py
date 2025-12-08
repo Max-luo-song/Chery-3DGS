@@ -198,8 +198,8 @@ def renderComposite(
             background,
             max_depth,
         )
-        if model_visible_mask.sum() == 0:
-            print("---error----, model_id, ", model_id)
+        # if model_visible_mask.sum() == 0:
+        #     print("---error----, model_id, ", model_id)
         (
             model_xyz,
             model_color,

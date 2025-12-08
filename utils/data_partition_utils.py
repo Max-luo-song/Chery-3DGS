@@ -260,7 +260,7 @@ def judgeWhichBlock(sim_baselidar_to_world_pose, block_id_with_rect, log=None):
 
 def dataPartitionChery(args, block_size, single_block_test=True):
     print("[ Info ] start dataPartitionChery")
-    lidar_filefolder = os.path.join(args.source_path, "lidar")
+    lidar_filefolder = os.path.join(args.source_path, "lidar", "bin")
     bin_files = [f for f in os.listdir(lidar_filefolder) if f.endswith(".bin")]
     bin_files = sorted(bin_files, key=lambda x: int(x.split(".")[0]))
     print("[ Info ] find {} bin files in {}".format(len(bin_files), lidar_filefolder))
