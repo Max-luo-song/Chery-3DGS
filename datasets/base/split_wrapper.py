@@ -22,7 +22,7 @@ class SplitWrapper(torch.utils.data.Dataset):
     def get_image(self, idx, camera_downscale) -> Tuple[dict, dict]:
         downscale_factor = 1 / camera_downscale * self.datasource.downscale_factor
         self.datasource.update_downscale_factor(downscale_factor)
-        (image_infos, cam_infos) = self.datasource.get_image(self.split_indices[idx])
+        image_infos, cam_infos = self.datasource.get_image(self.split_indices[idx])
         self.datasource.reset_downscale_factor()
         return image_infos, cam_infos
 
