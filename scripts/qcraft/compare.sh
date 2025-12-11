@@ -14,8 +14,9 @@ log_dir1="output/qcraft_20251025_163358_QCOYSD504206_1595_1610/cam_0_1_2_3_5_6_7
 # 第二个训练结果的日志目录（新结果）
 # log_dir2="${2:-}"
 log_dir2="output/qcraft_20251025_163358_QCOYSD504206_1595_1610/cam_0_1_2_3_6_7_10_11_12_wo_depth_loss"
+
 # wandb 配置
-enable_wandb=true
+enable_wandb=false
 wandb_project="scene_recon_compare_update"
 wandb_entity="1zzhaozz-nanjing-university"
 wandb_run_name="compare_$(date +%Y%m%d%H%M)"

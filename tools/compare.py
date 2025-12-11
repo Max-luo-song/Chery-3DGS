@@ -6,27 +6,40 @@ import argparse
 import glob
 import numpy as np
 import wandb
-import imageio
+import imageio.v2 as imageio
 import re
 import cv2
 import csv
+import torch
 from omegaconf import OmegaConf
 from typing import Dict, List, Tuple, Optional, Set
 import logging
+import base64
+from datetime import datetime
+try:
+    from openpyxl import Workbook
+    from openpyxl.drawing.image import Image as OpenpyxlImage
+    from openpyxl.utils import get_column_letter
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
 
 logger = logging.getLogger()
 
 # 全局 LPIPS 模型实例（只加载一次）
 _lpips_model = None
+_lpips_device = None
 
 def get_lpips_model():
     """获取全局 LPIPS 模型实例，只加载一次"""
-    global _lpips_model
+    global _lpips_model, _lpips_device
     if _lpips_model is None:
         try:
             import lpips
-            _lpips_model = lpips.LPIPS(net='alex')
-            logger.info("LPIPS model loaded successfully")
+            _lpips_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            _lpips_model = lpips.LPIPS(net='alex').to(_lpips_device)
+            _lpips_model.eval()
+            logger.info(f"LPIPS model loaded successfully on {_lpips_device}")
         except Exception as e:
             logger.warning(f"Failed to load LPIPS model: {e}")
             _lpips_model = None
@@ -240,113 +253,6 @@ def extract_frame_cam_from_filename(filename: str) -> Optional[Tuple[int, int]]:
     return None
 
 
-def compute_frame_metrics_score(
-    img_old_path: str,
-    img_new_path: str,
-    gt_img_path: Optional[str] = None,
-    metrics_weights: Optional[Dict[str, float]] = None
-) -> float:
-    """
-    计算单帧的综合指标分数，基于17个指标
-    必须有GT图像才能计算，否则返回0.0
-    """
-    try:
-        import torch
-        from skimage.metrics import structural_similarity as ssim
-        from skimage.metrics import peak_signal_noise_ratio as psnr
-        
-        # 必须有GT图像
-        if not gt_img_path or not os.path.exists(gt_img_path):
-            logger.debug(f"No GT image provided for frame comparison, skipping")
-            return 0.0
-        
-        img_old = imageio.imread(img_old_path)
-        img_new = imageio.imread(img_new_path)
-        gt_img = imageio.imread(gt_img_path)
-        
-        if img_old is None or img_new is None or gt_img is None:
-            return 0.0
-        
-        # 确保图像尺寸一致
-        if img_old.shape != img_new.shape or img_old.shape[:2] != gt_img.shape[:2]:
-            h = min(img_old.shape[0], img_new.shape[0], gt_img.shape[0])
-            w = min(img_old.shape[1], img_new.shape[1], gt_img.shape[1])
-            img_old = cv2.resize(img_old, (w, h))
-            img_new = cv2.resize(img_new, (w, h))
-            gt_img = cv2.resize(gt_img, (w, h))
-        
-        # 归一化到[0,1]
-        img_old_norm = img_old.astype(float) / 255.0
-        img_new_norm = img_new.astype(float) / 255.0
-        gt_norm = gt_img.astype(float) / 255.0
-        
-        scores = {}
-        
-        # PSNR
-        psnr_old = psnr(gt_norm, img_old_norm, data_range=1.0)
-        psnr_new = psnr(gt_norm, img_new_norm, data_range=1.0)
-        scores['psnr'] = psnr_new - psnr_old
-        
-        # SSIM
-        ssim_old = ssim(gt_norm, img_old_norm, data_range=1.0, channel_axis=2 if len(gt_norm.shape) == 3 else None)
-        ssim_new = ssim(gt_norm, img_new_norm, data_range=1.0, channel_axis=2 if len(gt_norm.shape) == 3 else None)
-        scores['ssim'] = ssim_new - ssim_old
-        
-        # LPIPS (使用全局模型实例，避免重复加载)
-        try:
-            loss_fn = get_lpips_model()
-            if loss_fn is not None:
-                with torch.no_grad():
-                    gt_tensor = torch.from_numpy(gt_norm).permute(2, 0, 1).unsqueeze(0).float()
-                    old_tensor = torch.from_numpy(img_old_norm).permute(2, 0, 1).unsqueeze(0).float()
-                    new_tensor = torch.from_numpy(img_new_norm).permute(2, 0, 1).unsqueeze(0).float()
-                    
-                    lpips_old = loss_fn(gt_tensor, old_tensor).item()
-                    lpips_new = loss_fn(gt_tensor, new_tensor).item()
-                    scores['lpips'] = lpips_old - lpips_new  # LPIPS越小越好，所以是old-new
-            else:
-                scores['lpips'] = 0.0
-        except Exception as e:
-            logger.debug(f"Error computing LPIPS: {e}")
-            scores['lpips'] = 0.0
-        
-        # 对于区域指标，由于没有区域信息，使用全图指标的近似值
-        for suffix in ['_no_ego', '_with_ego', '_occupied', '_masked', '_human', '_vehicle']:
-            scores[f'psnr{suffix}'] = scores['psnr'] * 0.8
-            scores[f'ssim{suffix}'] = scores['ssim'] * 0.8
-            if suffix not in ['_no_ego', '_with_ego']:
-                scores[f'lpips{suffix}'] = scores['lpips'] * 0.8
-        
-        # 使用权重计算综合分数
-        if metrics_weights is None:
-            # 默认权重（基于17个指标的重要性）
-            metrics_weights = {
-                'psnr': 0.15, 'ssim': 0.15, 'lpips': 0.10,
-                'psnr_no_ego': 0.08, 'ssim_no_ego': 0.08, 'lpips_no_ego': 0.05,
-                'psnr_with_ego': 0.05, 'ssim_with_ego': 0.05, 'lpips_with_ego': 0.03,
-                'occupied_psnr': 0.06, 'occupied_ssim': 0.06,
-                'masked_psnr': 0.04, 'masked_ssim': 0.04,
-                'human_psnr': 0.02, 'human_ssim': 0.02,
-                'vehicle_psnr': 0.02, 'vehicle_ssim': 0.02,
-            }
-        
-        # 归一化并加权
-        total_score = 0.0
-        total_weight = 0.0
-        for metric_name, weight in metrics_weights.items():
-            if metric_name in scores:
-                # 归一化到[-1, 1]范围
-                normalized_score = np.tanh(scores[metric_name])
-                total_score += normalized_score * weight
-                total_weight += weight
-        
-        return total_score / total_weight if total_weight > 0 else 0.0
-        
-    except Exception as e:
-        logger.warning(f"Error computing frame metrics: {e}")
-        return 0.0
-
-
 def compute_overall_score(metrics: Dict, metrics_weights: Optional[Dict[str, float]] = None) -> float:
     """
     根据权重计算评估结果的综合分数
@@ -499,27 +405,254 @@ def find_best_improved_frames_per_camera(
         return weights
 
     def compute_improvement_scores(common_keys, grouped1, grouped2, gt_grouped1, gt_grouped2, reverse, metrics_weights):
+        import torch
+        from skimage.metrics import structural_similarity as ssim
+        from skimage.metrics import peak_signal_noise_ratio as psnr
+        
         frames_by_cam = {}
         total_frames = len(common_keys)
-        processed_frames = 0
         logger.info(f"Processing {total_frames} frames across {len(set(cam_id for cam_id, _ in common_keys))} cameras...")
+        
+        # 批量处理LPIPS以提高GPU利用率
+        batch_size = 32  # 批量大小
+        loss_fn = get_lpips_model()
+        use_lpips = loss_fn is not None
+        
+        # 准备批量数据
+        batch_data = []
+        frame_info = []  # 保存每帧的元信息
+        
+        # 第一步：扫描所有图像，找到最大尺寸
+        logger.info("Scanning images to determine target size...")
+        max_h, max_w = 0, 0
+        valid_frames = []
         for cam_id, frame_id in common_keys:
-            frames_by_cam.setdefault(cam_id, [])
             img1_path = grouped1[(cam_id, frame_id)]
             img2_path = grouped2[(cam_id, frame_id)]
             gt_path = gt_grouped1.get((cam_id, frame_id)) or gt_grouped2.get((cam_id, frame_id))
-
-            if reverse:
-                # log_dir1 相对于 log_dir2 的改进
-                improvement_score = compute_frame_metrics_score(img2_path, img1_path, gt_path, metrics_weights)
+            
+            if not gt_path or not os.path.exists(gt_path):
+                continue
+            
+            try:
+                # 只读取尺寸信息，不加载完整图像
+                img1 = imageio.imread(img1_path)
+                img2 = imageio.imread(img2_path)
+                gt_img = imageio.imread(gt_path)
+                
+                if img1 is None or img2 is None or gt_img is None:
+                    continue
+                
+                # 找到三张图像的最小尺寸（确保都能resize到这个尺寸）
+                h = min(img1.shape[0], img2.shape[0], gt_img.shape[0])
+                w = min(img1.shape[1], img2.shape[1], gt_img.shape[1])
+                
+                max_h = max(max_h, h)
+                max_w = max(max_w, w)
+                valid_frames.append((cam_id, frame_id, img1_path, img2_path, gt_path))
+            except:
+                continue
+        
+        # 使用固定尺寸或最大尺寸（取512的倍数，便于GPU处理）
+        target_h = ((max_h + 31) // 32) * 32  # 向上取整到32的倍数
+        target_w = ((max_w + 31) // 32) * 32
+        # 限制最大尺寸，避免内存问题
+        target_h = min(target_h, 512)
+        target_w = min(target_w, 512)
+        
+        logger.info(f"Target image size: {target_h}x{target_w}")
+        logger.info(f"Loading {len(valid_frames)} valid frames and preparing batches...")
+        
+        for idx, (cam_id, frame_id, img1_path, img2_path, gt_path) in enumerate(valid_frames):
+            frames_by_cam.setdefault(cam_id, [])
+            
+            try:
+                img1 = imageio.imread(img1_path)
+                img2 = imageio.imread(img2_path)
+                gt_img = imageio.imread(gt_path)
+                
+                if img1 is None or img2 is None or gt_img is None:
+                    frame_info.append({
+                        'cam_id': cam_id,
+                        'frame_id': frame_id,
+                        'img1_path': img1_path,
+                        'img2_path': img2_path,
+                        'gt_path': gt_path,
+                        'batch_idx': -1
+                    })
+                    continue
+                
+                # 统一resize到目标尺寸
+                img1 = cv2.resize(img1, (target_w, target_h))
+                img2 = cv2.resize(img2, (target_w, target_h))
+                gt_img = cv2.resize(gt_img, (target_w, target_h))
+                
+                # 归一化到[0,1]
+                img1_norm = img1.astype(float) / 255.0
+                img2_norm = img2.astype(float) / 255.0
+                gt_norm = gt_img.astype(float) / 255.0
+                
+                batch_idx = len(batch_data)
+                # 根据reverse决定old和new
+                if reverse:
+                    # log_dir1相对于log_dir2的改进：old=img2(log_dir2), new=img1(log_dir1)
+                    old_norm = img2_norm
+                    new_norm = img1_norm
+                else:
+                    # log_dir2相对于log_dir1的改进：old=img1(log_dir1), new=img2(log_dir2)
+                    old_norm = img1_norm
+                    new_norm = img2_norm
+                
+                batch_data.append({
+                    'old_norm': old_norm,
+                    'new_norm': new_norm,
+                    'gt_norm': gt_norm,
+                    'img1': img1,
+                    'img2': img2,
+                    'gt_img': gt_img
+                })
+                
+                frame_info.append({
+                    'cam_id': cam_id,
+                    'frame_id': frame_id,
+                    'img1_path': img1_path,
+                    'img2_path': img2_path,
+                    'gt_path': gt_path,
+                    'batch_idx': batch_idx
+                })
+                
+            except Exception as e:
+                logger.debug(f"Error loading images for frame ({cam_id}, {frame_id}): {e}")
+                frame_info.append({
+                    'cam_id': cam_id,
+                    'frame_id': frame_id,
+                    'img1_path': img1_path,
+                    'img2_path': img2_path,
+                    'gt_path': gt_path,
+                    'batch_idx': -1
+                })
+                continue
+            
+            if (idx + 1) % 100 == 0:
+                logger.info(f"  Loaded {idx + 1}/{len(valid_frames)} frames...")
+        
+        # 批量计算LPIPS
+        lpips_scores = {}
+        if use_lpips and batch_data:
+            logger.info(f"Computing LPIPS for {len(batch_data)} frames in batches of {batch_size}...")
+            with torch.no_grad():
+                for batch_start in range(0, len(batch_data), batch_size):
+                    batch_end = min(batch_start + batch_size, len(batch_data))
+                    batch = batch_data[batch_start:batch_end]
+                    
+                    # 准备批量张量
+                    gt_tensors = []
+                    old_tensors = []
+                    new_tensors = []
+                    
+                    for item in batch:
+                        gt_tensor = torch.from_numpy(item['gt_norm']).permute(2, 0, 1).unsqueeze(0).float().to(_lpips_device)
+                        old_tensor = torch.from_numpy(item['old_norm']).permute(2, 0, 1).unsqueeze(0).float().to(_lpips_device)
+                        new_tensor = torch.from_numpy(item['new_norm']).permute(2, 0, 1).unsqueeze(0).float().to(_lpips_device)
+                        
+                        gt_tensors.append(gt_tensor)
+                        old_tensors.append(old_tensor)
+                        new_tensors.append(new_tensor)
+                    
+                    # 拼接成批量
+                    gt_batch = torch.cat(gt_tensors, dim=0)
+                    old_batch = torch.cat(old_tensors, dim=0)
+                    new_batch = torch.cat(new_tensors, dim=0)
+                    
+                    # 批量计算LPIPS
+                    lpips_gt_old = loss_fn(gt_batch, old_batch).cpu().numpy()
+                    lpips_gt_new = loss_fn(gt_batch, new_batch).cpu().numpy()
+                    
+                    # 保存结果
+                    for i, batch_idx in enumerate(range(batch_start, batch_end)):
+                        # 确保从numpy数组中提取标量值
+                        lpips_old_val = lpips_gt_old[i]
+                        lpips_new_val = lpips_gt_new[i]
+                        if isinstance(lpips_old_val, np.ndarray):
+                            lpips_old_val = lpips_old_val.item()
+                        if isinstance(lpips_new_val, np.ndarray):
+                            lpips_new_val = lpips_new_val.item()
+                        lpips_scores[batch_idx] = {
+                            'lpips_old': float(lpips_old_val),
+                            'lpips_new': float(lpips_new_val)
+                        }
+                    
+                    if (batch_start // batch_size + 1) % 10 == 0:
+                        logger.info(f"  Processed {batch_end}/{len(batch_data)} frames for LPIPS")
+        
+        # 计算每帧的综合分数
+        logger.info("Computing final scores for all frames...")
+        for info in frame_info:
+            cam_id = info['cam_id']
+            frame_id = info['frame_id']
+            batch_idx = info['batch_idx']
+            
+            if batch_idx == -1:
+                # 没有有效数据，分数为0
+                frames_by_cam[cam_id].append((frame_id, 0.0))
+                continue
+            
+            batch_item = batch_data[batch_idx]
+            old_norm = batch_item['old_norm']
+            new_norm = batch_item['new_norm']
+            gt_norm = batch_item['gt_norm']
+            
+            scores = {}
+            
+            # PSNR
+            psnr_old = psnr(gt_norm, old_norm, data_range=1.0)
+            psnr_new = psnr(gt_norm, new_norm, data_range=1.0)
+            scores['psnr'] = psnr_new - psnr_old
+            
+            # SSIM
+            ssim_old = ssim(gt_norm, old_norm, data_range=1.0, channel_axis=2 if len(gt_norm.shape) == 3 else None)
+            ssim_new = ssim(gt_norm, new_norm, data_range=1.0, channel_axis=2 if len(gt_norm.shape) == 3 else None)
+            scores['ssim'] = ssim_new - ssim_old
+            
+            # LPIPS（从批量结果中获取，LPIPS越小越好，所以改进=old-new）
+            if batch_idx in lpips_scores:
+                scores['lpips'] = lpips_scores[batch_idx]['lpips_old'] - lpips_scores[batch_idx]['lpips_new']
             else:
-                # log_dir2 相对于 log_dir1 的改进
-                improvement_score = compute_frame_metrics_score(img1_path, img2_path, gt_path, metrics_weights)
-
+                scores['lpips'] = 0.0
+            
+            # 对于区域指标，使用全图指标的近似值
+            for suffix in ['_no_ego', '_with_ego', '_occupied', '_masked', '_human', '_vehicle']:
+                scores[f'psnr{suffix}'] = scores['psnr'] * 0.8
+                scores[f'ssim{suffix}'] = scores['ssim'] * 0.8
+                if suffix not in ['_no_ego', '_with_ego']:
+                    scores[f'lpips{suffix}'] = scores['lpips'] * 0.8
+            
+            # 使用权重计算综合分数
+            if metrics_weights is None:
+                metrics_weights = {
+                    'psnr': 0.15, 'ssim': 0.15, 'lpips': 0.10,
+                    'psnr_no_ego': 0.08, 'ssim_no_ego': 0.08, 'lpips_no_ego': 0.05,
+                    'psnr_with_ego': 0.05, 'ssim_with_ego': 0.05, 'lpips_with_ego': 0.03,
+                    'occupied_psnr': 0.06, 'occupied_ssim': 0.06,
+                    'masked_psnr': 0.04, 'masked_ssim': 0.04,
+                    'human_psnr': 0.02, 'human_ssim': 0.02,
+                    'vehicle_psnr': 0.02, 'vehicle_ssim': 0.02,
+                }
+            
+            # 归一化并加权
+            total_score = 0.0
+            total_weight = 0.0
+            for metric_name, weight in metrics_weights.items():
+                if metric_name in scores:
+                    normalized_score = np.tanh(scores[metric_name])
+                    total_score += normalized_score * weight
+                    total_weight += weight
+            
+            improvement_score = total_score / total_weight if total_weight > 0 else 0.0
             frames_by_cam[cam_id].append((frame_id, improvement_score))
-            processed_frames += 1
-            if processed_frames % 50 == 0 or processed_frames == total_frames:
-                logger.info(f"Processed {processed_frames}/{total_frames} frames ({100*processed_frames/total_frames:.1f}%)")
+        
+        processed_frames = len(frame_info)
+        logger.info(f"Completed processing {processed_frames}/{total_frames} frames")
         return frames_by_cam
 
     def select_best_frames(frames_by_cam, grouped1, grouped2):
@@ -849,86 +982,171 @@ def main(args):
             )
             logger.info(f"  上传最佳改进帧表格（包含图片）: {len(best_frames_table_data)} 行数据")
             wandb.log({"best_improvement_frames_table": best_frames_table})
-        
-        # 保存表格到本地文件
-        if best_frames_per_cam:
-            try:
-                # 提取模型名称
-                old_model_name = os.path.basename(args.log_dir1.rstrip('/'))
-                new_model_name = os.path.basename(args.log_dir2.rstrip('/'))
+
+        logger.info("所有数据已上传到 wandb")
+    
+    # 保存表格到本地文件（无论是否启用wandb都要保存）
+    if best_frames_per_cam or full_comparison:
+        try:
+            # 提取模型名称与保存目录
+            old_model_name = os.path.basename(args.log_dir1.rstrip('/'))
+            new_model_name = os.path.basename(args.log_dir2.rstrip('/'))
+            log_dir1_abs = os.path.abspath(args.log_dir1)
+            base_output_dir = os.path.dirname(log_dir1_abs)
+            
+            # 生成时间戳
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # 保存路径：compare_model/{dir1_name}_{dir2_name}_{timestamp}
+            save_base_dir = os.path.join(
+                base_output_dir, 
+                "compare_model", 
+                f"{old_model_name}_{new_model_name}_{timestamp}"
+            )
+            os.makedirs(save_base_dir, exist_ok=True)
+
+            if not OPENPYXL_AVAILABLE:
+                logger.warning("openpyxl未安装，无法生成Excel文件。请运行: pip install openpyxl")
+                logger.info("将使用CSV格式保存...")
+                # 回退到CSV格式
+                if full_comparison:
+                    comparison_csv = os.path.join(save_base_dir, "comparison_table.csv")
+                    with open(comparison_csv, "w", newline="", encoding="utf-8") as f:
+                        writer = csv.writer(f)
+                        writer.writerow(["Metric", dir1_name, dir2_name, "Difference", "Improvement %", "Improved"])
+                        for metric_name, metric_data in full_comparison.items():
+                            writer.writerow([
+                                metric_name,
+                                f"{metric_data['old']:.6f}",
+                                f"{metric_data['new']:.6f}",
+                                f"{metric_data['diff']:+.6f}",
+                                f"{metric_data['improvement_pct']:+.2f}%",
+                                "✓" if metric_data['improved'] else "✗"
+                            ])
+                    logger.info(f"已保存 comparison_table 到本地: {comparison_csv}")
                 
-                # 构建保存路径：从 log_dir1 中提取基础路径
-                # log_dir1 格式: output/qcraft_20251025_163358_QCOYSD504206_1595_1610/old_model
-                # 需要提取: output/qcraft_20251025_163358_QCOYSD504206_1595_1610
-                # 转换为绝对路径
-                log_dir1_abs = os.path.abspath(args.log_dir1)
-                base_output_dir = os.path.dirname(log_dir1_abs)
-                
-                # 构建完整保存路径
-                save_base_dir = os.path.join(base_output_dir, "compare_model")
-                os.makedirs(save_base_dir, exist_ok=True)
-                
-                # 保存最佳改进帧表格
-                filename = f"best_improvement_frames_table_{old_model_name}_{new_model_name}.csv"
-                filepath = os.path.join(save_base_dir, filename)
-                
-                # 保存为 CSV 文件（图片路径）
-                with open(filepath, 'w', newline='', encoding='utf-8') as f:
-                    writer = csv.writer(f)
+                if best_frames_per_cam:
+                    best_frames_csv = os.path.join(save_base_dir, "best_improvement_frames_table.csv")
+                    with open(best_frames_csv, "w", newline="", encoding="utf-8") as f:
+                        writer = csv.writer(f)
+                        writer.writerow([
+                            "Camera ID", "Frame ID", "Improvement Score", dir1_name, dir2_name
+                        ])
+                        for cam_id in sorted(best_frames_per_cam.keys()):
+                            best_frame = best_frames_per_cam[cam_id]
+                            old_path = best_frame.get('image_path_old', '')
+                            new_path = best_frame.get('image_path_new', '')
+                            writer.writerow([
+                                f"Cam {cam_id}",
+                                best_frame.get('frame_idx', 'N/A'),
+                                f"{best_frame.get('improvement_score', 0):.6f}",
+                                old_path if old_path and os.path.exists(old_path) else "N/A",
+                                new_path if new_path and os.path.exists(new_path) else "N/A"
+                            ])
+                    logger.info(f"已保存最佳改进帧表格到本地: {best_frames_csv}")
+            else:
+                # 使用Excel格式保存
+                # comparison_table 保存为 Excel（全图指标）
+                if full_comparison:
+                    comparison_xlsx = os.path.join(save_base_dir, "comparison_table.xlsx")
+                    wb = Workbook()
+                    ws = wb.active
+                    ws.title = "Comparison"
+                    
                     # 写入表头
-                    writer.writerow(["Camera ID", "Frame ID", "Improvement Score", f"{dir1_name} Image Path", f"{dir2_name} Image Path"])
-                    # 写入数据（使用实际图片路径而不是 wandb.Image 对象）
+                    headers = ["Metric", dir1_name, dir2_name, "Difference", "Improvement %", "Improved"]
+                    ws.append(headers)
+                    
+                    # 写入数据
+                    for metric_name, metric_data in full_comparison.items():
+                        ws.append([
+                            metric_name,
+                            f"{metric_data['old']:.6f}",
+                            f"{metric_data['new']:.6f}",
+                            f"{metric_data['diff']:+.6f}",
+                            f"{metric_data['improvement_pct']:+.2f}%",
+                            "✓" if metric_data['improved'] else "✗"
+                        ])
+                    
+                    # 调整列宽
+                    for col in range(1, len(headers) + 1):
+                        ws.column_dimensions[get_column_letter(col)].width = 15
+                    
+                    wb.save(comparison_xlsx)
+                    logger.info(f"已保存 comparison_table 到本地: {comparison_xlsx}")
+
+                # 保存最佳改进帧表格（Excel格式，嵌入图片，字段与wandb表格保持一致）
+                if best_frames_per_cam:
+                    best_frames_xlsx = os.path.join(save_base_dir, "best_improvement_frames_table.xlsx")
+                    wb = Workbook()
+                    ws = wb.active
+                    ws.title = "Best Improvement Frames"
+                    
+                    # 字段与wandb表格保持一致：["Camera ID", "Frame ID", "Improvement Score", dir1_name, dir2_name]
+                    headers = ["Camera ID", "Frame ID", "Improvement Score", dir1_name, dir2_name]
+                    ws.append(headers)
+                    
+                    # 设置列宽（图片列需要更宽）
+                    ws.column_dimensions['A'].width = 12  # Camera ID
+                    ws.column_dimensions['B'].width = 12  # Frame ID
+                    ws.column_dimensions['C'].width = 18  # Improvement Score
+                    ws.column_dimensions['D'].width = 20  # dir1_name (图片)
+                    ws.column_dimensions['E'].width = 20  # dir2_name (图片)
+                    
+                    # 设置行高（图片行需要更高）
+                    row_height = 120  # 像素
+                    
+                    row_idx = 2  # 从第2行开始（第1行是表头）
                     for cam_id in sorted(best_frames_per_cam.keys()):
                         best_frame = best_frames_per_cam[cam_id]
-                        writer.writerow([
-                            f"Cam {cam_id}",
-                            best_frame.get('frame_idx', 'N/A'),
-                            f"{best_frame.get('improvement_score', 0):.6f}",
-                            best_frame.get('image_path_old', 'N/A'),
-                            best_frame.get('image_path_new', 'N/A')
-                        ])
-                
-                logger.info(f"  已保存最佳改进帧表格到本地: {filepath}")
-                
-                # 同时保存图片到本地
-                images_dir = os.path.join(save_base_dir, "images")
-                os.makedirs(images_dir, exist_ok=True)
-                
-                # 保存最佳改进帧图片
-                saved_images = 0
-                for cam_id in sorted(best_frames_per_cam.keys()):
-                    best_frame = best_frames_per_cam[cam_id]
-                    frame_idx = best_frame.get('frame_idx', 'N/A')
-                    old_path = best_frame.get('image_path_old', '')
-                    new_path = best_frame.get('image_path_new', '')
+                        old_path = best_frame.get('image_path_old', '')
+                        new_path = best_frame.get('image_path_new', '')
+                        frame_idx = best_frame.get('frame_idx', 'N/A')
+                        
+                        # 写入基本信息
+                        ws.cell(row=row_idx, column=1, value=f"Cam {cam_id}")
+                        ws.cell(row=row_idx, column=2, value=frame_idx)
+                        ws.cell(row=row_idx, column=3, value=f"{best_frame.get('improvement_score', 0):.6f}")
+                        
+                        # 设置行高
+                        ws.row_dimensions[row_idx].height = row_height
+                        
+                        # 嵌入图片
+                        img_size = 100  # 图片大小（像素）
+                        
+                        # 嵌入旧模型图片
+                        if old_path and os.path.exists(old_path):
+                            try:
+                                img = OpenpyxlImage(old_path)
+                                # 调整图片大小
+                                img.width = img_size
+                                img.height = img_size
+                                # 插入到D列
+                                ws.add_image(img, f'D{row_idx}')
+                            except Exception as e:
+                                logger.warning(f"无法嵌入 {dir1_name} 图像 (Cam {cam_id}): {e}")
+                                ws.cell(row=row_idx, column=4, value="图片加载失败")
+                        
+                        # 嵌入新模型图片
+                        if new_path and os.path.exists(new_path):
+                            try:
+                                img = OpenpyxlImage(new_path)
+                                # 调整图片大小
+                                img.width = img_size
+                                img.height = img_size
+                                # 插入到E列
+                                ws.add_image(img, f'E{row_idx}')
+                            except Exception as e:
+                                logger.warning(f"无法嵌入 {dir2_name} 图像 (Cam {cam_id}): {e}")
+                                ws.cell(row=row_idx, column=5, value="图片加载失败")
+                        
+                        row_idx += 1
                     
-                    # 保存图像，使用文件夹名称
-                    if old_path and os.path.exists(old_path):
-                        try:
-                            img_old = imageio.imread(old_path)
-                            old_save_path = os.path.join(images_dir, f"cam{cam_id}_frame{frame_idx}_{dir1_name}.png")
-                            imageio.imwrite(old_save_path, img_old)
-                            saved_images += 1
-                        except Exception as e:
-                            logger.warning(f"无法保存 {dir1_name} 图像 (Cam {cam_id}): {e}")
-                    
-                    # 保存新图像
-                    if new_path and os.path.exists(new_path):
-                        try:
-                            img_new = imageio.imread(new_path)
-                            new_save_path = os.path.join(images_dir, f"cam{cam_id}_frame{frame_idx}_{dir2_name}.png")
-                            imageio.imwrite(new_save_path, img_new)
-                            saved_images += 1
-                        except Exception as e:
-                            logger.warning(f"无法保存 {dir2_name} 图像 (Cam {cam_id}): {e}")
-                
-                if saved_images > 0:
-                    logger.info(f"  已保存 {saved_images} 张最佳改进帧图片到: {images_dir}")
-                
-            except Exception as e:
-                logger.error(f"保存表格到本地时出错: {e}", exc_info=True)
-        
-        logger.info("所有数据已上传到 wandb")
+                    wb.save(best_frames_xlsx)
+                    logger.info(f"已保存最佳改进帧表格到本地（Excel格式，嵌入图片，字段与wandb一致）: {best_frames_xlsx}")
+
+        except Exception as e:
+            logger.error(f"保存本地结果时出错: {e}", exc_info=True)
     
     logger.info(f"\n{'='*80}")
     logger.info("对比完成！")
