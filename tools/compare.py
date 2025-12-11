@@ -655,7 +655,7 @@ def find_best_improved_frames_per_camera(
         logger.info(f"Completed processing {processed_frames}/{total_frames} frames")
         return frames_by_cam
 
-    def select_best_frames(frames_by_cam, grouped1, grouped2):
+    def select_best_frames(frames_by_cam, grouped1, grouped2, gt_grouped1, gt_grouped2):
         best_frames = {}
         for cam_id, frame_scores in frames_by_cam.items():
             if not frame_scores:
@@ -664,11 +664,14 @@ def find_best_improved_frames_per_camera(
             best_frame_id, best_improvement = frame_scores[0]
             key = (cam_id, best_frame_id)
             if key in grouped1 and key in grouped2:
+                # 查找GT图片路径（优先从gt_grouped1，如果没有则从gt_grouped2）
+                gt_path = gt_grouped1.get(key) or gt_grouped2.get(key) or ""
                 best_frames[cam_id] = {
                     "frame_idx": best_frame_id,
                     "cam_id": cam_id,
                     "image_path_old": grouped1[key],
                     "image_path_new": grouped2[key],
+                    "image_path_gt": gt_path,
                     "improvement_score": best_improvement
                 }
                 logger.info(f"Cam {cam_id}: Best improved frame {best_frame_id} with improvement score {best_improvement:.4f}")
@@ -710,7 +713,7 @@ def find_best_improved_frames_per_camera(
         common_keys, grouped1, grouped2, gt_grouped1, gt_grouped2, reverse, metrics_weights
     )
 
-    best_frames = select_best_frames(frames_by_cam, grouped1, grouped2)
+    best_frames = select_best_frames(frames_by_cam, grouped1, grouped2, gt_grouped1, gt_grouped2)
     return best_frames
 
 
@@ -1082,25 +1085,53 @@ def main(args):
                     ws = wb.active
                     ws.title = "Best Improvement Frames"
                     
-                    # 字段与wandb表格保持一致：["Camera ID", "Frame ID", "Improvement Score", dir1_name, dir2_name]
-                    headers = ["Camera ID", "Frame ID", "Improvement Score", dir1_name, dir2_name]
+                    # 字段：["Camera ID", "Frame ID", "Improvement Score", dir1_name, dir2_name, "GT"]
+                    headers = ["Camera ID", "Frame ID", "Improvement Score", dir1_name, dir2_name, "GT"]
                     ws.append(headers)
                     
-                    # 设置列宽（图片列需要更宽）
+                    # 先扫描所有图片，找到最大尺寸（用于设置统一的列宽和行高）
+                    max_img_width = 0
+                    max_img_height = 0
+                    for cam_id in sorted(best_frames_per_cam.keys()):
+                        best_frame = best_frames_per_cam[cam_id]
+                        for img_path in [best_frame.get('image_path_old', ''), 
+                                        best_frame.get('image_path_new', ''),
+                                        best_frame.get('image_path_gt', '')]:
+                            if img_path and os.path.exists(img_path):
+                                try:
+                                    img = imageio.imread(img_path)
+                                    if img is not None:
+                                        h, w = img.shape[:2]
+                                        max_img_width = max(max_img_width, w)
+                                        max_img_height = max(max_img_height, h)
+                                except:
+                                    pass
+                    
+                    # 图片尺寸为原始的一半
+                    target_img_width = max_img_width // 2 if max_img_width > 0 else 256
+                    target_img_height = max_img_height // 2 if max_img_height > 0 else 256
+                    
+                    # 设置列宽（Excel列宽单位：1单位 ≈ 7像素，图片列宽需要匹配图片宽度的一半）
+                    # 图片列宽 = 图片宽度(像素) / 7，但需要加上一些边距
+                    img_col_width = max(target_img_width / 7 + 2, 15)  # 至少15，加上2的边距
+                    
                     ws.column_dimensions['A'].width = 12  # Camera ID
                     ws.column_dimensions['B'].width = 12  # Frame ID
                     ws.column_dimensions['C'].width = 18  # Improvement Score
-                    ws.column_dimensions['D'].width = 20  # dir1_name (图片)
-                    ws.column_dimensions['E'].width = 20  # dir2_name (图片)
+                    ws.column_dimensions['D'].width = img_col_width  # dir1_name (图片)
+                    ws.column_dimensions['E'].width = img_col_width  # dir2_name (图片)
+                    ws.column_dimensions['F'].width = img_col_width  # GT (图片)
                     
-                    # 设置行高（图片行需要更高）
-                    row_height = 120  # 像素
+                    # 设置行高（Excel行高单位：1单位 = 1/72英寸，大约1像素=0.75点）
+                    # 行高需要匹配图片高度的一半
+                    row_height = target_img_height * 0.75 if target_img_height > 0 else 100
                     
                     row_idx = 2  # 从第2行开始（第1行是表头）
                     for cam_id in sorted(best_frames_per_cam.keys()):
                         best_frame = best_frames_per_cam[cam_id]
                         old_path = best_frame.get('image_path_old', '')
                         new_path = best_frame.get('image_path_new', '')
+                        gt_path = best_frame.get('image_path_gt', '')
                         frame_idx = best_frame.get('frame_idx', 'N/A')
                         
                         # 写入基本信息
@@ -1111,39 +1142,51 @@ def main(args):
                         # 设置行高
                         ws.row_dimensions[row_idx].height = row_height
                         
-                        # 嵌入图片
-                        img_size = 100  # 图片大小（像素）
-                        
-                        # 嵌入旧模型图片
+                        # 嵌入旧模型图片（尺寸为原始的一半）
                         if old_path and os.path.exists(old_path):
                             try:
                                 img = OpenpyxlImage(old_path)
-                                # 调整图片大小
-                                img.width = img_size
-                                img.height = img_size
+                                # 设置图片尺寸为原始的一半
+                                img.width = target_img_width
+                                img.height = target_img_height
                                 # 插入到D列
                                 ws.add_image(img, f'D{row_idx}')
                             except Exception as e:
                                 logger.warning(f"无法嵌入 {dir1_name} 图像 (Cam {cam_id}): {e}")
                                 ws.cell(row=row_idx, column=4, value="图片加载失败")
                         
-                        # 嵌入新模型图片
+                        # 嵌入新模型图片（尺寸为原始的一半）
                         if new_path and os.path.exists(new_path):
                             try:
                                 img = OpenpyxlImage(new_path)
-                                # 调整图片大小
-                                img.width = img_size
-                                img.height = img_size
+                                # 设置图片尺寸为原始的一半
+                                img.width = target_img_width
+                                img.height = target_img_height
                                 # 插入到E列
                                 ws.add_image(img, f'E{row_idx}')
                             except Exception as e:
                                 logger.warning(f"无法嵌入 {dir2_name} 图像 (Cam {cam_id}): {e}")
                                 ws.cell(row=row_idx, column=5, value="图片加载失败")
                         
+                        # 嵌入GT图片（尺寸为原始的一半）
+                        if gt_path and os.path.exists(gt_path):
+                            try:
+                                img = OpenpyxlImage(gt_path)
+                                # 设置图片尺寸为原始的一半
+                                img.width = target_img_width
+                                img.height = target_img_height
+                                # 插入到F列
+                                ws.add_image(img, f'F{row_idx}')
+                            except Exception as e:
+                                logger.warning(f"无法嵌入 GT 图像 (Cam {cam_id}): {e}")
+                                ws.cell(row=row_idx, column=6, value="图片加载失败")
+                        else:
+                            ws.cell(row=row_idx, column=6, value="N/A")
+                        
                         row_idx += 1
                     
                     wb.save(best_frames_xlsx)
-                    logger.info(f"已保存最佳改进帧表格到本地（Excel格式，嵌入图片，字段与wandb一致）: {best_frames_xlsx}")
+                    logger.info(f"已保存最佳改进帧表格到本地（Excel格式，图片尺寸为原始的一半，列宽匹配图片宽度，字段与wandb一致）: {best_frames_xlsx}")
 
         except Exception as e:
             logger.error(f"保存本地结果时出错: {e}", exc_info=True)
