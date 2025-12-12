@@ -8,9 +8,9 @@ camera_ids=(1)  # camera IDs to use, e.g., (0), (0 2 4)
 
 lidar_type="lidar"  # lidar（运动补偿前）/visual（纯视觉）
 
-config_file="configs/omnire_extended_cam_lidar_wo_depth_loss.yaml"
-dataset_config="qcraft/1cams_${lidar_type}"
-extra_config_info=""  # 额外信息，如 depth_loss
+config_file="configs/omnire_extended_cam_lidar.yaml"
+dataset_config="qcraft/11cams_${lidar_type}"
+extra_config_info="depth_loss"  # 额外信息，如 depth_loss
 
 start_timestep=0 # start frame index for training
 end_timestep=-1 # end frame index, -1 for the last frame
