@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from datasets.driving_dataset_novel_view import DrivingDatasetNovelView
 from utils.misc import import_str
-from utils.logging import setup_logging
+from utils.logging_utils import setup_logging
 from models.trainers import BasicTrainer
 from models.video_utils import render_novel_views, save_single_camera_video
 from chery_tools.lidar_simulation import (

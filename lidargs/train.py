@@ -698,10 +698,10 @@ if __name__ == "__main__":
     parser.add_argument("--detect_anomaly", action="store_true", default=False)
     parser.add_argument("--warmup", action="store_true", default=False)
     parser.add_argument(
-        "--test_iterations", nargs="+", type=int, default=[1000, 2000, 3000, 4000, 5000]
+        "--test_iterations", nargs="+", type=int, default=[1000, 3000, 5000]
     )
     parser.add_argument(
-        "--save_iterations", nargs="+", type=int, default=[1000, 2000, 3000, 4000, 5000]
+        "--save_iterations", nargs="+", type=int, default=[1000, 3000, 5000]
     )
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
@@ -757,11 +757,11 @@ if __name__ == "__main__":
         )
 
     for block_id, train_frame_times in block_info_with_extend.items():
+        model_args.block_id = block_id  # update block id
+        model_args.test_frames_interval = args.test_frames_interval
         gt_dynamic_model = GT_Dataloader(
             model_args, train=True, train_frame_times=train_frame_times
         )
-        model_args.block_id = block_id  # update block id
-        model_args.test_frames_interval = args.test_frames_interval
         training(
             gt_dynamic_model,
             model_args,

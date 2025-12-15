@@ -4,8 +4,8 @@ import numpy as np
 import sys
 import subprocess
 
-from plyfile import PlyData, PlyElement
-from typing import List, Dict, Tuple, Optional
+from plyfile import PlyData
+from typing import List, Dict, Optional
 
 cmd = "nvidia-smi -q -d Memory |grep -A4 GPU|grep Used"
 result = (
@@ -18,31 +18,18 @@ os.environ["CUDA_VISIBLE_DEVICES"] = str(
 os.system("echo $CUDA_VISIBLE_DEVICES")
 
 from scene import Scene
-import json
 import time
 import yaml
-from gaussian_renderer import render, prefilter_voxel, renderComposite
-import torchvision
+from gaussian_renderer import renderComposite
 from tqdm import tqdm
 from utils.general_utils import safe_state
 from argparse import ArgumentParser
-from arguments import ModelParams, PipelineParams, get_combined_args
+from arguments import ModelParams, PipelineParams
 from scene.gaussian_model import GaussianModel
 from scene import Scene
 
-import cv2
-from utils.lidar_utils import PointsMeter, pano_to_lidar_with_intensities, filter_pcd
-from utils.loss_utils import l1_loss
-from utils.image_utils import psnr
+from utils.lidar_utils import pano_to_lidar_with_intensities, filter_pcd
 from scene.cameras import Camera
-import open3d as o3d
-
-# from utils.obj_utils import get_obj_type, loadStaticObj
-from utils.data_partition_utils import (
-    dataPartitionSimple,
-    dataPartitionChery,
-)
-import math
 import logging
 logger = logging.getLogger("render")
 logger.setLevel(logging.INFO)
@@ -584,9 +571,6 @@ def parse_and_apply_edit_yaml(args, yaml_path: str):
         add_pairs.append((ref, sim_pose, path))
     setattr(args, "add", {"obj_id_path_pairs": add_pairs})
 
-    # ensure novel_poses exists
-    if not hasattr(args, "novel_poses"):
-        args.novel_poses = []
 
 if __name__ == "__main__":
     # Set up command line argument parser
@@ -605,7 +589,9 @@ if __name__ == "__main__":
     # 解析 YAML 编辑配置并映射到 args（如果提供 --edit_yaml）
     parse_and_apply_edit_yaml(args, getattr(args, "edit_yaml", None))
     if len(args.test_frames) == 0 and not hasattr(args, "novel_poses"):
-        frame_num = len(os.listdir(os.path.join(args.source_path, "lidar")))
+        bin_files = [f for f in os.listdir(os.path.join(args.source_path, "lidar", "bin")) if f.endswith(".bin")]
+        bin_files = sorted(bin_files, key=lambda x: int(x.split(".")[0]))
+        frame_num = len(bin_files)
         args.test_frames = [x for x in range(0, frame_num, 1)]
     logger.info("Rendering " + args.model_path)
 
@@ -649,7 +635,8 @@ if __name__ == "__main__":
         gt_dynamic_model = GT_Dataloader(
             model_args, train=False, train_frame_times=train_frame_times
         )
-        gt_dynamic_model.set_novel_poses_setting(args.novel_poses)
+        if hasattr(args, "novel_poses"):
+            gt_dynamic_model.set_novel_poses_setting(args.novel_poses)
 
         render_sets(
             gt_dynamic_model,
