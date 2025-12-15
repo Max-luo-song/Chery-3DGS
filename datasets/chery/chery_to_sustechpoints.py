@@ -1,6 +1,16 @@
 import numpy as np, argparse, os, shutil, json
-from scipy.spatial.transform import Rotation as R
+import open3d as o3d
 from typing import Dict, List
+from scipy.spatial.transform import Rotation as R
+
+OPENCV2DATASET = np.array(
+    [
+        [0.0, 0.0, 1.0, 0.0],
+        [-1.0, 0.0, 0.0, 0.0],
+        [0.0, -1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+)
 
 CAMERA_PERSPECTIVE = [
     # "CAM_PBQ_FRONT_LEFT_RESET_OPTICAL_H99",
@@ -68,13 +78,20 @@ def euler2transform(chery_extrinsics: Dict, type) -> List:
     return T.tolist()
 
 
-def gen_lidar_to_cams(lidar_ex, cam_exs) -> List:
+def gen_lidar_to_cams(ego2lidar, cam_exs) -> List:
     assert isinstance(cam_exs[0], list), "cam_exs shape error"
-    assert isinstance(lidar_ex, list), "lidar_ex shape error"
-    return [(np.linalg.inv(c2e) @ np.array(lidar_ex)).tolist() for c2e in cam_exs]
+    assert isinstance(ego2lidar, list), "lidar_ex shape error"
+    return [(np.array(ego2lidar) @ (np.array(c2e) @ OPENCV2DATASET)).tolist() for c2e in cam_exs]
 
+def transform_lidar(lidar2ego, source_file, dst_file):
+    ori_pcd = o3d.io.read_point_cloud(source_file)
+    ori_pts = np.asarray(ori_pcd.points)
+    xyz_ego_homo = np.hstack([ori_pts, np.ones((ori_pts.shape[0], 1))])  # [N, 4]
+    xyz_lidar_homo = (np.linalg.inv(lidar2ego) @ xyz_ego_homo.T).T  # [N, 4]
+    ori_pcd.points = o3d.utility.Vector3dVector(xyz_lidar_homo[:, :3])
+    o3d.io.write_point_cloud(dst_file, ori_pcd)
 
-def organize_meta(args, all_time_stamps):
+def organize_meta(args, all_time_stamps, lidar2ego):
     # create dirs
     for cam_pers in CAMERA_PERSPECTIVE:
         create_dirs(os.path.join(args.dst, "camera", cam_pers))
@@ -97,7 +114,8 @@ def organize_meta(args, all_time_stamps):
                 src_file = os.path.join(args.src, ts, file)
                 dst_path = os.path.join(args.dst, "lidar")
                 if os.path.exists(dst_path):
-                    shutil.copy(src_file, os.path.join(dst_path, ts + ".pcd"))
+                    transform_lidar(lidar2ego, src_file, os.path.join(dst_path, ts + ".pcd"))
+                    # shutil.copy(src_file, os.path.join(dst_path, ts + ".pcd"))
 
 
 def organize_calibs(args):
@@ -123,9 +141,12 @@ def organize_calibs(args):
         .get("extrinsics", False),
         "lidar",
     )
+    
+    ego2lidar = np.linalg.inv(lidar_ext).tolist()
+
     # cal lidar to cam extrinsics
     lidar2cams = gen_lidar_to_cams(
-        lidar_ext,
+        ego2lidar,
         [
             euler2transform(
                 cam_params.get(cam_id, False).get(
@@ -156,7 +177,7 @@ def organize_calibs(args):
         }
         with open(dst_file_path, "w", encoding="utf-8") as f:
             json.dump(info, f)
-
+    return lidar_ext
 
 def create_dirs(path):
     if os.path.exists(path):
@@ -187,8 +208,9 @@ def convert2sus(args):
         f for f in os.listdir(args.src) if os.path.isdir(os.path.join(args.src, f))
     ]
 
-    organize_meta(args, all_time_stamps_list)
-    organize_calibs(args)
+    lidar2ego = organize_calibs(args)
+    organize_meta(args, all_time_stamps_list, lidar2ego)
+    
 
 
 if __name__ == "__main__":
@@ -202,5 +224,5 @@ if __name__ == "__main__":
     convert2sus(args)
 
 """
-python datasets/chery/chery_to_sustechpoints.py --src ~/Downloads/场景重建/qcraft_0702/20250702_133223_Q2517_60_75 --dst ~/Tools/SUSTechPOINTS/data/qcraft_test_0918
+python datasets/chery/chery_to_sustechpoints.py --src ~/Downloads/场景重建/qcraft_0702/20250702_133223_Q2517_60_75 --dst ~/Tools/SUSTechPOINTS/data/qcraft_test_1215
 """
