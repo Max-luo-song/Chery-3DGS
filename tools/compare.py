@@ -178,7 +178,7 @@ def get_common_camera_ids(cam_ids1: Optional[List[int]], cam_ids2: Optional[List
     if cam_ids1 is None or cam_ids2 is None:
         return set()
     
-    set1 = set(cam_ids1)
+    set1 = set[int](cam_ids1)
     set2 = set(cam_ids2)
     common = set1 & set2
     
@@ -197,6 +197,11 @@ def compare_metrics(metrics1: Dict, metrics2: Dict) -> Dict[str, Dict]:
         
         old_value = metrics1[metric]
         new_value = metrics2[metric]
+
+        # 跳过无效值（-1 或 None）
+        if old_value is None or new_value is None or old_value == -1 or new_value == -1:
+            logger.debug(f"Skip metric {metric} due to invalid value (old={old_value}, new={new_value})")
+            continue
         
         # 判断指标是否变好
         # 对于 PSNR，越大越好；对于 SSIM，越大越好；对于 LPIPS，越小越好
@@ -282,6 +287,12 @@ def compute_overall_score(metrics: Dict, metrics_weights: Optional[Dict[str, flo
     for metric in METRICS_TO_COMPARE:
         if metric not in metrics:
             continue
+
+        value = metrics[metric]
+
+        # 跳过无效值（-1 或 None）
+        if value is None or value == -1:
+            continue
         
         metric_key = metric.split('/')[-1]  # 提取指标名称，如 "psnr", "ssim", "lpips"
         
@@ -289,8 +300,6 @@ def compute_overall_score(metrics: Dict, metrics_weights: Optional[Dict[str, flo
         weight = metrics_weights.get(metric_key, 0.0)
         if weight == 0.0:
             continue
-        
-        value = metrics[metric]
         
         # 对于 LPIPS，需要取负值（因为越小越好）
         if "lpips" in metric.lower():
@@ -374,23 +383,44 @@ def find_best_improved_frames_per_camera(
         return grouped
 
     def build_metrics_weights(metrics1, metrics2):
+        """
+        根据两次评估的相对改进计算权重：
+        - 使用相对改进（diff / |old|），避免不同指标数值尺度差异导致权重塌缩
+        - LPIPS 为“越小越好”，取 old-new
+        - 跳过无效值（例如 -1）
+        """
         if not (metrics1 and metrics2):
             return None
+
+        eps = 1e-6
         total_improvement = {}
+
         for metric in METRICS_TO_COMPARE:
-            if metric in metrics1 and metric in metrics2:
-                old_val = metrics1[metric]
-                new_val = metrics2[metric]
-                if "lpips" in metric.lower():
-                    improvement = old_val - new_val  # LPIPS 越小越好
-                else:
-                    improvement = new_val - old_val  # PSNR/SSIM 越大越好
-                total_improvement[metric] = improvement
+            if metric not in metrics1 or metric not in metrics2:
+                continue
+
+            old_val = metrics1[metric]
+            new_val = metrics2[metric]
+
+            # 跳过无效值（-1 或 None）
+            if old_val is None or new_val is None or old_val == -1 or new_val == -1:
+                continue
+
+            if "lpips" in metric.lower():
+                diff = old_val - new_val  # LPIPS 越小越好
+            else:
+                diff = new_val - old_val  # PSNR/SSIM 越大越好
+
+            rel_improvement = diff / (abs(old_val) + eps)
+            total_improvement[metric] = rel_improvement
+
         if not total_improvement:
             return None
+
         max_improvement = max(abs(v) for v in total_improvement.values())
         if max_improvement <= 0:
             return None
+
         weights = {}
         for metric in METRICS_TO_COMPARE:
             metric_key = metric.split('/')[-1]
@@ -399,6 +429,7 @@ def find_best_improved_frames_per_camera(
                 weights[metric_key] = weight
             else:
                 weights[metric_key] = 0.0
+
         total_weight = sum(weights.values())
         if total_weight > 0:
             weights = {k: v / total_weight for k, v in weights.items()}
