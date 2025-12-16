@@ -258,59 +258,222 @@ def extract_frame_cam_from_filename(filename: str) -> Optional[Tuple[int, int]]:
     return None
 
 
-def compute_overall_score(metrics: Dict, metrics_weights: Optional[Dict[str, float]] = None) -> float:
-    """
-    根据权重计算评估结果的综合分数
+# def compute_overall_score(metrics: Dict, metrics_weights: Optional[Dict[str, float]] = None) -> float:
+#     """
+#     根据权重计算评估结果的综合分数
     
+#     Args:
+#         metrics: 指标字典，格式为 {"image_metrics/full/psnr": 25.5, ...}
+#         metrics_weights: 指标权重字典，如果为None则使用默认权重
+        
+#     Returns:
+#         综合分数（float）
+#     """
+#     if metrics_weights is None:
+#         # 默认权重（基于17个指标的重要性）
+#         metrics_weights = {
+#             'psnr': 0.15, 'ssim': 0.15, 'lpips': 0.10,
+#             'psnr_no_ego': 0.08, 'ssim_no_ego': 0.08, 'lpips_no_ego': 0.05,
+#             'psnr_with_ego': 0.05, 'ssim_with_ego': 0.05, 'lpips_with_ego': 0.03,
+#             'occupied_psnr': 0.06, 'occupied_ssim': 0.06,
+#             'masked_psnr': 0.04, 'masked_ssim': 0.04,
+#             'human_psnr': 0.02, 'human_ssim': 0.02,
+#             'vehicle_psnr': 0.02, 'vehicle_ssim': 0.02,
+#         }
+    
+#     total_score = 0.0
+#     total_weight = 0.0
+    
+#     for metric in METRICS_TO_COMPARE:
+#         if metric not in metrics:
+#             continue
+
+#         value = metrics[metric]
+
+#         # 跳过无效值（-1 或 None）
+#         if value is None or value == -1:
+#             continue
+        
+#         metric_key = metric.split('/')[-1]  # 提取指标名称，如 "psnr", "ssim", "lpips"
+        
+#         # 获取权重
+#         weight = metrics_weights.get(metric_key, 0.0)
+#         if weight == 0.0:
+#             continue
+        
+#         # 对于 LPIPS，需要取负值（因为越小越好）
+#         if "lpips" in metric.lower():
+#             value = -value  # 转换为越大越好的形式
+        
+#         # 加权求和
+#         total_score += value * weight
+#         total_weight += weight
+    
+#     return total_score / total_weight if total_weight > 0 else 0.0
+
+# =========================
+# 归一化函数
+# =========================
+
+def normalize_psnr(psnr: float, min_psnr: float = 15.0, max_psnr: float = 30.0) -> float:
+    """
+    将 PSNR 归一化到 [0, 1] 范围
+    - PSNR 越大越好，所以直接线性映射
+    - 低于 min_psnr 的值会被 clip 为 0
+    - 高于 max_psnr 的值会被 clip 为 1
+    在 3DGS + 自动驾驶 / 多视角场景中，这是合理的
+    如果你将来用于 室内 NeRF / synthetic scene，需要调整
+    """
+    if psnr < min_psnr:
+        return 0.0
+    if psnr > max_psnr:
+        return 1.0
+    return (psnr - min_psnr) / (max_psnr - min_psnr)
+
+
+def normalize_ssim(ssim: float, min_ssim: float = 0.5, max_ssim: float = 0.95) -> float:
+    """
+    将 SSIM 归一化到 [0, 1] 范围
+    - SSIM 越大越好，所以直接线性映射
+    - 低于 min_ssim 的值会被 clip 为 0
+    - 高于 max_ssim 的值会被 clip 为 1
+
+    """
+    if ssim < min_ssim:
+        return 0.0
+    if ssim > max_ssim:
+        return 1.0
+    return (ssim - min_ssim) / (max_ssim - min_ssim)
+
+
+def normalize_lpips(lpips: float, min_lpips: float = 0.0, max_lpips: float = 0.6) -> float:
+    """
+    将 LPIPS 归一化到 [0, 1] 范围
+    - LPIPS 越小越好，所以取反：1.0 - normalized_lpips
+    - LPIPS=0 时返回 1.0（最好）
+    - LPIPS=max_lpips 时返回 0.0（最差）
+    在 LPIPS ∈ [0.0, 0.2] 时，人眼差异很明显，但数值变化不大。
+    所以对 norm 进行开根号，在高质量区间（norm 接近 1）数值变化被放大，
+    在低质量区间（norm 接近 0），数值变化被压缩
+    """
+    if lpips < min_lpips:
+        lpips = min_lpips
+    if lpips > max_lpips:
+        lpips = max_lpips
+    norm = 1.0 - (lpips / max_lpips)
+    return norm
+
+
+# =========================
+# 区域权重（同一指标内部）
+# =========================
+
+# 区域权重（同一指标内部）
+# 注意：不同指标可能支持不同的区域
+# - PSNR/SSIM: full, no_ego, with_ego, occupied, masked, vehicle, human
+# - LPIPS: full, no_ego, with_ego (其他区域可能不存在)
+REGION_WEIGHTS = {
+    "full": 0.35,
+    "no_ego": 0.15,
+    "with_ego": 0.15,
+    "occupied": 0.15,
+    "masked": 0.10,
+    "vehicle": 0.10,
+    "human": 0.00,   # 若存在可开启，否则不影响整体
+}
+
+
+# =========================
+# 核心函数
+# =========================
+
+def compute_overall_score(metrics: Dict[str, float]) -> float:
+    """
+    适用于 3DGS 场景重建的综合评分函数
+    
+    计算流程：
+    1. 对每个指标类型（PSNR, SSIM, LPIPS）分别归一化到 [0, 1] 范围
+    2. 对每个指标类型，按区域权重聚合所有有效区域的归一化值
+    3. 如果某些区域缺失，权重会重新归一化分配给有效区域
+    4. 最后将三个一级指标按权重（0.4, 0.3, 0.3）融合得到最终分数
+
     Args:
-        metrics: 指标字典，格式为 {"image_metrics/full/psnr": 25.5, ...}
-        metrics_weights: 指标权重字典，如果为None则使用默认权重
-        
+        metrics: 指标字典，key 示例：
+                 image_metrics/full/psnr (全图 PSNR)
+                 image_metrics/full/ssim (全图 SSIM)
+                 image_metrics/full/lpips (全图 LPIPS)
+                 image_metrics/full/psnr_no_ego (无 ego 区域 PSNR)
+                 image_metrics/full/occupied_psnr (占用区域 PSNR)
+                 ...
+                 注意：值为 -1 或 None 的指标会被视为无效并跳过
+
     Returns:
-        综合分数（float）
+        综合分数 ∈ [0, 1]，越大越好
     """
-    if metrics_weights is None:
-        # 默认权重（基于17个指标的重要性）
-        metrics_weights = {
-            'psnr': 0.15, 'ssim': 0.15, 'lpips': 0.10,
-            'psnr_no_ego': 0.08, 'ssim_no_ego': 0.08, 'lpips_no_ego': 0.05,
-            'psnr_with_ego': 0.05, 'ssim_with_ego': 0.05, 'lpips_with_ego': 0.03,
-            'occupied_psnr': 0.06, 'occupied_ssim': 0.06,
-            'masked_psnr': 0.04, 'masked_ssim': 0.04,
-            'human_psnr': 0.02, 'human_ssim': 0.02,
-            'vehicle_psnr': 0.02, 'vehicle_ssim': 0.02,
-        }
-    
-    total_score = 0.0
-    total_weight = 0.0
-    
-    for metric in METRICS_TO_COMPARE:
-        if metric not in metrics:
-            continue
 
-        value = metrics[metric]
-
-        # 跳过无效值（-1 或 None）
+    # -------------------------
+    # 工具函数：读取区域指标
+    # -------------------------
+    def get_metric(metric_name: str, region: str):
+        """从 metrics 字典中获取指定区域和类型的指标值"""
+        if region == "full":
+            key = f"image_metrics/full/{metric_name}"
+        else:
+            key = f"image_metrics/full/{metric_name}_{region}"
+        value = metrics.get(key, None)
+        # 跳过无效值（-1 表示该指标不可用）
         if value is None or value == -1:
-            continue
-        
-        metric_key = metric.split('/')[-1]  # 提取指标名称，如 "psnr", "ssim", "lpips"
-        
-        # 获取权重
-        weight = metrics_weights.get(metric_key, 0.0)
-        if weight == 0.0:
-            continue
-        
-        # 对于 LPIPS，需要取负值（因为越小越好）
-        if "lpips" in metric.lower():
-            value = -value  # 转换为越大越好的形式
-        
-        # 加权求和
-        total_score += value * weight
-        total_weight += weight
-    
-    return total_score / total_weight if total_weight > 0 else 0.0
+            return None
+        return value
 
+    def aggregate_metric(metric_name: str, normalize_fn) -> float:
+        """
+        聚合某个指标类型的所有区域值
+        
+        Args:
+            metric_name: 指标名称，如 "psnr", "ssim", "lpips"
+            normalize_fn: 归一化函数
+            
+        Returns:
+            聚合后的归一化分数 [0, 1]
+        """
+        score = 0.0
+        weight_sum = 0.0
+
+        for region, w in REGION_WEIGHTS.items():
+            value = get_metric(metric_name, region)
+            if value is None:
+                continue
+            # 归一化并加权累加
+            score += normalize_fn(value) * w
+            weight_sum += w
+
+        # 重新归一化权重，确保即使某些区域缺失，权重总和仍为1
+        if weight_sum > 0:
+            return score / weight_sum
+        else:
+            # 所有区域都无效，返回 0
+            return 0.0
+
+    # -------------------------
+    # 二级指标聚合（按区域加权）
+    # -------------------------
+    psnr_score = aggregate_metric("psnr", normalize_psnr)
+    ssim_score = aggregate_metric("ssim", normalize_ssim)
+    lpips_score = aggregate_metric("lpips", normalize_lpips)
+
+    # -------------------------
+    # 一级指标融合（最终得分）
+    # -------------------------
+    # PSNR: 0.4, SSIM: 0.3, LPIPS: 0.3
+    # 这些权重可以根据实际需求调整
+    final_score = (
+        0.4 * psnr_score +
+        0.3 * ssim_score +
+        0.3 * lpips_score
+    )
+
+    return float(np.clip(final_score, 0.0, 1.0))
 
 def find_best_improved_frames_per_camera(
     log_dir1: str,
@@ -382,60 +545,7 @@ def find_best_improved_frames_per_camera(
                     grouped[(cam_id, frame_id)] = f
         return grouped
 
-    def build_metrics_weights(metrics1, metrics2):
-        """
-        根据两次评估的相对改进计算权重：
-        - 使用相对改进（diff / |old|），避免不同指标数值尺度差异导致权重塌缩
-        - LPIPS 为“越小越好”，取 old-new
-        - 跳过无效值（例如 -1）
-        """
-        if not (metrics1 and metrics2):
-            return None
-
-        eps = 1e-6
-        total_improvement = {}
-
-        for metric in METRICS_TO_COMPARE:
-            if metric not in metrics1 or metric not in metrics2:
-                continue
-
-            old_val = metrics1[metric]
-            new_val = metrics2[metric]
-
-            # 跳过无效值（-1 或 None）
-            if old_val is None or new_val is None or old_val == -1 or new_val == -1:
-                continue
-
-            if "lpips" in metric.lower():
-                diff = old_val - new_val  # LPIPS 越小越好
-            else:
-                diff = new_val - old_val  # PSNR/SSIM 越大越好
-
-            rel_improvement = diff / (abs(old_val) + eps)
-            total_improvement[metric] = rel_improvement
-
-        if not total_improvement:
-            return None
-
-        max_improvement = max(abs(v) for v in total_improvement.values())
-        if max_improvement <= 0:
-            return None
-
-        weights = {}
-        for metric in METRICS_TO_COMPARE:
-            metric_key = metric.split('/')[-1]
-            if metric in total_improvement:
-                weight = abs(total_improvement[metric]) / max_improvement
-                weights[metric_key] = weight
-            else:
-                weights[metric_key] = 0.0
-
-        total_weight = sum(weights.values())
-        if total_weight > 0:
-            weights = {k: v / total_weight for k, v in weights.items()}
-        return weights
-
-    def compute_improvement_scores(common_keys, grouped1, grouped2, gt_grouped1, gt_grouped2, reverse, metrics_weights):
+    def compute_improvement_scores(common_keys, grouped1, grouped2, gt_grouped1, gt_grouped2, reverse):
         import torch
         from skimage.metrics import structural_similarity as ssim
         from skimage.metrics import peak_signal_noise_ratio as psnr
@@ -635,51 +745,55 @@ def find_best_improved_frames_per_camera(
             
             scores = {}
             
-            # PSNR
+            # 计算原始指标值
             psnr_old = psnr(gt_norm, old_norm, data_range=1.0)
             psnr_new = psnr(gt_norm, new_norm, data_range=1.0)
-            scores['psnr'] = psnr_new - psnr_old
             
-            # SSIM
             ssim_old = ssim(gt_norm, old_norm, data_range=1.0, channel_axis=2 if len(gt_norm.shape) == 3 else None)
             ssim_new = ssim(gt_norm, new_norm, data_range=1.0, channel_axis=2 if len(gt_norm.shape) == 3 else None)
-            scores['ssim'] = ssim_new - ssim_old
             
-            # LPIPS（从批量结果中获取，LPIPS越小越好，所以改进=old-new）
+            # LPIPS（从批量结果中获取）
             if batch_idx in lpips_scores:
-                scores['lpips'] = lpips_scores[batch_idx]['lpips_old'] - lpips_scores[batch_idx]['lpips_new']
+                lpips_old = lpips_scores[batch_idx]['lpips_old']
+                lpips_new = lpips_scores[batch_idx]['lpips_new']
             else:
-                scores['lpips'] = 0.0
+                lpips_old = 0.0
+                lpips_new = 0.0
             
-            # 对于区域指标，使用全图指标的近似值
-            for suffix in ['_no_ego', '_with_ego', '_occupied', '_masked', '_human', '_vehicle']:
-                scores[f'psnr{suffix}'] = scores['psnr'] * 0.8
-                scores[f'ssim{suffix}'] = scores['ssim'] * 0.8
-                if suffix not in ['_no_ego', '_with_ego']:
-                    scores[f'lpips{suffix}'] = scores['lpips'] * 0.8
+            # 先归一化指标值，再计算改进（与 compute_overall_score 保持一致）
+            # 这样可以统一不同指标的数值尺度
+            psnr_old_norm = normalize_psnr(psnr_old)
+            psnr_new_norm = normalize_psnr(psnr_new)
+            scores['psnr'] = psnr_new_norm - psnr_old_norm
             
-            # 使用权重计算综合分数
-            if metrics_weights is None:
-                metrics_weights = {
-                    'psnr': 0.15, 'ssim': 0.15, 'lpips': 0.10,
-                    'psnr_no_ego': 0.08, 'ssim_no_ego': 0.08, 'lpips_no_ego': 0.05,
-                    'psnr_with_ego': 0.05, 'ssim_with_ego': 0.05, 'lpips_with_ego': 0.03,
-                    'occupied_psnr': 0.06, 'occupied_ssim': 0.06,
-                    'masked_psnr': 0.04, 'masked_ssim': 0.04,
-                    'human_psnr': 0.02, 'human_ssim': 0.02,
-                    'vehicle_psnr': 0.02, 'vehicle_ssim': 0.02,
-                }
+            ssim_old_norm = normalize_ssim(ssim_old)
+            ssim_new_norm = normalize_ssim(ssim_new)
+            scores['ssim'] = ssim_new_norm - ssim_old_norm
             
-            # 归一化并加权
-            total_score = 0.0
-            total_weight = 0.0
-            for metric_name, weight in metrics_weights.items():
-                if metric_name in scores:
-                    normalized_score = np.tanh(scores[metric_name])
-                    total_score += normalized_score * weight
-                    total_weight += weight
+            # LPIPS 归一化后也是越大越好
+            lpips_old_norm = normalize_lpips(lpips_old)
+            lpips_new_norm = normalize_lpips(lpips_new)
+            scores['lpips'] = lpips_new_norm - lpips_old_norm
             
-            improvement_score = total_score / total_weight if total_weight > 0 else 0.0
+            # 直接使用全图指标的改进值计算综合分数
+            # 
+            # 注意：由于区域指标改进值是全图改进值的线性变换（乘以某个系数），
+            # 加权聚合后仍然是全图改进值的线性变换，因此可以直接使用全图改进值。
+            # 
+            # 数学证明：
+            # 设全图改进值为 I_full，区域改进值为 I_region = I_full * c (c为系数)
+            # 加权聚合：I_agg = (I_full * w_full + I_full * c * w_region) / (w_full + w_region)
+            #         = I_full * (w_full + c * w_region) / (w_full + w_region)
+            #         = I_full * k (k为常数)
+            # 因此，聚合结果仍然是全图改进值的线性变换，可以直接使用全图改进值。
+            
+            # 直接使用全图改进值，按一级指标权重融合（与 compute_overall_score 保持一致）
+            # PSNR: 0.4, SSIM: 0.3, LPIPS: 0.3
+            improvement_score = (
+                0.4 * np.clip(scores['psnr'], -1.0, 1.0) +
+                0.3 * np.clip(scores['ssim'], -1.0, 1.0) +
+                0.3 * np.clip(scores['lpips'], -1.0, 1.0)
+            )
             frames_by_cam[cam_id].append((frame_id, improvement_score))
         
         processed_frames = len(frame_info)
@@ -735,13 +849,13 @@ def find_best_improved_frames_per_camera(
     gt_grouped1 = load_gt_grouped(gt_dir1, common_cam_ids)
     gt_grouped2 = load_gt_grouped(gt_dir2, common_cam_ids)
 
-    metrics_weights = build_metrics_weights(metrics1, metrics2)
-
     logger.info("Preloading LPIPS model...")
     get_lpips_model()
 
+    # 使用与 compute_overall_score 相同的权重结构
+    # 不再使用动态权重，确保计算一致性
     frames_by_cam = compute_improvement_scores(
-        common_keys, grouped1, grouped2, gt_grouped1, gt_grouped2, reverse, metrics_weights
+        common_keys, grouped1, grouped2, gt_grouped1, gt_grouped2, reverse
     )
 
     best_frames = select_best_frames(frames_by_cam, grouped1, grouped2, gt_grouped1, gt_grouped2)
@@ -959,6 +1073,17 @@ def main(args):
                 f"{metric_data['improvement_pct']:+.2f}%",
                 "✓" if metric_data['improved'] else "✗"
             ])
+        # 追加总体分数行
+        overall_diff = score2 - score1
+        overall_pct = (overall_diff / score1 * 100) if score1 != 0 else 0.0
+        table_data.append([
+            "overall_score",
+            f"{score1:.6f}",
+            f"{score2:.6f}",
+            f"{overall_diff:+.6f}",
+            f"{overall_pct:+.2f}%",
+            "✓" if score2 > score1 else "✗"
+        ])
         
         table = wandb.Table(
             columns=["Metric", dir1_name, dir2_name, "Difference", "Improvement %", "Improved"],
@@ -1057,6 +1182,17 @@ def main(args):
                                 f"{metric_data['improvement_pct']:+.2f}%",
                                 "✓" if metric_data['improved'] else "✗"
                             ])
+                        # 添加总体分数行
+                        score_diff = score2 - score1
+                        score_improvement_pct = (score_diff / score1 * 100) if score1 != 0 else 0.0
+                        writer.writerow([
+                            "overall_score",
+                            f"{score1:.6f}",
+                            f"{score2:.6f}",
+                            f"{score_diff:+.6f}",
+                            f"{score_improvement_pct:+.2f}%",
+                            "✓" if score2 > score1 else "✗"
+                        ])
                     logger.info(f"已保存 comparison_table 到本地: {comparison_csv}")
                 
                 if best_frames_per_cam:
@@ -1101,6 +1237,18 @@ def main(args):
                             f"{metric_data['improvement_pct']:+.2f}%",
                             "✓" if metric_data['improved'] else "✗"
                         ])
+                    
+                    # 添加总体分数行
+                    score_diff = score2 - score1
+                    score_improvement_pct = (score_diff / score1 * 100) if score1 != 0 else 0.0
+                    ws.append([
+                        "overall_score",
+                        f"{score1:.6f}",
+                        f"{score2:.6f}",
+                        f"{score_diff:+.6f}",
+                        f"{score_improvement_pct:+.2f}%",
+                        "✓" if score2 > score1 else "✗"
+                    ])
                     
                     # 调整列宽
                     for col in range(1, len(headers) + 1):
