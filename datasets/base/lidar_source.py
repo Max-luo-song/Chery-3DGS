@@ -58,6 +58,7 @@ class SceneLidarSource(abc.ABC):
 
     def load_data(self):
         self.load_calibrations()
+        ### TODO(gls): road lidar segment?
         self.load_lidar()
         logger.info("[Lidar] All Lidar Data loaded.")
 

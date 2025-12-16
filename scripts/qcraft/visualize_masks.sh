@@ -1,6 +1,6 @@
 # 参数设置
 ################################################################################
-SCENE_IDX="20251105_152839_QCOYSD504206_1240_1255"
+SCENE_IDX="20251025_163358_QCOYSD504206_1595_1610"
 
 DATA_DIR="data/qcraft/processed/training/$SCENE_IDX"
 OUTPUT_DIR="output/qcraft_$SCENE_IDX"

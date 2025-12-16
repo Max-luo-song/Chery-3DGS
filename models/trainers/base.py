@@ -25,6 +25,7 @@ class GSModelType(IntEnum):
     RigidNodes = 1
     SMPLNodes = 2
     DeformableNodes = 3
+    RoadNodes = 4
 
 def lr_scheduler_fn(
     cfg: OmegaConf,
@@ -248,6 +249,17 @@ class BasicTrainer(nn.Module):
                 use_inverse_depth=depth_loss_cfg.inverse_depth,
             )
         self.depth_loss_fn = depth_loss_fn
+
+        if "RoadNodes" in self.models:
+            road_loss_fn = None
+            road_loss_cfg = self.losses_dict.get("road", None)
+            if road_loss_cfg is not None:
+                from models.losses import RoadLoss
+                road_loss_fn = RoadLoss(
+                    args = None  # TODO(gls): args
+                )
+            self.road_loss_fn = road_loss_fn
+
     
     def optimizer_zero_grad(self) -> None:
         self.optimizer.zero_grad()
@@ -454,6 +466,8 @@ class BasicTrainer(nn.Module):
         
         # render rgb and opacity
         rgb, depth, opacity, self.info = render_fn(return_info=True)
+
+        ### TODO(gls): 能不能把rgb区分开，包括背景rgb和路面rgb，实际上前景和背景在渲染的时候是一体的
         results = {
             "rgb_gaussians": rgb,
             "depth": depth, 
@@ -563,7 +577,10 @@ class BasicTrainer(nn.Module):
             valid_loss_mask = (1.0 - image_infos["egocar_masks"]).float()
         else:
             valid_loss_mask = torch.ones_like(image_infos["sky_masks"])
-            
+
+        if "road_masks" in image_infos:
+            valid_road_loss_mask = (1.0 - image_infos["road_masks"]).float()
+
         gt_rgb = image_infos["pixels"] * valid_loss_mask[..., None]
         predicted_rgb = outputs["rgb"] * valid_loss_mask[..., None]
         
@@ -571,6 +588,7 @@ class BasicTrainer(nn.Module):
         pred_occupied_mask = outputs["opacity"].squeeze() * valid_loss_mask
         
         # rgb loss
+        ### TODO(gls): 应该把路面独立出来，单独算rgb_loss
         Ll1 = torch.abs(gt_rgb - predicted_rgb).mean()
         simloss = 1 - self.ssim(gt_rgb.permute(2, 0, 1)[None, ...], predicted_rgb.permute(2, 0, 1)[None, ...])
         loss_dict.update({
@@ -598,6 +616,15 @@ class BasicTrainer(nn.Module):
                     decay_weight = 1
                 depth_loss = depth_loss * self.losses_dict.depth.w * decay_weight
                 loss_dict.update({"depth_loss": depth_loss})
+
+        # TODO(gls): add road loss
+        # road loss
+        if self.road_loss_fn is not None:
+            gt_road_rgb = image_infos["gt_road_rgb"]   # TODO(gls): we need gt_road
+            pred_road_rgb = outputs['road_rgb'] # TODO(gls): we need road 这就是前面独立出来的
+            road_loss = self.road_loss_fn(pred_road_rgb, gt_road_rgb)
+            road_loss = road_loss * self.losses_dict.road.w * decay_weight # TODO(gls): we need to make sure weight
+            loss_dict.update({"road_loss": road_loss})
 
         # ----- reg loss -----
         opacity_entropy_reg = self.losses_dict.get("opacity_entropy", None)

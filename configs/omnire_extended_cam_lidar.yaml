@@ -29,6 +29,8 @@ trainer:
       inverse_depth: False # whether to use inverse depth, NOTE that when set to True, must normalize=True
       normalize: False # whether to normalize depth loss
       loss_type: l1 # choose from ["l1", "l2"]
+    road:  # TODO(gls): add something
+      w: 0.01
     affine:
       w: 0.00001 # weight of affine regularization
   res_schedule:
@@ -241,6 +243,11 @@ model:
     optim:
       all:
         lr: 0.01
+  Road:
+    type: models.nodes.RoadNodes
+    ### TODO(gls): something
+    init:
+      from_lidar: True
   Affine:
     type: models.modules.AffineTransform
     params:
@@ -267,9 +274,9 @@ render:
   #   traj_types:
   #     - front_center_interp # type of trajectory for novel view synthesis
   #   fps: 10 # frames per second for novel view rendering
-  vis_lidar: False # whether to visualize lidar points on ground truth images
-  vis_sky: False # whether to include "rgb_sky" and "rgb_sky_blend" in rendered keys
-  vis_error: False # whether to include "rgb_error_map" in rendered keys
+  vis_lidar: True # whether to visualize lidar points on ground truth images
+  vis_sky: True # whether to include "rgb_sky" and "rgb_sky_blend" in rendered keys
+  vis_error: True # whether to include "rgb_error_map" in rendered keys
 
 # ------------- logging ------------ #
 logging:

@@ -217,6 +217,8 @@ class VanillaGaussians(nn.Module):
             # split & duplicate
             print(f"Class {self.class_prefix} current points: {self.num_points} @ step {self.step}")
             if do_densification:
+                ### TODO(gls): 对于路面高斯不采用致密化策略
+                #   something
                 assert self.xys_grad_norm is not None and self.vis_counts is not None and self.max_2Dsize is not None
                 
                 avg_grad_norm = self.xys_grad_norm / self.vis_counts

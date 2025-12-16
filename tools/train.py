@@ -90,17 +90,17 @@ def setup(args):
         OmegaConf.save(config=cfg, f=f)
         
     # also save a backup copy
-    saved_cfg_path_bk = os.path.join(log_dir, "configs_bk", f"config_{current_time}.yaml")
-    with open(saved_cfg_path_bk, "w") as f:
-        OmegaConf.save(config=cfg, f=f)
-    logger.info(f"Full config saved to {saved_cfg_path}, and {saved_cfg_path_bk}")
+    # saved_cfg_path_bk = os.path.join(log_dir, "configs_bk", f"config_{current_time}.yaml")
+    # with open(saved_cfg_path_bk, "w") as f:
+    #     OmegaConf.save(config=cfg, f=f)
+    # logger.info(f"Full config saved to {saved_cfg_path}, and {saved_cfg_path_bk}")
     
-    # Backup codes
-    backup_project(
-        os.path.join(log_dir, 'backup'), "./", 
-        ["configs", "datasets", "models", "utils", "tools"], 
-        [".py", ".h", ".cpp", ".cuh", ".cu", ".sh", ".yaml"]
-    )
+    # # Backup codes
+    # backup_project(
+    #     os.path.join(log_dir, 'backup'), "./", 
+    #     ["configs", "datasets", "models", "utils", "tools"], 
+    #     [".py", ".h", ".cpp", ".cuh", ".cu", ".sh", ".yaml"]
+    # )
     return cfg
 
 def main(args):
@@ -134,6 +134,8 @@ def main(args):
         )
     else:
         trainer.init_gaussians_from_dataset(dataset=dataset)
+        import time
+        time.sleep(1000)
         logger.info(
             f"Training from scratch, initializing gaussians from dataset, starting at step {trainer.step}"
         )
@@ -150,14 +152,16 @@ def main(args):
         "Dynamic_rgbs",
         "RigidNodes_rgbs",
         "DeformableNodes_rgbs",
-        "SMPLNodes_rgbs",
+        # "SMPLNodes_rgbs",
         "depths",
-        # "Background_depths",
-        # "Dynamic_depths",
-        # "RigidNodes_depths",
-        # "DeformableNodes_depths",
+        "Background_depths",
+        "Dynamic_depths",
+        "RigidNodes_depths",
+        "DeformableNodes_depths",
         # "SMPLNodes_depths",
-        # "mask"
+        "mask",
+        "gt_roads", ### TODO(gls): add something
+        "roads" ### TODO(gls): add something
     ]
     if cfg.render.vis_lidar:
         render_keys.insert(0, "lidar_on_images")

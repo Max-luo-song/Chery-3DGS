@@ -174,3 +174,11 @@ class DepthLoss(nn.Module):
             raise NotImplementedError(f"Unknown reduction method: {self.reduction}")
 
         return depth_error
+
+class RoadLoss(nn.Module):
+    def __init__():
+        pass
+    def _compute_road_loss():
+        pass
+    def __call__():
+        pass

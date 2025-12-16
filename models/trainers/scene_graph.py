@@ -23,9 +23,11 @@ class MultiTrainer(BasicTrainer):
         self.normalized_timestamps = torch.linspace(0, 1, num_timestamps, device=self.device)
         
     def _init_models(self):
-        # gaussian model classes
+        # gaussian model classes model config is configs/omnire_extended_cam_lidar.yaml Model
         if "Background" in self.model_config:
             self.gaussian_classes["Background"] = GSModelType.Background
+        if "RoadNodes" in self.model_config:
+            self.gaussian_classes['RoadNodes'] = GSModelType.RoadNodes
         if "RigidNodes" in self.model_config:
             self.gaussian_classes["RigidNodes"] = GSModelType.RigidNodes
         if "SMPLNodes" in self.model_config:
@@ -88,7 +90,7 @@ class MultiTrainer(BasicTrainer):
         dataset: DrivingDataset,
     ) -> None:
         # get instance points
-        rigidnode_pts_dict, deformnode_pts_dict, smplnode_pts_dict = {}, {}, {}
+        rigidnode_pts_dict, deformnode_pts_dict, smplnode_pts_dict, roadnode_pts_dict= {}, {}, {}, {}
         if "RigidNodes" in self.model_config:
             rigidnode_pts_dict = dataset.get_init_objects(
                 cur_node_type='RigidNodes',
@@ -106,8 +108,15 @@ class MultiTrainer(BasicTrainer):
             smplnode_pts_dict = dataset.get_init_smpl_objects(
                 **self.model_config["SMPLNodes"]["init"]
             )
-        allnode_pts_dict = {**rigidnode_pts_dict, **deformnode_pts_dict, **smplnode_pts_dict}
         
+        if "RoadNodes" in self.model_config:
+            roadnode_pts_dict = dataset.get_init_objects(
+                cur_node_type="RoadNodes",
+                **self.model_config["RoadNodes"]["init"]
+            )
+
+        allnode_pts_dict = {**rigidnode_pts_dict, **deformnode_pts_dict, **smplnode_pts_dict}
+        roadnode_pts_dict = {**roadnode_pts_dict}
         # NOTE: Some gaussian classes may be empty (because no points for initialization)
         #       We will delete these classes from the model_config and models
         empty_classes = [] 
@@ -156,10 +165,21 @@ class MultiTrainer(BasicTrainer):
                     valid_instances_dict=allnode_pts_dict
                 )
                 
+                processed_init_pts, processed_init_road_pts = dataset.filter_pts_in_road(
+                    seed_pts=processed_init_pts["pts"],
+                    seed_colors=processed_init_pts["colors"],
+                )
+                
                 model.create_from_pcd(
                     init_means=processed_init_pts["pts"], init_colors=processed_init_pts["colors"]
                 )
-                
+            
+            ### TODO(gls): logic add
+            if class_name == "RoadNodes":
+                model.create_from_pcd(
+                    init_means=processed_init_road_pts["pts"], init_colors=processed_init_road_pts["colors"]
+                )
+ 
             if class_name == 'RigidNodes':
                 empty = self.safe_init_models(
                     model=model,
@@ -240,6 +260,10 @@ class MultiTrainer(BasicTrainer):
             image_ids=image_infos["img_idx"].flatten()[0],
         )
 
+        ### TODO(gls): fix some road gaussian xyz
+        freeze_mask = None  # by road mask 注意冻结的路面是true
+        gs._means.requires_grad_(~freeze_mask) 
+
         # render gaussians
         outputs, render_fn = self.render_gaussians(
             gs=gs,
@@ -255,6 +279,9 @@ class MultiTrainer(BasicTrainer):
         outputs["rgb_sky"] = sky_model(image_infos)
         outputs["rgb_sky_blend"] = outputs["rgb_sky"] * (1.0 - outputs["opacity"])
         
+        ### TODO(gls): 对output['rgb']增加一个road mask，然后把路面独立出来
+        outputs['road_rgb'] = None
+
         # affine transformation
         outputs["rgb"] = self.affine_transformation(
             outputs["rgb_gaussians"] + outputs["rgb_sky"] * (1.0 - outputs["opacity"]), image_infos

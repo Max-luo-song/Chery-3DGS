@@ -117,6 +117,8 @@ class CameraData(object):
         load_dynamic_mask: bool = False,
         # whether to load the sky masks
         load_sky_mask: bool = False,
+        # whether to load the road masks
+        load_road_mask: bool = False,
         # the size to load the images
         downscale_when_loading: float = 1.0,
         # whether to undistort the images
@@ -164,7 +166,8 @@ class CameraData(object):
                 self.load_dynamic_masks()
             if load_sky_mask:
                 self.load_sky_masks()
-
+            if load_road_mask:
+                self.load_road_masks()
             self.lidar_depth_maps = None  # will be loaded by: self.load_depth()
             self.image_error_maps = (
                 None  # will be built by: self.build_image_error_buffer()
@@ -224,6 +227,7 @@ class CameraData(object):
         img_filepaths = []
         dynamic_mask_filepaths, sky_mask_filepaths = [], []
         human_mask_filepaths, vehicle_mask_filepaths = [], []
+        road_mask_filepaths = []
 
         fine_mask_path = os.path.join(self.data_path, "fine_dynamic_masks")
         if os.path.exists(fine_mask_path):
@@ -267,6 +271,9 @@ class CameraData(object):
                 sky_mask_filepaths.append(
                     os.path.join(self.data_path, "sky_masks", f"{t:06d}_{self.cam_id}.png")
                 )
+                road_mask_filepaths.append(
+                    os.path.join(self.data_path, "road_masks", f"{t:06d}_{self.cam_id}.png")
+                )
             else:
                 img_filepaths.append(
                     os.path.join(self.data_path, "images", f"{t:03d}_{self.cam_id}.jpg")
@@ -309,6 +316,7 @@ class CameraData(object):
         self.human_mask_filepaths = np.array(human_mask_filepaths)
         self.vehicle_mask_filepaths = np.array(vehicle_mask_filepaths)
         self.sky_mask_filepaths = np.array(sky_mask_filepaths)
+        self.road_mask_filepaths = np.array(road_mask_filepaths)
 
     def load_images(self):
         images = []
@@ -454,6 +462,30 @@ class CameraData(object):
             sky_masks.append(np.array(sky_mask) > 0)
         self.sky_masks = torch.from_numpy(np.stack(sky_masks, axis=0)).float()
 
+    def load_road_masks(self):
+        road_masks = []
+        for ix, fname in tqdm(
+            enumerate(self.road_mask_filepaths),
+            desc="Loading road masks",
+            dynamic_ncols=True,
+            total=len(self.road_mask_filepaths),
+        ):
+            road_mask = Image.open(fname).convert("L")
+            # resize them to the load_size
+            road_mask = road_mask.resize(
+                (self.load_size[1], self.load_size[0]), Image.NEAREST
+            )
+            if self.undistort:
+                if ix == 0:
+                    print("undistorting road mask")
+                road_mask = cv2.undistort(
+                    np.array(road_mask),
+                    self.intrinsics[ix].numpy(),
+                    self.distortions[ix].numpy(),
+                )
+            road_masks.append(np.array(road_mask) > 0)
+        self.road_masks = torch.from_numpy(np.stack(road_masks, axis=0)).float()
+
     def load_depth(
         self,
         lidar_depth_maps: Tensor,
@@ -565,7 +597,7 @@ class CameraData(object):
         Returns:
             a dict containing the rays for rendering the given frame index.
         """
-        rgb, sky_mask = None, None
+        rgb, sky_mask, road_mask = None, None, None
         dynamic_mask, human_mask, vehicle_mask = None, None, None
         pixel_coords, normalized_time = None, None
 
@@ -619,6 +651,18 @@ class CameraData(object):
                 sky_mask = (
                     torch.nn.functional.interpolate(
                         sky_mask.unsqueeze(0).unsqueeze(0),
+                        scale_factor=self.downscale_factor,
+                        mode="nearest",
+                    )
+                    .squeeze(0)
+                    .squeeze(0)
+                )
+        if self.road_masks is not None:
+            road_mask = self.road_masks[frame_idx]
+            if self.downscale_factor != 1.0:
+                road_mask = (
+                    torch.nn.functional.interpolate(
+                        road_mask.unsqueeze(0).unsqueeze(0),
                         scale_factor=self.downscale_factor,
                         mode="nearest",
                     )
@@ -724,6 +768,7 @@ class CameraData(object):
             "frame_idx": frame_id,
             "pixels": rgb,
             "sky_masks": sky_mask,
+            "road_masks": road_mask,
             "dynamic_masks": dynamic_mask,
             "human_masks": human_mask,
             "vehicle_masks": vehicle_mask,
@@ -776,7 +821,9 @@ class ScenePixelSource(abc.ABC):
     instances_model_types: Tensor = None
     # (num_frame, num_instances)
     per_frame_instance_mask: Tensor = None
-
+    # (num_frame, )
+    per_frame_road_mask: Tensor = None
+    
     def __init__(
         self,
         dataset_name,
