@@ -4,6 +4,23 @@ import json
 import numpy as np
 
 
+QCRAFT_CAMERA_DICT = {
+    "CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_H110": 0,
+    "CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_H60": 1,
+    "CAM_PBQ_FRONT_TELE_RESET_OPTICAL_H30": 2,
+    "CAM_PBQ_FRONT_TELE_RESET_OPTICAL_H15": 3,
+    "CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_LEFT_H60": 4,
+    "CAM_PBQ_FRONT_LEFT_RESET_OPTICAL_H99": 5,
+    "CAM_PBQ_REAR_LEFT_RESET_OPTICAL_H99": 6,
+    "CAM_PBQ_REAR_LEFT_RESET_OPTICAL_H30": 7,
+    "CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_RIGHT_H60": 8,
+    "CAM_PBQ_FRONT_RIGHT_RESET_OPTICAL_H99": 9,
+    "CAM_PBQ_REAR_RIGHT_RESET_OPTICAL_H99": 10,
+    "CAM_PBQ_REAR_RIGHT_RESET_OPTICAL_H30": 11,
+    "CAM_PBQ_REAR_RESET_OPTICAL_H50": 12,
+}
+
+
 def find_min_frame_txt(dir_path):
     """
     在目录下查找编号最小的 txt 文件。
@@ -52,6 +69,7 @@ def extract_lidar_extrinsics(json_path):
 
     return result
 
+
 def euler_to_rotation_matrix(yaw, pitch, roll):
     # Z 轴旋转（yaw）
     R_z = np.array(
@@ -81,4 +99,3 @@ def pose_to_transform_matrix(x, y, z, yaw, pitch, roll):
     T_matrix[:3, :3] = R
     T_matrix[:3, 3] = T
     return T_matrix
-
