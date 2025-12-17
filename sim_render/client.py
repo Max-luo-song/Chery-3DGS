@@ -16,11 +16,13 @@ def data():
     my_msg.yaw = 1.9627021134112075
     my_msg.roll = 0
     my_msg.pitch = 0
+    my_msg.camera_id = "CAM_PBQ_FRONT_RIGHT_RESET_OPTICAL_H99"
     print(my_msg.x, my_msg.y)
     return my_msg
 
 class TCPClient:
-    def __init__(self, host='0.0.0.0', port=9999):
+    #def __init__(self, host='0.0.0.0', port=9999):
+    def __init__(self, host='0.0.0.0', port=22):
         self.host = host
         self.port = port
         self.socket = None
@@ -56,8 +58,9 @@ class TCPClient:
 
             #time.sleep(100)
             # 接收响应
-            # response = self.socket.recv(1024)
-            # print(f"服务器响应: {response.decode('utf-8')}")
+            #response = self.socket.recv(1024)
+            #print(f"服务器响应: {response.decode('utf-8')}")
+            print(f"服务器响应 OK")
             return True
 
         except Exception as e:

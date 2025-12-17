@@ -11,8 +11,11 @@ import inference
 import os
 import glob
 
+import time
+
 class TCPServer:
-    def __init__(self, host='0.0.0.0', port=9999):
+    #def __init__(self, host='0.0.0.0', port=9999):
+    def __init__(self, host='0.0.0.0', port=22):
         self.host = host
         self.port = port
         self.socket = None
@@ -63,63 +66,60 @@ class TCPServer:
                 pose_msg.ParseFromString(data)
 
                 print(f"[Socket] Received pose from {addr}: "
-                      f"x={pose_msg.x}, y={pose_msg.y}, yaw={pose_msg.yaw}")
-
+                      f"x={pose_msg.x}, y={pose_msg.y}, z={pose_msg.z}, yaw={pose_msg.yaw}, roll={pose_msg.roll}, pitch={pose_msg.pitch}, timestamp={pose_msg.timestamp}, camera_id={pose_msg.camera_id}")
+                
+                start_time = time.time()
                 # render cam images
                 output = inference.cam_renderer_manager.render_from_pose(pose_msg)
-                # render lidar points
-                lidar_output = inference.lidar_renderer_manager.render_from_pose(pose_msg)
-                lidar_render_result_path = os.path.join(lidar_output, "renders")
-                lidar_txt_files = glob.glob(os.path.join(lidar_render_result_path, "*.txt"))
+                end_time_model = time.time()
+                print(f"render_from_pose模型执行时间: {end_time_model - start_time:.4f} 秒")
+
+                # render lidar points, lidar还没调通，暂时注释
+                # lidar_output = inference.lidar_renderer_manager.render_from_pose(pose_msg)
+                # lidar_render_result_path = os.path.join(lidar_output, "renders")
+                # lidar_txt_files = glob.glob(os.path.join(lidar_render_result_path, "*.txt"))
 
                 try:
-                    # 构建要发送的 items 列表，每项是 (type_code, name, bytes)
-                    # type_code: 1=image, 2=lidar
-                    items = []
+                    if output is not None:
+                        # 构建要发送的 items 列表，每项是 (type_code, name, bytes)
+                        # type_code: 1=image, 2=lidar
+                        for cam_id, image_path in output.items():
+                            print("image_path ==>", image_path)
+                            with open(image_path, 'rb') as f:
+                                image_data = f.read()
+                            
+                            response_proto = Pose_pb2.MainCarInfo()
+                            response_proto.timestamp = pose_msg.timestamp
+                            response_proto.camera_id = pose_msg.camera_id
+                            response_proto.image_data = image_data
+                            
+                            data_bytes = response_proto.SerializeToString()
+                            
+                            print("data_bytes length is ==>", len(data_bytes))
+                            # 发送数据长度
+                            #conn.sendall(struct.pack('>I', len(image_data)))
+                            #conn.sendall(image_data)
 
-                    for cam_id, image_path in output.items():
-                        with open(image_path, 'rb') as f:
-                            image_data = f.read()
-                        name = str(cam_id)
-                        items.append((1, name, image_data))
+                            conn.sendall(struct.pack('>I', len(data_bytes)) + data_bytes)  
+                            #conn.sendall(data_bytes)
 
-                    for txt_file in lidar_txt_files:
-                        with open(txt_file, 'rb') as f:
-                            txt_data = f.read()
-                        name = os.path.basename(txt_file)
-                        items.append((2, name, txt_data))
-
-                    # 先发送 item 数量
-                    conn.sendall(struct.pack('>I', len(items)))
-
-                    # 发送每一项：1字节type + 4字节name_len + name + 4字节data_len + data
-                    for typ, name, data_bytes in items:
-                        try:
-                            conn.sendall(bytes([typ]))
-                            name_b = name.encode('utf-8')
-                            conn.sendall(struct.pack('>I', len(name_b)))
-                            conn.sendall(name_b)
-                            conn.sendall(struct.pack('>I', len(data_bytes)))
-                            conn.sendall(data_bytes)
-                        except (ConnectionResetError, BrokenPipeError) as e:
-                            print(f"发送时连接被重置或断开: {e}")
-                            break
-
-                        if typ == 1:
-                            print(f"图片发送成功: {name}")
-                        else:
-                            print(f"Lidar数据发送成功: {name}")
-
+                    else:
+                        response_proto = Pose_pb2.MainCarInfo()
+                        response_proto.timestamp = pose_msg.timestamp
+                        response_proto.camera_id = pose_msg.camera_id
+                        response_proto.image_data = b""
+                            
+                        data_bytes = response_proto.SerializeToString()
+                            
+                        print("data_bytes length is ==>", len(data_bytes))
+                            # 发送数据长度
+                        conn.sendall(struct.pack('>I', len(data_bytes)) + data_bytes)  
+                    
+                    end_time_trans_data = time.time()
+                    print(f"传输图片的时间: {end_time_trans_data - end_time_model:.4f} 秒")
                 except Exception as e:
                     print(f"发送失败: {e}")
                     traceback.print_exc()
-                # 发送结束状态（长度前缀 + 内容）
-                try:
-                    status = b"OK"
-                    conn.sendall(struct.pack('>I', len(status)))
-                    conn.sendall(status)
-                except Exception:
-                    pass
 
         except Exception as e:
             print(f"[Socket] Error with {addr}: {e}")
@@ -151,25 +151,25 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser("Render novel trajectory for a single scene")
+    parser = argparse.ArgumentParser(description="...", add_help=True)
     # eval
     parser.add_argument(
         "--resume_from",
-        default="/nas_thoru/oldbak/zyj/data/20251118_lidar+cam0_1_2_3_4_5_7_8_10/checkpoint_final.pth",
+        default="/home/data/qcraft_20251025_163358_QCOYSD504206_1595_1610/checkpoint_final.pth",
         help="path to checkpoint to resume from",
         type=str,
         required=False,
     )
     parser.add_argument(
         "--source_path",
-        default="/nas_thoru/oldbak/lcy/scene_reconstruction/data/qcraft/processed/training/20251025_163358_QCOYSD504206_1595_1610",
+        default="/home/data/20251025_163358_QCOYSD504QCRAFT_CAMERA_DICT206_1595_1610",
         help="data source path",
         type=str,
         required=False,
     )
     parser.add_argument(
         "--lidar_checkpoint_path",
-        default="/nas_thoru/users/yangtao/qcraft/processed/test/20251025_163358_QCOYSD504206_1595_1610",
+        default="/home/data/lidar/20251025_163358_QCOYSD504206_1595_1610",
         help="path to LiDAR checkpoint to resume from",
         type=str,
         required=False,

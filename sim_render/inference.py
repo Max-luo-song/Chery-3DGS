@@ -2,7 +2,7 @@
 import os
 import numpy as np
 from cam.cam_inference_online import Renderer
-from infer_utils import extract_lidar_extrinsics, load_transform_matrix, find_min_frame_txt, pose_to_transform_matrix
+from infer_utils import extract_lidar_extrinsics, load_transform_matrix, find_min_frame_txt, pose_to_transform_matrix, QCRAFT_CAMERA_DICT
 from lidar.lidar_inference_online import Renderer as LidarRenderer
 
 
@@ -12,7 +12,7 @@ class CamRendererManager:
 
         self.renderer = Renderer(
             resume_from=resume_from,
-            cam_ids=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            cam_ids=[0, 1, 2, 3, 5, 6, 7, 9, 10, 11, 12],
             downscales=[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
             output_dir="./realtime_output"
         )
@@ -51,10 +51,21 @@ class CamRendererManager:
         cam2world = rel @ self.cam2lidar
 
         print("[Render] Pose:\n", pose)
+        
+        # if pose_msg.camera_id not in QCRAFT_CAMERA_DICT.item().keys():
+        #     return None
 
-        output = self.renderer.render_single_frame(cam2world)
-        print("[Render] Output:", output)
-        return output
+        cam_id = QCRAFT_CAMERA_DICT[pose_msg.camera_id]
+
+
+        print("cam_id: ", cam_id)
+
+        output_paths = self.renderer.render_single_frame(cam2world, cam_id)
+
+        # output = self.renderer.render_single_frame(cam2world)
+        print("[Render] Output:", output_paths)
+        
+        return output_paths
 
 class LidarRendererManager:
     def __init__(self, lidar_checkpoint_path, source_path, output_dir):
@@ -87,7 +98,7 @@ class LidarRendererManager:
             "z": pose_msg.z,
             "yaw": pose_msg.yaw,
             "roll": pose_msg.roll,
-            "pitch": pose_msg.pitch,
+            "pitch": pose_msg.pitch
         }
 
         pose = pose_to_transform_matrix(**raw)
