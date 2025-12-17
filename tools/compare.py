@@ -467,13 +467,13 @@ def compute_overall_score(metrics: Dict[str, float]) -> float:
     # -------------------------
     # PSNR: 0.4, SSIM: 0.3, LPIPS: 0.3
     # 这些权重可以根据实际需求调整
-    final_score = (
+    overall_score = (
         0.4 * psnr_score +
         0.3 * ssim_score +
         0.3 * lpips_score
     )
 
-    return float(np.clip(final_score, 0.0, 1.0))
+    return float(np.clip(overall_score, 0.0, 1.0))
 
 def find_best_improved_frames_per_camera(
     log_dir1: str,
@@ -727,7 +727,7 @@ def find_best_improved_frames_per_camera(
                         logger.info(f"  Processed {batch_end}/{len(batch_data)} frames for LPIPS")
         
         # 计算每帧的综合分数
-        logger.info("Computing final scores for all frames...")
+        logger.info("Computing overall scores for all frames...")
         for info in frame_info:
             cam_id = info['cam_id']
             frame_id = info['frame_id']
