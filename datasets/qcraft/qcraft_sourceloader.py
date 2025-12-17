@@ -41,6 +41,7 @@ SMPLNODE_CLASSES = ["Pedestrian"]
 # 11 : "rear_right_30",      右后 FOV30
 # 12 : "rear_50",            后视 FOV50
 
+
 class QcraftCameraData(CameraData):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -224,8 +225,10 @@ class QcraftPixelSource(ScenePixelSource):
         self.start_timestep = start_timestep
         self.end_timestep = end_timestep
         self.novel_view_mode = novel_view_mode  # syc
-        self.mix_novel_views = pixel_data_config.mix_novel_views
-        self.mix_novel_cams = pixel_data_config.mix_novel_cams
+        self.mix_novel_views, self.mix_novel_cams = False, []
+        if pixel_data_config.get("mix_novel_views", False):
+            self.mix_novel_views = pixel_data_config.mix_novel_views
+            self.mix_novel_cams = pixel_data_config.mix_novel_cams
         self.load_data()
 
     def load_cameras(self):
@@ -294,7 +297,6 @@ class QcraftPixelSource(ScenePixelSource):
                     + len(self.camera_list)
                     + idx
                 )
-                print("novel: ", this_cam_id, unique_img_idx)
                 camera.set_unique_ids(
                     unique_cam_idx=len(self.camera_list) + idx,
                     unique_img_idx=unique_img_idx,

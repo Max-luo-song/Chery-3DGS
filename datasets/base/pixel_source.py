@@ -145,7 +145,7 @@ class CameraData(object):
 
         if self.dataset_name == "qcraft":
             if mix_novel_views and mix_novel_alias is not None:
-                cam_id = 0  # hard replaced here
+                self.from_cam_id = cam_id = 0  # hard replaced here
                 self.cam_name = f"Mixed Novel Camera - {mix_novel_alias}"
             else:
                 self.cam_name = ALL_CAM_SPECS[cam_id].name
@@ -359,11 +359,11 @@ class CameraData(object):
         Since in some datasets, the ego car body is visible in the images,
         we need to load the ego car mask to mask out the ego car body.
         """
-
-        egocar_mask = os.path.join(self.ego_mask_dir, f"{self.cam_id}.png")
         if self.mix_novel_views and self.mix_novel_alias:
             # novel view without ego mask
             egocar_mask = ""
+        else:
+            egocar_mask = os.path.join(self.ego_mask_dir, f"{self.cam_id}.png")
 
         if os.path.exists(egocar_mask):
             egocar_mask = Image.open(egocar_mask).convert("L")
@@ -530,7 +530,6 @@ class CameraData(object):
                     f"{t:06d}_{self.from_cam_id}_{self.mix_novel_alias}.00_scale0.3.png",
                 )
             )
-
         self.img_filepaths = np.array(img_filepaths)
         self.dynamic_mask_filepaths = np.array(dynamic_mask_filepaths)
         self.human_mask_filepaths = np.array(human_mask_filepaths)
@@ -911,7 +910,11 @@ class ScenePixelSource(abc.ABC):
         for cam_id in self.camera_list:
             self.camera_data[cam_id].set_downscale_factor(self._downscale_factor)
 
-        if self.data_cfg.mix_novel_views and self.num_cams > len(self.camera_list):
+        if (
+            self.data_cfg.get("mix_novel_views", False)
+            and self.data_cfg.mix_novel_views
+            and self.num_cams > len(self.camera_list)
+        ):
             for cam_id in range(len(self.data_cfg.mix_novel_cams)):
                 self.camera_data[
                     self.camera_list[-1] + cam_id + 1

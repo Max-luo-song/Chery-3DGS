@@ -16,7 +16,7 @@
 #    12   rear_50               (1024, 512)
 
 data:
-  data_root: /nas_thoru/oldbak/baitongyao/qcraft/processed/training # data root for the dataset
+  data_root: /nas_thoru/scenario_output/baitongyao/qcraft/processed/training # data root for the dataset
   dataset: qcraft 
   scene_idx: 0 # which scene to use
   start_timestep: 0 # which timestep to start from
@@ -25,7 +25,7 @@ data:
   pixel_source: # image source and object annotations
     type: datasets.qcraft.qcraft_sourceloader.QcraftPixelSource
     cameras: [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 12] # which cameras to use
-    downscale_when_loading: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2] # the size of the images to load
+    downscale_when_loading: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] # the size of the images to load
     mix_novel_views: True
     mix_novel_cams: ["shift_2", "shift_3"]
     # downscale_when_loading: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] # the size of the images to load
