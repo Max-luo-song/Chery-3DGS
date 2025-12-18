@@ -553,7 +553,7 @@ class DrivingDataset(SceneDataset):
             export_points_to_ply(
                 seed_pts,
                 seed_colors,
-                save_path=os.path.join(DEBUG_OUTPUT_DIR, "original_seed_pts.ply"),
+                save_path=os.path.join(DEBUG_OUTPUT_DIR, "before_filter_box_pts.ply"),
             )
         valid_instance_keys = valid_instances_dict.keys()
 
@@ -615,13 +615,6 @@ class DrivingDataset(SceneDataset):
 
         return {"pts": seed_pts, "colors": seed_colors, "time": seed_time}
 
-    def transform_points_road(self, points, transformation_matrix):
-        """Transforms points using a 4x4 transformation matrix."""
-        ones = torch.ones(points.shape[0], 1, dtype=points.dtype, device=points.device)
-        points_homo = torch.cat([points, ones], dim=1)
-        transformed_points_homo = torch.matmul(points_homo, transformation_matrix.T)
-        return transformed_points_homo[:, :3]
-
     ### TODO(gls): exclude all the road pointcloud 
     def filter_pts_in_road(
         self,
@@ -633,15 +626,15 @@ class DrivingDataset(SceneDataset):
         Identifies points that lie on the road surface by projecting all points onto all camera views across all frames.
         (Optimized for memory: processes frames sequentially)
         """
-        DEBUG_PCD = True
-        if DEBUG_PCD:
-            DEBUG_OUTPUT_DIR = "debug"
-            os.makedirs(DEBUG_OUTPUT_DIR, exist_ok=True)
-            export_points_to_ply(
-                seed_pts,
-                seed_colors,
-                save_path=os.path.join(DEBUG_OUTPUT_DIR, "all_seed_pts.ply"),
-            )
+        # DEBUG_PCD = True
+        # if DEBUG_PCD:
+        #     DEBUG_OUTPUT_DIR = "debug"
+        #     os.makedirs(DEBUG_OUTPUT_DIR, exist_ok=True)
+        #     export_points_to_ply(
+        #         seed_pts,
+        #         seed_colors,
+        #         save_path=os.path.join(DEBUG_OUTPUT_DIR, "before_filter_road_pts.ply"),
+        #     )
         # 使用一个布尔张量来记录一个点是否在任意一帧的任意相机中被识别为路面点
         on_road_mask = torch.zeros_like(seed_pts[:, 0]).bool()
         
@@ -659,33 +652,39 @@ class DrivingDataset(SceneDataset):
             for frame_idx in range(num_frames):
                 # 1. 获取当前帧的变换矩阵和 road mask
                 cam_to_world = cam_to_worlds[frame_idx] # (4, 4)
-                world_to_cam = torch.linalg.pinv(cam_to_world, rcond=1e-6) # (4, 4)
+                world_to_cam = torch.linalg.inv(cam_to_world) # (4, 4)
                 current_road_mask = road_masks[frame_idx] # (H, W)
 
                 # 2. 将所有点云变换到当前帧的相机坐标系
                 #    pts_cam: (N, 3)
-                pts_cam = self.transform_points_road(seed_pts, world_to_cam)
+                pts_cam = transform_points(seed_pts, world_to_cam)
 
                 # 3. 筛选出在相机前方的点
                 in_front_of_cam_mask = pts_cam[:, 2] > 0  # (N,)
 
-                # 4. 投影到图像平面
-                pts_img_homo = torch.matmul(pts_cam, intrinsics[frame_idx].T)
-                eps = 1e-7
-                pts_img = pts_img_homo[:, :2] / (pts_img_homo[:, 2:3] + eps) # (N, 2)
+                fx, fy = intrinsics[frame_idx][0, 0], intrinsics[frame_idx][1, 1]
+                cx, cy = intrinsics[frame_idx][0, 2], intrinsics[frame_idx][1, 2]
+    
+                u = (fx * pts_cam[:, 0] / pts_cam[:, 2] + cx).long()
+                v = (fy * pts_cam[:, 1] / pts_cam[:, 2] + cy).long()
 
-                # 5. 筛选出在图像范围内的点
-                valid_x = (pts_img[:, 0] >= 0) & (pts_img[:, 0] < img_w)
-                valid_y = (pts_img[:, 1] >= 0) & (pts_img[:, 1] < img_h)
-                in_image_bounds_mask = valid_x & valid_y # (N,)
-
+                # 4. 筛选在图像范围内的点（坐标在0w 0h之间）
+                h, w = img_h, img_w
+                in_image_bounds_mask = (u >= 0) & (u < w) & (v >= 0) & (v < h)
+                
                 # 6. 合并当前帧的所有有效条件
-                final_valid_mask = in_front_of_cam_mask & in_image_bounds_mask # (N,)
+                final_valid_mask = in_front_of_cam_mask & in_image_bounds_mask # (N,) # 所有点里在相机前方且投影在相机平面上的
 
+                ### 修改内容
+                
+                ### 对pts_cam_valid
                 # 7. 对满足条件的点，检查它们是否在路面 mask 上
                 if final_valid_mask.any():
                     # 获取满足条件的点的像素坐标
-                    valid_pixels = pts_img[final_valid_mask].long() # (M, 2)
+                    valid_u = u[final_valid_mask]
+                    valid_v = v[final_valid_mask]
+                    valid_pixels = torch.stack([valid_u, valid_v], dim=1)
+                    # valid_pixels = pts_cam[final_valid_mask].long() # (M, 2)
                     
                     # 找到这些有效点在原始点云中的索引
                     point_indices = torch.where(final_valid_mask)[0]
@@ -706,22 +705,7 @@ class DrivingDataset(SceneDataset):
         filtered_time = seed_time[final_mask] if seed_time is not None else None
         filtered_road_pts = seed_pts[final_road_mask]
         filtered_road_colors = seed_colors[final_road_mask] if seed_colors is not None else None
-        filtered_road_time = seed_time[final_road_mask] if seed_time is not None else None
-        if DEBUG_PCD:
-            export_points_to_ply(
-                filtered_pts,
-                filtered_colors,
-                save_path=os.path.join(DEBUG_OUTPUT_DIR, "wo_road_seed_pts.ply"),
-            )
-            export_points_to_ply(
-                filtered_road_pts,
-                filtered_road_colors,
-                save_path=os.path.join(DEBUG_OUTPUT_DIR, "road_seed_pts.ply")
-            )        
-        # 为了方便测试，这里把 sleep 改短一点
-        import time
-        print("Processing done, sleeping for 1000 seconds.")
-        time.sleep(1000)
+        filtered_road_time = seed_time[final_road_mask] if seed_time is not None else None   
         
         return {"pts": filtered_pts, "colors": filtered_colors, "time": filtered_time}, {"pts": filtered_road_pts, "colors": filtered_road_colors, "time": filtered_road_time}
 

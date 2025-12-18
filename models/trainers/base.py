@@ -255,9 +255,7 @@ class BasicTrainer(nn.Module):
             road_loss_cfg = self.losses_dict.get("road", None)
             if road_loss_cfg is not None:
                 from models.losses import RoadLoss
-                road_loss_fn = RoadLoss(
-                    args = None  # TODO(gls): args
-                )
+                road_loss_fn = RoadLoss()  # TODO(gls): args
             self.road_loss_fn = road_loss_fn
 
     
@@ -417,6 +415,18 @@ class BasicTrainer(nn.Module):
         if self.render_dynamic_mask:
             self.dynamic_pts_mask = (self.pts_labels != 0).float()
 
+        # --- 新增部分：创建并返回 freeze_mask ---
+        # 1. 找到 "RoadNodes" 对应的类别 ID
+        road_class_id = self.gaussian_classes.get("RoadNodes")
+        
+        if road_class_id is not None:
+            # 2. 创建布尔掩码，路面高斯的位置为 True
+            freeze_mask = (self.pts_labels == road_class_id)
+        else:
+            # 如果没有 "RoadNodes" 这个类别，则不冻结任何东西
+            freeze_mask = torch.zeros_like(self.pts_labels, dtype=torch.bool)
+        # --- 新增部分结束 ---
+            
         gaussians = dataclass_gs(
             _means=gs_dict["_means"],
             _scales=gs_dict["_scales"],
@@ -427,7 +437,7 @@ class BasicTrainer(nn.Module):
             extras=None        # to save some extra information (TODO) more flexible way
         )
         
-        return gaussians
+        return gaussians, freeze_mask
     
     def render_gaussians(
         self,
@@ -526,6 +536,13 @@ class BasicTrainer(nn.Module):
         )
 
         # render gaussians
+        '''
+        outputs = {
+            "rgb_gaussians": rgb,
+            "depth": depth, 
+            "opacity": opacity
+        }
+        '''
         outputs, _ = self.render_gaussians(
             gs=gs,
             cam=processed_cam,
@@ -617,13 +634,14 @@ class BasicTrainer(nn.Module):
                 depth_loss = depth_loss * self.losses_dict.depth.w * decay_weight
                 loss_dict.update({"depth_loss": depth_loss})
 
-        # TODO(gls): add road loss
-        # road loss
+        # NOTE(gls): add road loss, 目前是rgb的loss 除去ego_mask区域
         if self.road_loss_fn is not None:
-            gt_road_rgb = image_infos["gt_road_rgb"]   # TODO(gls): we need gt_road
-            pred_road_rgb = outputs['road_rgb'] # TODO(gls): we need road 这就是前面独立出来的
-            road_loss = self.road_loss_fn(pred_road_rgb, gt_road_rgb)
-            road_loss = road_loss * self.losses_dict.road.w * decay_weight # TODO(gls): we need to make sure weight
+            road_mask = image_infos["road_masks"]
+            gt_rgb = image_infos["pixels"] * valid_loss_mask[..., None]
+            gt_road_rgb = gt_rgb * road_mask[..., None]
+            pred_road_rgb = outputs['road_rgb'] * valid_loss_mask[..., None]
+            Ll1 = self.road_loss_fn(pred_road_rgb, gt_road_rgb)
+            road_loss = Ll1 * self.losses_dict.road.w # TODO(gls): we need to make sure weight
             loss_dict.update({"road_loss": road_loss})
 
         # ----- reg loss -----

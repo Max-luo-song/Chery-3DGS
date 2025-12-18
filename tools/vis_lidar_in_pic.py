@@ -4,7 +4,7 @@ import numpy as np
 import cv2
 import open3d as o3d
 import sys 
-sys.path.append("/nas_thoru/users/guoluosong/scene_reconstruction")
+sys.path.append("/data4/gls/project/scene_reconstruction")
 from datasets.qcraft.qcraft_helpers import load_calibration, load_available_camera_ids
 
 

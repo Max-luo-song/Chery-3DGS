@@ -15,4 +15,7 @@ output
 __pycache__/
 docker/copy/opt/requirements.txt
 .vscode
-.debug
+debug
+data
+debug1
+output

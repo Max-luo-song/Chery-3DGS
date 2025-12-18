@@ -697,6 +697,7 @@ def render(
     # rgbs
     rgbs, gt_rgbs, rgb_sky_blend, rgb_sky = [], [], [], []
     Background_rgbs, RigidNodes_rgbs, DeformableNodes_rgbs, SMPLNodes_rgbs, Dynamic_rgbs = [], [], [], [], []
+    road_rgbs, gt_road_rgbs = [], []
     error_maps = []
 
     # depths
@@ -718,6 +719,7 @@ def render(
         human_psnrs, human_ssims = [], []
         vehicle_psnrs, vehicle_ssims = [], []
         occupied_psnrs, occupied_ssims = [], []
+        road_psnrs, road_ssims = [], []
 
     with torch.no_grad():
         indices = vis_indices if vis_indices is not None else range(len(dataset))
@@ -748,6 +750,20 @@ def render(
             rgbs.append(get_numpy(rgb))
             if "pixels" in image_infos:
                 gt_rgbs.append(get_numpy(image_infos["pixels"]))
+
+            road_rgb = results["road_rgb"]
+            road_rgbs.append(get_numpy(road_rgb))
+
+            if "road_masks" in image_infos:
+                if "egocar_masks" in image_infos:
+                    # in the case of egocar, we need to mask out the egocar region
+                    valid_loss_mask = (1.0 - image_infos["egocar_masks"]).float()
+                else:
+                    valid_loss_mask = torch.ones_like(image_infos["sky_masks"])
+                road_mask = image_infos["road_masks"]
+                gt_rgb = image_infos["pixels"] * valid_loss_mask[..., None]
+                gt_road_rgb = gt_rgb * road_mask[..., None]
+                gt_road_rgbs.append(get_numpy(gt_road_rgb))
 
             green_background = torch.tensor([0.0, 177, 64]) / 255.0
             green_background = green_background.to(rgb.device)
@@ -821,6 +837,7 @@ def render(
                 lidar_on_image = image_infos["pixels"].cpu().numpy() * (1 - mask) + depth_img * mask
                 lidar_on_images.append(lidar_on_image)
 
+            ### TODO(gls): 指标把road的psnr, ssim, lpips算进去
             if compute_metrics:
                 psnr = compute_psnr(rgb, image_infos["pixels"])
                 ssim_score = ssim(
@@ -998,6 +1015,10 @@ def render(
         results_dict["opacities"] = opacities
     if len(gt_rgbs) > 0:
         results_dict["gt_rgbs"] = gt_rgbs
+    if len(gt_road_rgbs) > 0:
+        results_dict["gt_road_rgbs"] = gt_road_rgbs
+    if len(road_rgbs) > 0:
+        results_dict["road_rgbs"] = road_rgbs
     if len(error_maps) > 0:
         results_dict["rgb_error_maps"] = error_maps
     if len(rgb_sky_blend) > 0:

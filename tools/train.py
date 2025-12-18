@@ -134,8 +134,6 @@ def main(args):
         )
     else:
         trainer.init_gaussians_from_dataset(dataset=dataset)
-        import time
-        time.sleep(1000)
         logger.info(
             f"Training from scratch, initializing gaussians from dataset, starting at step {trainer.step}"
         )
@@ -152,16 +150,15 @@ def main(args):
         "Dynamic_rgbs",
         "RigidNodes_rgbs",
         "DeformableNodes_rgbs",
-        # "SMPLNodes_rgbs",
+        "SMPLNodes_rgbs",
         "depths",
-        "Background_depths",
-        "Dynamic_depths",
-        "RigidNodes_depths",
-        "DeformableNodes_depths",
+        # "Background_depths",
+        # "Dynamic_depths",
+        # "RigidNodes_depths",
+        # "DeformableNodes_depths",
         # "SMPLNodes_depths",
-        "mask",
-        "gt_roads", ### TODO(gls): add something
-        "roads" ### TODO(gls): add something
+        "gt_road_rgbs", ### TODO(gls): add something
+        "road_rgbs" ### TODO(gls): add something
     ]
     if cfg.render.vis_lidar:
         render_keys.insert(0, "lidar_on_images")
@@ -242,7 +239,6 @@ def main(args):
             del render_results
             torch.cuda.empty_cache()
                 
-        
         #----------------------------------------------------------------------------
         #----------------------------  training step  -------------------------------
         # prepare for training

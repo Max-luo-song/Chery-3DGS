@@ -176,9 +176,15 @@ class DepthLoss(nn.Module):
         return depth_error
 
 class RoadLoss(nn.Module):
-    def __init__():
+    def __init__(self):
+        super(RoadLoss, self).__init__() 
         pass
-    def _compute_road_loss():
+    def _compute_road_loss(self):
         pass
-    def __call__():
-        pass
+    def __call__(
+        self,
+        pred_road_rgb: Tensor,
+        gt_road_rgb: Tensor,
+    ):
+        Ll1 = torch.abs(gt_road_rgb - pred_road_rgb).mean()
+        return Ll1

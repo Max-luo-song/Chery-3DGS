@@ -166,6 +166,16 @@ model:
       ins_translation:
         lr: 0.0005
         lr_final: 0.0001
+  RoadNodes:
+    type: models.nodes.RoadNodes
+    ### TODO(gls): something
+    init:
+      from_lidar: True
+    reg:
+      sharp_shape_reg:
+        w: 1.
+        step_interval: 10
+        max_gauss_ratio: 10. 
   # SMPLNodes: 
   #   type: models.nodes.SMPLNodes
   #   init:
@@ -243,11 +253,6 @@ model:
     optim:
       all:
         lr: 0.01
-  Road:
-    type: models.nodes.RoadNodes
-    ### TODO(gls): something
-    init:
-      from_lidar: True
   Affine:
     type: models.modules.AffineTransform
     params:
