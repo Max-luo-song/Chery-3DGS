@@ -580,9 +580,9 @@ class DrivingDataset(SceneDataset):
                 inside_mask = inside_mask | mask
 
         # filter out the points that are inside the bounding boxes
-        # seed_pts = seed_pts[~inside_mask] # 不做mask
-        # if seed_colors is not None:
-        #     seed_colors = seed_colors[~inside_mask]
+        seed_pts = seed_pts[~inside_mask]
+        if seed_colors is not None:
+            seed_colors = seed_colors[~inside_mask]
         if seed_time is not None:
             seed_time = seed_time[~inside_mask]
 
