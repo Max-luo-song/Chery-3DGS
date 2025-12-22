@@ -10,9 +10,12 @@ from utils.geometry import (
     get_corners,
     project_camera_points_to_image
 )
-from .qcraft_sourceloader import SMPLNODE_CLASSES
+from datasets.qcraft.qcraft_sourceloader import SMPLNODE_CLASSES
 
 logger = logging.getLogger()
+
+CAMERA_LIST = [0, 1, 2, 3, 5, 6, 7, 9, 10, 11, 12]
+
 
 # TODO(ziyu): Refactor human utils scripts for all datasets into a single, unified module
 # Implement dataset-specific loaders for intrinsic and extrinsic parameters
@@ -114,7 +117,7 @@ def project_human_boxes(
             
             # load image
             ori_image = cv2.imread(
-                os.path.join(images_dir, f"{frame_id:06d}_{cam_id}.jpg")
+                os.path.join(images_dir, f"{frame_id:06d}_{cam_id}.png")
             )
             image = ori_image.copy()
             H, W = image.shape[:2]

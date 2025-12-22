@@ -384,33 +384,33 @@ def match_and_postprocess(
     # 
     # This step is crucial for handling temporary occlusions or detection misses,
     # maintaining a consistent track even when the pose predictor fails momentarily.
-    for cam_id in camera_list:
+    for id, cam_id in enumerate(camera_list):
         for gt_tid in valid_gt_tids:
-            need_fill = collector[gt_tid]["2DBox_appear_mask"][cam_id] & (~collector[gt_tid]["matched_mask"][cam_id])
-            if need_fill.any() and not collector[gt_tid]["matched_mask"][cam_id].sum() == 0:
-                appear_mask = collector[gt_tid]["2DBox_appear_mask"][cam_id]
-                mask = collector[gt_tid]["valid_mask"][cam_id][appear_mask]
-                collector[gt_tid]["matched_mask"][cam_id] = collector[gt_tid]["matched_mask"][cam_id] | appear_mask
+            need_fill = collector[gt_tid]["2DBox_appear_mask"][id] & (~collector[gt_tid]["matched_mask"][id])
+            if need_fill.any() and not collector[gt_tid]["matched_mask"][id].sum() == 0:
+                appear_mask = collector[gt_tid]["2DBox_appear_mask"][id]
+                mask = collector[gt_tid]["valid_mask"][id][appear_mask]
+                collector[gt_tid]["matched_mask"][id] = collector[gt_tid]["matched_mask"][id] | appear_mask
                 
-                feature_masked = collector[gt_tid]["smpl"]["global_orient"][cam_id, appear_mask]
+                feature_masked = collector[gt_tid]["smpl"]["global_orient"][id, appear_mask]
                 feature_full = interpolate_features(mask, feature_masked, is_rot_mat=True)
-                collector[gt_tid]["smpl"]["global_orient"][cam_id, appear_mask] = feature_full
+                collector[gt_tid]["smpl"]["global_orient"][id, appear_mask] = feature_full
                 
-                feature_masked = collector[gt_tid]["smpl"]["body_pose"][cam_id, appear_mask]
+                feature_masked = collector[gt_tid]["smpl"]["body_pose"][id, appear_mask]
                 feature_full = interpolate_features(mask, feature_masked, is_rot_mat=True)
-                collector[gt_tid]["smpl"]["body_pose"][cam_id, appear_mask] = feature_full
+                collector[gt_tid]["smpl"]["body_pose"][id, appear_mask] = feature_full
                 
-                feature_masked = collector[gt_tid]["smpl"]["betas"][cam_id, appear_mask]
+                feature_masked = collector[gt_tid]["smpl"]["betas"][id, appear_mask]
                 feature_full = interpolate_features(mask, feature_masked)
-                collector[gt_tid]["smpl"]["betas"][cam_id, appear_mask] = feature_full
+                collector[gt_tid]["smpl"]["betas"][id, appear_mask] = feature_full
                 
-                feature_masked = collector[gt_tid]["camera"][cam_id, appear_mask]
+                feature_masked = collector[gt_tid]["camera"][id, appear_mask]
                 feature_full = interpolate_features(mask, feature_masked)
-                collector[gt_tid]["camera"][cam_id, appear_mask] = feature_full
+                collector[gt_tid]["camera"][id, appear_mask] = feature_full
 
     # Save completed data in a format compatible with 4D-Humans visualization
     if save_temp:
-        for cam_id in camera_list:
+        for id, cam_id in enumerate(camera_list):
             pkl_dict = {}
             for fi in range(num_f):
                 fi_info = {
@@ -424,15 +424,15 @@ def match_and_postprocess(
                     "camera": [],
                 }
                 for gt_tid in valid_gt_tids:
-                    if collector[gt_tid]["2DBox_appear_mask"][cam_id, fi]: # the difference is we use 2DBox_appear_mask here
+                    if collector[gt_tid]["2DBox_appear_mask"][id, fi]: # the difference is we use 2DBox_appear_mask here
                         fi_info["tid"].append(gt_tid)
                         fi_info["tracked_time"].append(0)
                         fi_info["smpl"].append({
-                            "global_orient": collector[gt_tid]["smpl"]["global_orient"][cam_id, fi].numpy(),
-                            "body_pose": collector[gt_tid]["smpl"]["body_pose"][cam_id, fi].numpy(),
-                            "betas": collector[gt_tid]["smpl"]["betas"][cam_id, fi].numpy(),
+                            "global_orient": collector[gt_tid]["smpl"]["global_orient"][id, fi].numpy(),
+                            "body_pose": collector[gt_tid]["smpl"]["body_pose"][id, fi].numpy(),
+                            "betas": collector[gt_tid]["smpl"]["betas"][id, fi].numpy(),
                         })
-                        fi_info["camera"].append(collector[gt_tid]["camera"][cam_id, fi].numpy())
+                        fi_info["camera"].append(collector[gt_tid]["camera"][id, fi].numpy())
                 pkl_dict[fi] = fi_info
             joblib.dump(
                 pkl_dict, os.path.join(temp_dir, f"{cam_id}_completed.pkl")
@@ -561,7 +561,7 @@ def match_and_postprocess(
     # Save merged data in a format compatible with 4D-Humans visualization
     if save_temp:
         pkl_dict = {}
-        for cam_id in camera_list:
+        for id, cam_id in enumerate(camera_list):
             for fi in range(num_f):
                 fi_info = {
                     "time": fi,
@@ -574,7 +574,7 @@ def match_and_postprocess(
                     "camera": [],
                 }
                 for gt_tid in valid_gt_tids:
-                    if merged_collector[gt_tid]["2DBox_appear_mask"][cam_id, fi]:
+                    if merged_collector[gt_tid]["2DBox_appear_mask"][id, fi]:
                         fi_info["tid"].append(gt_tid)
                         fi_info["tracked_time"].append(0)
                         fi_info["smpl"].append({
@@ -582,7 +582,7 @@ def match_and_postprocess(
                             "body_pose": merged_collector[gt_tid]["smpl"]["body_pose"][fi].numpy(),
                             "betas": merged_collector[gt_tid]["smpl"]["betas"][fi].numpy(),
                         })
-                        fi_info["camera"].append(merged_collector[gt_tid]["camera"][cam_id, fi].numpy())
+                        fi_info["camera"].append(merged_collector[gt_tid]["camera"][id, fi].numpy())
                 pkl_dict[fi] = fi_info
             joblib.dump(
                 pkl_dict, os.path.join(temp_dir, f"{cam_id}_merged.pkl")
