@@ -2,7 +2,7 @@ from typing import Dict, List, Tuple
 from omegaconf import OmegaConf
 import random
 import logging
-
+import os
 import torch
 import numpy as np
 from torch.nn import Parameter
@@ -11,8 +11,11 @@ from models.human_body import phalp_colors, SMPLTemplate, get_on_mesh_init_geo_v
 from models.gaussians.basics import *
 from models.nodes.rigid import RigidNodes
 from models.gaussians.vanilla import VanillaGaussians
-from third_party.Humans4D.hmr2.configs import CACHE_DIR_4DHUMANS
 from pytorch3d.ops import knn_points
+
+
+CACHE_DIR = os.path.join(os.environ.get("HOME"), ".cache")
+CACHE_DIR_4DHUMANS = os.path.join(CACHE_DIR, "4DHumans")
 
 RGB_tuples = torch.tensor(np.vstack([phalp_colors] * 10), dtype=torch.float32) / 255.0
 logger = logging.getLogger()
