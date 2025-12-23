@@ -746,6 +746,8 @@ def render(
             # ------------- rgb ------------- #
             rgb = results["rgb"]
             rgbs.append(get_numpy(rgb))
+            ### NOTE(gls): 增加ego_mask原始
+            rgb = rgb * (1 - image_infos["egocar_masks"][..., None]) + image_infos["pixels"] * image_infos["egocar_masks"][..., None]
             if "pixels" in image_infos:
                 gt_rgbs.append(get_numpy(image_infos["pixels"]))
 
@@ -755,26 +757,36 @@ def render(
                 Background_rgb = results["Background_rgb"] * results[
                     "Background_opacity"
                 ] + green_background * (1 - results["Background_opacity"])
+                ### NOTE(gls): 增加ego_mask原始
+                Background_rgb = Background_rgb * (1 - image_infos["egocar_masks"][..., None]) + image_infos["pixels"] * image_infos["egocar_masks"][..., None]
                 Background_rgbs.append(get_numpy(Background_rgb))
             if "RigidNodes_rgb" in results:
                 RigidNodes_rgb = results["RigidNodes_rgb"] * results[
                     "RigidNodes_opacity"
                 ] + green_background * (1 - results["RigidNodes_opacity"])
+                ### NOTE(gls): 增加ego_mask原始
+                RigidNodes_rgb = RigidNodes_rgb * (1 - image_infos["egocar_masks"][..., None]) + image_infos["pixels"] * image_infos["egocar_masks"][..., None]
                 RigidNodes_rgbs.append(get_numpy(RigidNodes_rgb))
             if "DeformableNodes_rgb" in results:
                 DeformableNodes_rgb = results["DeformableNodes_rgb"] * results[
                     "DeformableNodes_opacity"
                 ] + green_background * (1 - results["DeformableNodes_opacity"])
                 DeformableNodes_rgbs.append(get_numpy(DeformableNodes_rgb))
+                ### NOTE(gls): 增加ego_mask原始
+                DeformableNodes_rgb = DeformableNodes_rgb * (1 - image_infos["egocar_masks"][..., None]) + image_infos["pixels"] * image_infos["egocar_masks"][..., None]
             if "SMPLNodes_rgb" in results:
                 SMPLNodes_rgb = results["SMPLNodes_rgb"] * results[
                     "SMPLNodes_opacity"
                 ] + green_background * (1 - results["SMPLNodes_opacity"])
+                ### NOTE(gls): 增加ego_mask原始
+                SMPLNodes_rgb = SMPLNodes_rgb * (1 - image_infos["egocar_masks"][..., None]) + image_infos["pixels"] * image_infos["egocar_masks"][..., None]
                 SMPLNodes_rgbs.append(get_numpy(SMPLNodes_rgb))
             if "Dynamic_rgb" in results:
                 Dynamic_rgb = results["Dynamic_rgb"] * results[
                     "Dynamic_opacity"
                 ] + green_background * (1 - results["Dynamic_opacity"])
+                ### NOTE(gls): 增加ego_mask原始
+                Dynamic_rgb = Dynamic_rgb * (1 - image_infos["egocar_masks"][..., None]) + image_infos["pixels"] * image_infos["egocar_masks"][..., None]
                 Dynamic_rgbs.append(get_numpy(Dynamic_rgb))
             if compute_error_map:
                 # cal mean squared error
@@ -790,6 +802,8 @@ def render(
                 rgb_sky.append(get_numpy(results["rgb_sky"]))
             # ------------- depth ------------- #
             depth = results["depth"]
+            ### NOTE(gls): 增加ego_mask区域，深度设置为极端颜色
+            depth = depth * (1 - image_infos["egocar_masks"][..., None]) + 200 * image_infos["egocar_masks"][..., None]
             depths.append(get_numpy(depth))
             # ------------- mask ------------- #
             if "opacity" in results:
@@ -1246,6 +1260,7 @@ def save_seperate_videos(
                 continue
         for i in range(num_timestamps):
             cam_names = render_results["cam_names"][i * num_cams : (i + 1) * num_cams]
+            cam_ids = render_results["cam_ids"][i * num_cams : (i + 1) * num_cams]
             # skip if the key is not in render_results
             if "mask" in key:
                 new_key = key.replace("mask", "opacities")
@@ -1283,7 +1298,7 @@ def save_seperate_videos(
                     os.makedirs(tmp_save_pth.replace(".mp4", ""), exist_ok=True)
                 for j, frame in enumerate(frames):
                     imageio.imwrite(
-                        tmp_save_pth.replace(".mp4", f"/{i:03d}_{j:03d}.png"),
+                        tmp_save_pth.replace(".mp4", f"/{i:06d}_{cam_ids[j]}.png"), # NOTE:恢复id，原来是索引
                         to8b(frame),
                     )
             # frames = to8b(np.concatenate(frames, axis=1))
