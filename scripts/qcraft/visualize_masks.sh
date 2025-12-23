@@ -9,4 +9,5 @@ OUTPUT_DIR="output/qcraft_$SCENE_IDX"
 export PYTHONPATH=$(pwd)
 python datasets/qcraft/qcraft_visualize_masks.py \
     --data_dir $DATA_DIR \
-    --output_dir $OUTPUT_DIR
+    --output_dir $OUTPUT_DIR \
+    --use_fine_dynamic_mask

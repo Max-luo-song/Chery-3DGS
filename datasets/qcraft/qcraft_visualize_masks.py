@@ -37,10 +37,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="将 masks 可视化并保存为视频。")
     parser.add_argument("--data_dir", type=str, help="Path to the input data directory.")
     parser.add_argument("--output_dir", type=str, help="Path to the output directory.")
+    parser.add_argument("--use_fine_dynamic_mask", action='store_true', help="Whether to use fine dynamic masks.")
     args = parser.parse_args()
 
     data_dir = args.data_dir
     output_dir = args.output_dir
+
+    if args.use_fine_dynamic_mask:
+        dynamic_mask_dir = "fine_dynamic_masks"
+    else:
+        dynamic_mask_dir = "dynamic_masks"
 
     if os.path.exists(os.path.join(data_dir, "lidar_pose")):
         total_frames = len(os.listdir(os.path.join(data_dir, "lidar_pose")))
@@ -77,10 +83,10 @@ if __name__ == "__main__":
             road_mask_path = os.path.join(data_dir, "road_masks", filename)
             road_mask = Image.open(road_mask_path).convert("L")
 
-            human_mask_path = os.path.join(data_dir, "dynamic_masks", "human", filename)
+            human_mask_path = os.path.join(data_dir, dynamic_mask_dir, "human", filename)
             human_mask = Image.open(human_mask_path).convert("L")
 
-            vehicle_mask_path = os.path.join(data_dir, "dynamic_masks", "vehicle", filename)
+            vehicle_mask_path = os.path.join(data_dir, dynamic_mask_dir, "vehicle", filename)
             vehicle_mask = Image.open(vehicle_mask_path).convert("L")
 
             vis_image = visualize_mask(vis_image, road_mask, ROAD_COLOR)

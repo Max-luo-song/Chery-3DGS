@@ -6,6 +6,7 @@ import numpy as np
 from glob import glob
 from tqdm import tqdm
 from argparse import ArgumentParser
+from scipy.ndimage import binary_dilation
 
 from mmseg.apis import init_model, inference_model, show_result_pyplot
 
@@ -23,16 +24,22 @@ dataset_classes_in_sematic = {
 if __name__ == "__main__":
     parser = ArgumentParser()
     # Custom configs
-    parser.add_argument('--data_root', type=str, default='data/waymo/processed/training')
+    parser.add_argument(
+        '--data_root',
+        type=str,
+        default='data/waymo/processed/training',
+    )
     parser.add_argument(
         "--scene_ids",
         default=None,
-        type=int,
         nargs="+",
         help="scene ids to be processed, a list of integers separated by space. Range: [0, 798] for training, [0, 202] for validation",
     )
     parser.add_argument(
-        "--split_file", type=str, default=None, help="Split file in data/waymo_splits"
+        "--split_file",
+        type=str,
+        default=None,
+        help="Split file in data/waymo_splits",
     )
     parser.add_argument(
         "--start_idx",
@@ -84,6 +91,11 @@ if __name__ == "__main__":
         scene_ids_list = np.arange(args.start_idx, args.start_idx + args.num_scenes)
     
     model = init_model(args.config, args.checkpoint, device=args.device)
+
+    # 膨胀操作
+    kernel_size = 7  # 内核大小
+    iterations = 2   # 膨胀迭代次数
+    struct = np.ones((kernel_size, kernel_size), dtype=bool)  # 方形结构元素
 
     for scene_i, scene_id in enumerate(tqdm(scene_ids_list, f'Extracting Masks ...')):
         scene_id = str(scene_id).zfill(3)
@@ -147,18 +159,26 @@ if __name__ == "__main__":
                 if not os.path.exists(rough_human_mask_path):
                     continue
                 
-                rough_human_mask = (imageio.imread(rough_human_mask_path) > 0)
-                huamn_mask = np.isin(mask, dataset_classes_in_sematic['human'])
-                valid_human_mask = np.logical_and(huamn_mask, rough_human_mask)
-                imageio.imwrite(os.path.join(human_mask_dir, f"{fbase}.png"), valid_human_mask.astype(np.uint8)*255)
-                
+                rough_human_mask = imageio.imread(rough_human_mask_path) > 0
+                human_mask = np.isin(mask, dataset_classes_in_sematic["human"])
+                human_mask = binary_dilation(human_mask, structure=struct, iterations=iterations)
+                valid_human_mask = np.logical_and(human_mask, rough_human_mask)
+                imageio.imwrite(
+                    os.path.join(human_mask_dir, f"{fbase}.png"),
+                    valid_human_mask.astype(np.uint8) * 255,
+                )
+
                 # save vehicle mask
                 rough_vehicle_mask_path = os.path.join(rough_vehicle_mask_dir, f"{fbase}.png")
-                rough_vehicle_mask = (imageio.imread(rough_vehicle_mask_path) > 0)
-                vehicle_mask = np.isin(mask, dataset_classes_in_sematic['Vehicle'])
+                rough_vehicle_mask = imageio.imread(rough_vehicle_mask_path) > 0
+                vehicle_mask = np.isin(mask, dataset_classes_in_sematic["Vehicle"])
+                vehicle_mask = binary_dilation(vehicle_mask, structure=struct, iterations=iterations)
                 valid_vehicle_mask = np.logical_and(vehicle_mask, rough_vehicle_mask)
-                imageio.imwrite(os.path.join(vehicle_mask_dir, f"{fbase}.png"), valid_vehicle_mask.astype(np.uint8)*255)
-                
+                imageio.imwrite(
+                    os.path.join(vehicle_mask_dir, f"{fbase}.png"),
+                    valid_vehicle_mask.astype(np.uint8) * 255,
+                )
+
                 # save dynamic mask
                 valid_all_mask = np.logical_or(valid_human_mask, valid_vehicle_mask)
                 imageio.imwrite(os.path.join(all_mask_dir, f"{fbase}.png"), valid_all_mask.astype(np.uint8)*255)

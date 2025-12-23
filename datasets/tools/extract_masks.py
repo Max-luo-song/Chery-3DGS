@@ -29,6 +29,14 @@ Usage:
     Direct run this script in the newly set conda env.
 """
 
+import os
+import imageio
+import numpy as np
+from glob import glob
+from tqdm import tqdm
+from argparse import ArgumentParser
+from scipy.ndimage import binary_dilation
+
 from mmseg.apis import inference_segmentor, init_segmentor, show_result_pyplot
 from mmseg.core.evaluation import get_palette
 
@@ -44,17 +52,12 @@ dataset_classes_in_sematic = {
 }
 
 if __name__ == "__main__":
-    import os
-    import imageio
-    import numpy as np
-    from glob import glob
-    from tqdm import tqdm
-    from argparse import ArgumentParser
-
     parser = ArgumentParser()
     # Custom configs
     parser.add_argument(
-        "--data_root", type=str, default="data/waymo/processed/training"
+        "--data_root",
+        type=str,
+        default="data/waymo/processed/training",
     )
     parser.add_argument(
         "--scene_ids",
@@ -63,7 +66,10 @@ if __name__ == "__main__":
         help="scene ids to be processed, a list of integers separated by space. Range: [0, 798] for training, [0, 202] for validation",
     )
     parser.add_argument(
-        "--split_file", type=str, default=None, help="Split file in data/waymo_splits"
+        "--split_file",
+        type=str,
+        default=None,
+        help="Split file in data/waymo_splits",
     )
     parser.add_argument(
         "--start_idx",
@@ -89,17 +95,11 @@ if __name__ == "__main__":
     parser.add_argument("--mask_dirname", type=str, default="fine_dynamic_masks")
 
     # Algorithm configs
-    parser.add_argument(
-        "--segformer_path", type=str, default="/home/guojianfei/ai_ws/SegFormer"
-    )
+    parser.add_argument("--segformer_path", type=str, default="/home/guojianfei/ai_ws/SegFormer")
     parser.add_argument("--config", help="Config file", type=str, default=None)
     parser.add_argument("--checkpoint", help="Checkpoint file", type=str, default=None)
     parser.add_argument("--device", default="cuda:0", help="Device used for inference")
-    parser.add_argument(
-        "--palette",
-        default="cityscapes",
-        help="Color palette used for segmentation map",
-    )
+    parser.add_argument("--palette", default="cityscapes", help="Color palette used for segmentation map")
 
     args = parser.parse_args()
     if args.config is None:
@@ -132,6 +132,11 @@ if __name__ == "__main__":
         scene_ids_list = np.arange(args.start_idx, args.start_idx + args.num_scenes)
 
     model = init_segmentor(args.config, args.checkpoint, device=args.device)
+
+    # 膨胀操作
+    kernel_size = 7  # 内核大小
+    iterations = 2   # 膨胀迭代次数
+    struct = np.ones((kernel_size, kernel_size), dtype=bool)  # 方形结构元素
 
     for scene_i, scene_id in enumerate(tqdm(scene_ids_list, f"Extracting Masks ...")):
         scene_id = str(scene_id).zfill(3)
@@ -188,7 +193,6 @@ if __name__ == "__main__":
 
             road_mask = np.isin(mask, [0])
             imageio.imwrite(os.path.join(road_mask_dir, f"{fbase}.png"), road_mask.astype(np.uint8)*255)
-            
 
             if args.process_dynamic_mask:
                 # save human masks
@@ -197,8 +201,9 @@ if __name__ == "__main__":
                     continue
 
                 rough_human_mask = imageio.imread(rough_human_mask_path) > 0
-                huamn_mask = np.isin(mask, dataset_classes_in_sematic["human"])
-                valid_human_mask = np.logical_and(huamn_mask, rough_human_mask)
+                human_mask = np.isin(mask, dataset_classes_in_sematic["human"])
+                human_mask = binary_dilation(human_mask, structure=struct, iterations=iterations)
+                valid_human_mask = np.logical_and(human_mask, rough_human_mask)
                 imageio.imwrite(
                     os.path.join(human_mask_dir, f"{fbase}.png"),
                     valid_human_mask.astype(np.uint8) * 255,
@@ -208,6 +213,7 @@ if __name__ == "__main__":
                 rough_vehicle_mask_path = os.path.join(rough_vehicle_mask_dir, f"{fbase}.png")
                 rough_vehicle_mask = imageio.imread(rough_vehicle_mask_path) > 0
                 vehicle_mask = np.isin(mask, dataset_classes_in_sematic["Vehicle"])
+                vehicle_mask = binary_dilation(vehicle_mask, structure=struct, iterations=iterations)
                 valid_vehicle_mask = np.logical_and(vehicle_mask, rough_vehicle_mask)
                 imageio.imwrite(
                     os.path.join(vehicle_mask_dir, f"{fbase}.png"),
