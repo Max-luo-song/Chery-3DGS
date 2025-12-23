@@ -106,6 +106,11 @@ class DepthLoss(nn.Module):
         self.depth_error_percentile = depth_error_percentile
         self.reduction = reduction
 
+        self.mask_out_dynamic_regions = False
+    
+    def set_dynamic_region_masking(self, mask_out: bool):
+        self.mask_out_dynamic_regions = mask_out
+
     def _compute_depth_loss(
         self,
         pred_depth: Tensor,

@@ -583,14 +583,18 @@ class BasicTrainer(nn.Module):
             sky_loss_opacity = self.sky_opacity_loss_fn(pred_occupied_mask, gt_occupied_mask) * self.losses_dict.mask.w
             loss_dict.update({"sky_loss_opacity": sky_loss_opacity})
         
-        # NOTE(gls): 针对thoru数据的前向雷达特点, 设定只有雷达投影图像非nan值时计算深度loss
         # depth loss 
         if self.depth_loss_fn is not None:
-            gt_depth = image_infos["lidar_depth_map"] # 前向才有lidar_depth_map
+            gt_depth = image_infos["lidar_depth_map"] 
             lidar_hit_mask = (gt_depth > 0).float() * valid_loss_mask
-            pred_depth = outputs["depth"] # 每个都有depth
-            depth_loss = self.depth_loss_fn(pred_depth, gt_depth, lidar_hit_mask)
-            if not torch.isnan(depth_loss).any():
+
+            if self.depth_loss_fn.mask_out_dynamic_regions:
+                lidar_hit_mask = lidar_hit_mask * (1.0 - image_infos["dynamic_masks"])
+
+            if lidar_hit_mask.sum() > 0:
+                pred_depth = outputs["depth"]
+                depth_loss = self.depth_loss_fn(pred_depth, gt_depth, lidar_hit_mask)
+                
                 lidar_w_decay = self.losses_dict.depth.get("lidar_w_decay", -1)
                 if lidar_w_decay > 0:
                     decay_weight = np.exp(-self.step / 8000 * lidar_w_decay)
@@ -598,7 +602,9 @@ class BasicTrainer(nn.Module):
                     decay_weight = 1
                 depth_loss = depth_loss * self.losses_dict.depth.w * decay_weight
                 loss_dict.update({"depth_loss": depth_loss})
-
+            else:
+                logger.debug("No valid lidar points for depth loss")
+            
         # ----- reg loss -----
         opacity_entropy_reg = self.losses_dict.get("opacity_entropy", None)
         if opacity_entropy_reg is not None:
