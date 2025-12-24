@@ -546,15 +546,6 @@ class DrivingDataset(SceneDataset):
         """
         This function is used to filter out the points that are inside the bounding boxes of the instances
         """
-        DEBUG_PCD = True
-        if DEBUG_PCD:
-            DEBUG_OUTPUT_DIR = "debug"
-            os.makedirs(DEBUG_OUTPUT_DIR, exist_ok=True)
-            export_points_to_ply(
-                seed_pts,
-                seed_colors,
-                save_path=os.path.join(DEBUG_OUTPUT_DIR, "before_filter_box_pts.ply"),
-            )
         valid_instance_keys = valid_instances_dict.keys()
 
         inside_mask = torch.zeros_like(seed_pts[:, 0]).bool()
@@ -615,26 +606,234 @@ class DrivingDataset(SceneDataset):
 
         return {"pts": seed_pts, "colors": seed_colors, "time": seed_time}
 
-    ### TODO(gls): exclude all the road pointcloud 
+    ### function：提取去掉box的背景点云（根据3d box）
+    def project_aggregated_lidar_ptsv1(self, delete_out_of_view_points=True):
+        """
+        Project the lidar points on the images and attribute the color of the nearest pixel to the lidar point.
+
+        Args:
+            delete_out_of_view_points: bool
+                If True, the lidar points that are not visible from the camera will be removed.
+        """
+        aggregated_lidar_points_world = []
+        aggregated_lidar_points_colors = []
+
+        for idx, cam in enumerate(self.pixel_source.camera_data.values()):
+            for frame_idx in tqdm(
+                range(len(cam)),
+                desc="Projecting lidar pts on images for camera {}".format(cam.cam_name),
+                dynamic_ncols=True,
+            ):
+                normed_time = self.pixel_source.normalized_time[frame_idx]
+
+                # get lidar depth on image plane
+                closest_lidar_idx = self.lidar_source.find_closest_timestep(normed_time)
+
+                lidar_infos = self.lidar_source.get_lidar_rays(closest_lidar_idx)
+                lidar_points_world = ( # 单帧雷达点
+                    lidar_infos["lidar_origins"]
+                    + lidar_infos["lidar_viewdirs"] * lidar_infos["lidar_ranges"]
+                )
+
+                # project lidar points to the image plane
+                if cam.undistort:
+                    new_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(
+                        cam.intrinsics[frame_idx].cpu().numpy(),
+                        cam.distortions[frame_idx].cpu().numpy(),
+                        (cam.WIDTH, cam.HEIGHT),
+                        alpha=1,
+                    )
+                    intrinsic_4x4 = torch.nn.functional.pad(
+                        torch.from_numpy(new_camera_matrix), (0, 1, 0, 1)
+                    ).to(self.device)
+                else:
+                    intrinsic_4x4 = torch.nn.functional.pad(
+                        cam.intrinsics[frame_idx], (0, 1, 0, 1)
+                    )
+                intrinsic_4x4[3, 3] = 1.0
+                lidar2img = intrinsic_4x4 @ cam.cam_to_worlds[frame_idx].inverse()
+                lidar_points_img = (lidar2img[:3, :3] @ lidar_points_world.T + lidar2img[:3, 3:4]).T  # (num_pts, 3)
+                depth = lidar_points_img[:, 2]
+                cam_points = lidar_points_img[:, :2] / (depth.unsqueeze(-1) + 1e-6)  # (num_pts, 2)
+                valid_mask = (
+                    (cam_points[:, 0] >= 0)
+                    & (cam_points[:, 0] < cam.WIDTH)
+                    & (cam_points[:, 1] >= 0)
+                    & (cam_points[:, 1] < cam.HEIGHT)
+                    & (depth > 0)
+                )  # (num_pts, )
+                depth = depth[valid_mask]
+                _cam_points = cam_points[valid_mask] # 有效图像点
+
+                # attribute the color of the nearest pixel to the lidar point
+                points_color = cam.images[frame_idx][
+                    _cam_points[:, 1].long(), _cam_points[:, 0].long()
+                ]
+
+                # syc: remove inbbox points
+                if idx == 0:
+                    per_frame_instance_mask = self.pixel_source.per_frame_instance_mask[frame_idx]
+                    visible_instances = torch.where(per_frame_instance_mask)[0]
+                    tmp_mask = torch.ones(lidar_points_world.shape[0], device=self.device, dtype=torch.bool)
+                    for ins_id in visible_instances:
+                        # get the pose of the instance at the given frame
+                        o2w = self.pixel_source.instances_pose[frame_idx, ins_id].to(lidar_points_world.device)
+                        o_size = self.pixel_source.instances_size[ins_id].to(lidar_points_world.device)
+                        # convert the lidar points to the instance's coordinate system
+                        # w2o = torch.inverse(o2w)
+                        w2o = torch.linalg.pinv(o2w, rcond=1e-6)
+                        o_pts = transform_points(lidar_points_world, w2o)
+                        # get the mask of the points that are inside the instance's bounding box
+                        mask = (
+                            (o_pts[:, 0] > -o_size[0] / 2)
+                            & (o_pts[:, 0] < o_size[0] / 2)
+                            & (o_pts[:, 1] > -o_size[1] / 2)
+                            & (o_pts[:, 1] < o_size[1] / 2)
+                            & (o_pts[:, 2] > -o_size[2] / 2)
+                            & (o_pts[:, 2] < o_size[2] / 2)
+                        )
+                        tmp_mask = tmp_mask & (~mask)
+                        # inside_mask = inside_mask | mask # 在里面的是1，不在里是0
+                    num_removed_points = (~tmp_mask).sum().item()
+                    logger.info(f"Removed {num_removed_points} points at frame {frame_idx}")
+
+                    tmp_mask = tmp_mask & valid_mask
+                    static_lidar_points_world = lidar_points_world[tmp_mask]
+                    aggregated_lidar_points_world.append(static_lidar_points_world)
+
+                    current_frame_colors = torch.zeros(lidar_points_world.shape[0], 3, device=self.device, dtype=cam.images[frame_idx].dtype)
+                    valid_indices = torch.where(valid_mask)[0]
+                    current_frame_colors[valid_indices] = points_color
+                    static_lidar_points_colors = current_frame_colors[tmp_mask]
+                    aggregated_lidar_points_colors.append(static_lidar_points_colors)
+
+        # syc: aggregate lidar points from all frames to get dense depth maps
+        aggregated_lidar_points_world = torch.cat(aggregated_lidar_points_world, dim=0)
+        aggregated_lidar_points_colors = torch.cat(aggregated_lidar_points_colors, dim=0)
+        return {"pts": aggregated_lidar_points_world, "colors": aggregated_lidar_points_colors}
+    
+    ### function：提取去掉动态点云的背景点云（根据2d dynamic mask）
+    def project_aggregated_lidar_ptsv2(self, delete_out_of_view_points=True):
+        """
+        Project the lidar points on the images and attribute the color of the nearest pixel to the lidar point.
+
+        Args:
+            delete_out_of_view_points: bool
+                If True, the lidar points that are not visible from the camera will be removed.
+        """
+        aggregated_lidar_points_world = []
+        aggregated_lidar_points_colors = []
+
+        for idx, cam in enumerate(self.pixel_source.camera_data.values()):
+            for frame_idx in tqdm(
+                range(len(cam)),
+                desc="Projecting lidar pts on images for camera {}".format(cam.cam_name),
+                dynamic_ncols=True,
+            ):
+                normed_time = self.pixel_source.normalized_time[frame_idx]
+
+                # get lidar depth on image plane
+                closest_lidar_idx = self.lidar_source.find_closest_timestep(normed_time)
+
+                lidar_infos = self.lidar_source.get_lidar_rays(closest_lidar_idx)
+                lidar_points_world = ( # 单帧雷达点
+                    lidar_infos["lidar_origins"]
+                    + lidar_infos["lidar_viewdirs"] * lidar_infos["lidar_ranges"]
+                )
+
+                # project lidar points to the image plane
+                if cam.undistort:
+                    new_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(
+                        cam.intrinsics[frame_idx].cpu().numpy(),
+                        cam.distortions[frame_idx].cpu().numpy(),
+                        (cam.WIDTH, cam.HEIGHT),
+                        alpha=1,
+                    )
+                    intrinsic_4x4 = torch.nn.functional.pad(
+                        torch.from_numpy(new_camera_matrix), (0, 1, 0, 1)
+                    ).to(self.device)
+                else:
+                    intrinsic_4x4 = torch.nn.functional.pad(
+                        cam.intrinsics[frame_idx], (0, 1, 0, 1)
+                    )
+                intrinsic_4x4[3, 3] = 1.0
+                lidar2img = intrinsic_4x4 @ cam.cam_to_worlds[frame_idx].inverse()
+                lidar_points_img = (lidar2img[:3, :3] @ lidar_points_world.T + lidar2img[:3, 3:4]).T  # (num_pts, 3)
+                depth = lidar_points_img[:, 2]
+                cam_points = lidar_points_img[:, :2] / (depth.unsqueeze(-1) + 1e-6)  # (num_pts, 2)
+                valid_mask = (
+                    (cam_points[:, 0] >= 0)
+                    & (cam_points[:, 0] < cam.WIDTH)
+                    & (cam_points[:, 1] >= 0)
+                    & (cam_points[:, 1] < cam.HEIGHT)
+                    & (depth > 0)
+                )  # (num_pts, )
+                
+                # syc: 更改逻辑 - 使用 dynamic_mask 过滤动态点云
+                # 2. 获取动态掩码 (H, W)
+                # 确保 dynamic_mask 是 bool 类型，并且设备一致
+                dynamic_mask = cam.dynamic_masks[frame_idx]
+                if dynamic_mask.device != self.device:
+                    dynamic_mask = dynamic_mask.to(self.device)
+                dynamic_mask = dynamic_mask.bool()
+                # 3. 初始化最终保留的掩码，默认为 False
+                keep_mask = torch.zeros(lidar_points_world.shape[0], device=self.device, dtype=torch.bool)
+                
+                # 4. 找到在有效视口内的点
+                valid_indices = torch.where(valid_mask)[0]
+                if valid_indices.shape[0] > 0:
+                    # 获取视口内点的像素坐标 (整数)
+                    pixel_y = cam_points[valid_indices, 1].long()
+                    pixel_x = cam_points[valid_indices, 0].long()
+                    
+                    # 检查这些坐标在 dynamic_mask 中的值
+                    is_dynamic_at_pixel = dynamic_mask[pixel_y, pixel_x]
+                    
+                    # 我们只保留 **静态** 的点 (dynamic_mask 为 False)
+                    static_indices_in_valid = valid_indices[~is_dynamic_at_pixel]
+                    
+                    # 标记这些静态点为保留
+                    keep_mask[static_indices_in_valid] = True
+                
+                # 5. 处理颜色信息
+                # 初始化全0颜色
+                current_frame_colors = torch.zeros(lidar_points_world.shape[0], 3, device=self.device, dtype=cam.images[frame_idx].dtype)
+                
+                if valid_indices.shape[0] > 0:
+                    # 获取所有视口内点的坐标 (用于取色)
+                    all_pixel_y = cam_points[valid_indices, 1].long()
+                    all_pixel_x = cam_points[valid_indices, 0].long()
+                    
+                    # 取色
+                    colors_in_view = cam.images[frame_idx][all_pixel_y, all_pixel_x]
+                    
+                    # 将取到的颜色赋给原始数组的对应位置
+                    current_frame_colors[valid_indices] = colors_in_view
+
+                # 6. 根据掩码筛选点云和颜色
+                static_lidar_points_world = lidar_points_world[keep_mask]
+                static_lidar_points_colors = current_frame_colors[keep_mask]
+                
+                aggregated_lidar_points_world.append(static_lidar_points_world)
+                aggregated_lidar_points_colors.append(static_lidar_points_colors)
+
+        # syc: aggregate lidar points from all frames to get dense depth maps
+        aggregated_lidar_points_world = torch.cat(aggregated_lidar_points_world, dim=0)
+        aggregated_lidar_points_colors = torch.cat(aggregated_lidar_points_colors, dim=0)
+        return {"pts": aggregated_lidar_points_world, "colors": aggregated_lidar_points_colors}
+
+    ### TODO(gls): exclude all the road pointclouds
     def filter_pts_in_road(
         self,
         seed_pts: Tensor,
         seed_colors: Tensor = None,
+        road_only: bool = False,
         seed_time: Tensor = None,
     ):
         """
         Identifies points that lie on the road surface by projecting all points onto all camera views across all frames.
         (Optimized for memory: processes frames sequentially)
         """
-        # DEBUG_PCD = True
-        # if DEBUG_PCD:
-        #     DEBUG_OUTPUT_DIR = "debug"
-        #     os.makedirs(DEBUG_OUTPUT_DIR, exist_ok=True)
-        #     export_points_to_ply(
-        #         seed_pts,
-        #         seed_colors,
-        #         save_path=os.path.join(DEBUG_OUTPUT_DIR, "before_filter_road_pts.ply"),
-        #     )
         # 使用一个布尔张量来记录一个点是否在任意一帧的任意相机中被识别为路面点
         on_road_mask = torch.zeros_like(seed_pts[:, 0]).bool()
         
@@ -644,7 +843,8 @@ class DrivingDataset(SceneDataset):
             intrinsics = camera_info.intrinsics.to(seed_pts.device)  # (3, 3)
             cam_to_worlds = camera_info.cam_to_worlds.to(seed_pts.device) # (F, 4, 4)
             road_masks = camera_info.road_masks.to(seed_pts.device)     # (F, H, W)
-            
+            ego_masks = camera_info.egocar_mask.to(seed_pts.device) # (F, H, W)
+
             num_frames = cam_to_worlds.shape[0]
             img_h, img_w = road_masks.shape[1], road_masks.shape[2]
             
@@ -654,6 +854,7 @@ class DrivingDataset(SceneDataset):
                 cam_to_world = cam_to_worlds[frame_idx] # (4, 4)
                 world_to_cam = torch.linalg.inv(cam_to_world) # (4, 4)
                 current_road_mask = road_masks[frame_idx] # (H, W)
+                current_ego_mask = ego_masks # (H, W) # 为什么是(1024)? egocar_mask 对于同一个相机来说是固定不变的，它不随 frame_idx 变化
 
                 # 2. 将所有点云变换到当前帧的相机坐标系
                 #    pts_cam: (N, 3)
@@ -675,8 +876,6 @@ class DrivingDataset(SceneDataset):
                 # 6. 合并当前帧的所有有效条件
                 final_valid_mask = in_front_of_cam_mask & in_image_bounds_mask # (N,) # 所有点里在相机前方且投影在相机平面上的
 
-                ### 修改内容
-                
                 ### 对pts_cam_valid
                 # 7. 对满足条件的点，检查它们是否在路面 mask 上
                 if final_valid_mask.any():
@@ -684,17 +883,19 @@ class DrivingDataset(SceneDataset):
                     valid_u = u[final_valid_mask]
                     valid_v = v[final_valid_mask]
                     valid_pixels = torch.stack([valid_u, valid_v], dim=1)
-                    # valid_pixels = pts_cam[final_valid_mask].long() # (M, 2)
                     
                     # 找到这些有效点在原始点云中的索引
                     point_indices = torch.where(final_valid_mask)[0]
                     
                     # 在 road_mask 中查找这些像素点
                     is_on_road_for_frame = current_road_mask[valid_pixels[:, 1], valid_pixels[:, 0]]
-                    
+                    current_ego_mask = (1.0 - current_ego_mask).float()
+                    ego_mask_at_valid_pixels = current_ego_mask[valid_pixels[:, 1], valid_pixels[:, 0]]
+                    is_on_road_for_frame_wo_ego = is_on_road_for_frame * ego_mask_at_valid_pixels
+                        
                     # 更新全局 on_road_mask
                     # 找到在本帧中被识别为路面点的原始点云索引
-                    road_point_indices = point_indices[is_on_road_for_frame.bool()]
+                    road_point_indices = point_indices[is_on_road_for_frame_wo_ego.bool()]
                     on_road_mask[road_point_indices] = True
 
         # 应用 mask，去除路面点
@@ -703,10 +904,40 @@ class DrivingDataset(SceneDataset):
         filtered_pts = seed_pts[final_mask]
         filtered_colors = seed_colors[final_mask] if seed_colors is not None else None
         filtered_time = seed_time[final_mask] if seed_time is not None else None
+        if not road_only:   ### 目的是什么来着？
+            # 1. 设置 Z 轴过滤的阈值
+            # 如果你想去掉“地下”的点（比如噪音），通常设为 0 或 -0.5
+            z_threshold = 0.0  
+            
+            # 2. 计算过滤掩码
+            # 这里的逻辑是：保留 z_threshold 以上的点 (去除小于阈值的)
+            # 如果你的分界线很明显是负值（比如路面在 -1.5m），直接把上面的 0.0 改成 -1.5 即可
+            z_filter_mask = filtered_pts[:, 2] > z_threshold
+            
+            # 3. 应用掩码
+            # 统计一下去掉了多少点（可选，用于调试）
+            num_removed = (~z_filter_mask).sum().item()
+            if num_removed > 0:
+                print(f"Removed {num_removed} points below Z threshold {z_threshold}")
+
+            filtered_pts = filtered_pts[z_filter_mask]
+            if filtered_colors is not None:
+                filtered_colors = filtered_colors[z_filter_mask]
+            if filtered_time is not None:
+                filtered_time = filtered_time[z_filter_mask]
         filtered_road_pts = seed_pts[final_road_mask]
         filtered_road_colors = seed_colors[final_road_mask] if seed_colors is not None else None
         filtered_road_time = seed_time[final_road_mask] if seed_time is not None else None   
-        
+
+        # 对路面点云进行随机采样
+        num_samples = 600000
+        if num_samples > filtered_road_pts.shape[0]:
+            num_samples = filtered_road_pts.shape[0]
+        sampled_idx = torch.randperm(filtered_road_pts.shape[0])[:num_samples]
+
+        filtered_road_pts = filtered_road_pts[sampled_idx]
+        filtered_road_colors = filtered_road_colors[sampled_idx] if filtered_road_colors is not None else None
+        filtered_road_time = filtered_road_time[sampled_idx] if filtered_road_time is not None else None
         return {"pts": filtered_pts, "colors": filtered_colors, "time": filtered_time}, {"pts": filtered_road_pts, "colors": filtered_road_colors, "time": filtered_road_time}
 
     def check_pts_visibility(self, pts_xyz):

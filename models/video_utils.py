@@ -734,7 +734,7 @@ def render(
                 if isinstance(v, Tensor):
                     cam_infos[k] = v.cuda(non_blocking=True)
             # render the image
-            results = trainer(image_infos, cam_infos)
+            results, _ = trainer(image_infos, cam_infos)
 
             # ------------- clip rgb ------------- #
             for k, v in results.items():
@@ -751,8 +751,6 @@ def render(
             if "pixels" in image_infos:
                 gt_rgbs.append(get_numpy(image_infos["pixels"]))
 
-            road_rgb = results["road_rgb"]
-            road_rgbs.append(get_numpy(road_rgb))
 
             if "road_masks" in image_infos:
                 if "egocar_masks" in image_infos:
@@ -761,9 +759,12 @@ def render(
                 else:
                     valid_loss_mask = torch.ones_like(image_infos["sky_masks"])
                 road_mask = image_infos["road_masks"]
-                gt_rgb = image_infos["pixels"] * valid_loss_mask[..., None]
-                gt_road_rgb = gt_rgb * road_mask[..., None]
+
+                gt_road_rgb = image_infos["pixels"] * valid_loss_mask[..., None] * road_mask[..., None]
                 gt_road_rgbs.append(get_numpy(gt_road_rgb))
+                road_rgb = results["road_rgb"]
+                road_rgb = road_rgb * valid_loss_mask[..., None]
+                road_rgbs.append(get_numpy(road_rgb))
 
             green_background = torch.tensor([0.0, 177, 64]) / 255.0
             green_background = green_background.to(rgb.device)
@@ -1137,7 +1138,7 @@ def render_novel_views(
             rgb = get_numpy(outputs["rgb"])
             depth = get_numpy(outputs["depth"])
             opacity = get_numpy(outputs["opacity"]) if "opacity" in outputs else None
-
+            
             # 恢复畸变图像
             # NOTE(syc): 是否不只针对鱼眼相机？
             if camera_data.is_fisheye:

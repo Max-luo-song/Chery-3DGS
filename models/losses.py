@@ -175,16 +175,118 @@ class DepthLoss(nn.Module):
 
         return depth_error
 
+
+def quaternion_to_euler(quat: torch.Tensor):
+    """
+    将四元数转换为欧拉角（roll, pitch, yaw）
+    输入: 四元数张量 (N, 4)，格式为 [w, x, y, z]
+    输出: roll, pitch, yaw 张量 (N,)
+    """
+    w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+    
+    # 计算roll (x轴旋转)
+    roll = torch.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
+    
+    # 计算pitch (y轴旋转)
+    sinp = 2 * (w * y - z * x)
+    # 防止数值不稳定
+    sinp = torch.clamp(sinp, -1.0, 1.0)
+    pitch = torch.asin(sinp)
+    
+    # 计算yaw (z轴旋转)
+    yaw = torch.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+    
+    return roll, pitch, yaw
+
+### 朝向lossv1版本：限制高斯朝向roll，pitch, scale_z
+class RoadOrientationLossV1(nn.Module):
+    def __init__(self, roll_limit: float = 0.3, pitch_limit: float = 0.3, 
+                 vertical_scale_limit: float = 0.5):
+        super(RoadOrientationLossV1, self).__init__()
+        self.roll_limit = roll_limit
+        self.pitch_limit = pitch_limit
+        self.vertical_scale_limit = vertical_scale_limit
+        
+    def forward(self, road_quats: torch.Tensor, road_scales: torch.Tensor) -> torch.Tensor:
+        """
+        计算朝向约束损失
+        """
+        # 将四元数转换为欧拉角
+        roll, pitch, yaw = quaternion_to_euler(road_quats)
+        
+        # 计算各角度的绝对值损失
+        roll_loss = torch.abs(roll) / self.roll_limit
+        pitch_loss = torch.abs(pitch) / self.pitch_limit
+        # 2. 获取scale的z轴分量（vertical scale）
+        scale_z = road_scales[:, 2]  # 假设scales的顺序为[sx, sy, sz]，sz是第三个维度
+        vertical_scale_loss = torch.abs(scale_z) / self.vertical_scale_limit  # 限制垂直拉伸
+        # 只对road和sky应用约束
+        orientation_loss = torch.mean(roll_loss + pitch_loss + vertical_scale_loss)
+        
+        return orientation_loss
+
+def quaternion_to_up_vector(quat: torch.Tensor) -> torch.Tensor:
+    """
+    将四元数转换为朝上向量（即z轴方向）
+    输入: 四元数张量 (N, 4)，格式为 [w, x, y, z]
+    输出: 朝上向量 (N, 3)，主要是z分量
+    """
+    w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+    
+    # 旋转后的z轴方向向量
+    # 初始z轴(0,0,1)经过四元数旋转后的结果
+    up_x = 2 * (x * z + w * y)
+    up_y = 2 * (y * z - w * x)
+    up_z = 1 - 2 * (x * x + y * y)
+    
+    return torch.stack([up_x, up_y, up_z], dim=-1)
+
+### 朝向lossv2版本：路面都朝上，接近法线(0,0,1)
+class RoadOrientationLossV2(nn.Module):
+    def __init__(self, beta: float = 0.1, up_vector_weight: float = 1.0, vertical_scale_limit: float = 0.5, roll_limit: float = 0.3, pitch_limit: float = 0.3):
+        super(RoadOrientationLossV2, self).__init__()
+        self.beta = beta
+        self.up_vector_weight = up_vector_weight
+        self.vertical_scale_limit = vertical_scale_limit
+        self.roll_limit = roll_limit
+        self.pitch_limit = pitch_limit
+
+    def forward(self, road_quats: torch.Tensor, road_scales: torch.Tensor) -> torch.Tensor:
+        """
+        计算朝向约束损失
+        """
+        # # 将四元数转换为朝上向量
+        up_vectors = quaternion_to_up_vector(road_quats)        
+        # 计算朝上向量的z分量（应该接近1）
+        up_z = up_vectors[:, 2]
+        # 计算x和y分量（应该接近0）
+        up_xy = torch.sqrt(up_vectors[:, 0]**2 + up_vectors[:, 1]**2)
+        up_loss = torch.mean(1 - up_z) + torch.mean(up_xy)
+        return self.beta * self.up_vector_weight * up_loss
+
+### NOTE(gls): 朝向loss，在输入中增加朝向输入
 class RoadLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, version, lambda_dssim: float = 0.5, beta: float = 0.1, 
+                 up_vector_weight: float = 1.0):
         super(RoadLoss, self).__init__() 
-        pass
-    def _compute_road_loss(self):
-        pass
+        self.lambda_dssim = lambda_dssim
+        if version == 1:
+            self.road_orientation_loss = RoadOrientationLossV1()
+        elif version == 2:
+            self.road_orientation_loss = RoadOrientationLossV2()
+    def _compute_road_loss(self, pred_road_rgb: torch.Tensor, gt_road_rgb: torch.Tensor) -> torch.Tensor:
+        Ll1 = torch.abs(gt_road_rgb - pred_road_rgb).mean()
+        return Ll1
     def __call__(
         self,
         pred_road_rgb: Tensor,
         gt_road_rgb: Tensor,
+        road_quats: Tensor,
+        road_scales: Tensor
     ):
-        Ll1 = torch.abs(gt_road_rgb - pred_road_rgb).mean()
-        return Ll1
+        road_loss = self._compute_road_loss(pred_road_rgb, gt_road_rgb)
+        # 计算朝向约束损失（这会通过梯度影响road_quats）
+        orientation_loss = self.road_orientation_loss(road_quats, road_scales)
+        total_loss = (1 - self.lambda_dssim) * road_loss + \
+                    self.lambda_dssim * orientation_loss
+        return total_loss

@@ -10,7 +10,7 @@ lidar_type="lidar"  # lidar（运动补偿前）/visual（纯视觉）
 
 config_file="configs/omnire_extended_cam_lidar.yaml"
 dataset_config="qcraft/11cams_${lidar_type}"
-extra_config_info="depth_loss"  # 额外信息，如 depth_loss
+extra_config_info="depth_loss_roadv_end"  # 额外信息，如 depth_loss
 
 start_timestep=0 # start frame index for training
 end_timestep=-1 # end frame index, -1 for the last frame

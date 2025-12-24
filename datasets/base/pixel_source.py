@@ -166,12 +166,12 @@ class CameraData(object):
                 self.load_dynamic_masks()
             if load_sky_mask:
                 self.load_sky_masks()
-            if load_road_mask:
-                self.load_road_masks()
             self.lidar_depth_maps = None  # will be loaded by: self.load_depth()
             self.image_error_maps = (
                 None  # will be built by: self.build_image_error_buffer()
             )
+        if load_road_mask:
+            self.load_road_masks()
         self.to(self.device)
         self.downscale_factor = 1.0
 
@@ -464,26 +464,30 @@ class CameraData(object):
 
     def load_road_masks(self):
         road_masks = []
-        for ix, fname in tqdm(
-            enumerate(self.road_mask_filepaths),
-            desc="Loading road masks",
-            dynamic_ncols=True,
-            total=len(self.road_mask_filepaths),
-        ):
-            road_mask = Image.open(fname).convert("L")
-            # resize them to the load_size
-            road_mask = road_mask.resize(
-                (self.load_size[1], self.load_size[0]), Image.NEAREST
-            )
-            if self.undistort:
-                if ix == 0:
-                    print("undistorting road mask")
-                road_mask = cv2.undistort(
-                    np.array(road_mask),
-                    self.intrinsics[ix].numpy(),
-                    self.distortions[ix].numpy(),
+        try:
+            for ix, fname in tqdm(
+                enumerate(self.road_mask_filepaths),
+                desc="Loading road masks",
+                dynamic_ncols=True,
+                total=len(self.road_mask_filepaths),
+            ):
+                road_mask = Image.open(fname).convert("L")
+                # resize them to the load_size
+                road_mask = road_mask.resize(
+                    (self.load_size[1], self.load_size[0]), Image.NEAREST
                 )
-            road_masks.append(np.array(road_mask) > 0)
+                if self.undistort:
+                    if ix == 0:
+                        print("undistorting road mask")
+                    road_mask = cv2.undistort(
+                        np.array(road_mask),
+                        self.intrinsics[ix].numpy(),
+                        self.distortions[ix].numpy(),
+                    )
+                road_masks.append(np.array(road_mask) > 0)
+        except Exception as e:
+            print(f"Error loading road masks at index {ix}: {e}")
+            raise e        
         self.road_masks = torch.from_numpy(np.stack(road_masks, axis=0)).float()
 
     def load_depth(
@@ -1232,7 +1236,7 @@ class ScenePixelSource(abc.ABC):
         original_frame_count = self.num_frames
         scaled_indices = torch.linspace(0, original_frame_count - 1, len(traj))
         normed_time = torch.linspace(0, 1, len(traj))
-
+        road_masks = camera_data.road_masks[0]
         render_data = []
         for i in range(len(traj)):
             c2w = traj[i]
@@ -1252,6 +1256,7 @@ class ScenePixelSource(abc.ABC):
                 "camera_to_world": c2w,
                 "intrinsics": intrinsics,
                 "kb_coeffs": kb_coeffs,
+                "road_masks": road_masks,
                 "height": torch.tensor([H], dtype=torch.long, device=self.device),
                 "width": torch.tensor([W], dtype=torch.long, device=self.device),
             }

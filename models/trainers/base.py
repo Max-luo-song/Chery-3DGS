@@ -125,7 +125,9 @@ class BasicTrainer(nn.Module):
         
         # a simple viewer for background visualization
         self.viewer = None
-    
+
+        # keep gaussian
+        self.gs = None
     @property
     def in_test_set(self):
         return self.cur_frame.item() in self.test_set_indices
@@ -249,13 +251,16 @@ class BasicTrainer(nn.Module):
                 use_inverse_depth=depth_loss_cfg.inverse_depth,
             )
         self.depth_loss_fn = depth_loss_fn
-
+        
         if "RoadNodes" in self.models:
             road_loss_fn = None
             road_loss_cfg = self.losses_dict.get("road", None)
             if road_loss_cfg is not None:
                 from models.losses import RoadLoss
-                road_loss_fn = RoadLoss()  # TODO(gls): args
+                if self.losses_dict.road.w == 0.01:
+                    road_loss_fn = RoadLoss(1)  # TODO(gls): args
+                elif self.losses_dict.road.w == 0.012:
+                    road_loss_fn = RoadLoss(2)
             self.road_loss_fn = road_loss_fn
 
     
@@ -387,7 +392,7 @@ class BasicTrainer(nn.Module):
         self,
         cam: dataclass_camera,
         image_ids: torch.Tensor, # leave it here for future use
-    ) -> dataclass_gs:
+    ):
         gs_dict = {
             "_means": [],
             "_scales": [],
@@ -530,11 +535,10 @@ class BasicTrainer(nn.Module):
             image_ids=image_infos["img_idx"].flatten()[0],
             novel_view=novel_view
         )
-        gs = self.collect_gaussians(
+        gs, _ = self.collect_gaussians(
             cam=processed_cam,
             image_ids=image_infos["img_idx"].flatten()[0]
         )
-
         # render gaussians
         '''
         outputs = {
@@ -585,6 +589,7 @@ class BasicTrainer(nn.Module):
         outputs: Dict[str, torch.Tensor],
         image_infos: Dict[str, torch.Tensor],
         cam_infos: Dict[str, torch.Tensor],
+        gs
     ) -> Dict[str, torch.Tensor]:
         # calculate loss
         loss_dict = {}
@@ -595,11 +600,13 @@ class BasicTrainer(nn.Module):
         else:
             valid_loss_mask = torch.ones_like(image_infos["sky_masks"])
 
-        if "road_masks" in image_infos:
-            valid_road_loss_mask = (1.0 - image_infos["road_masks"]).float()
-
+        ### TODO(gls)： 把路面单独算loss
+        road_mask = image_infos["road_masks"]
+        non_road_mask = ~road_mask.bool()
         gt_rgb = image_infos["pixels"] * valid_loss_mask[..., None]
+        gt_rgb = gt_rgb * non_road_mask[..., None]
         predicted_rgb = outputs["rgb"] * valid_loss_mask[..., None]
+        predicted_rgb = predicted_rgb * non_road_mask[..., None]
         
         gt_occupied_mask = (1.0 - image_infos["sky_masks"]).float() * valid_loss_mask
         pred_occupied_mask = outputs["opacity"].squeeze() * valid_loss_mask
@@ -634,16 +641,27 @@ class BasicTrainer(nn.Module):
                 depth_loss = depth_loss * self.losses_dict.depth.w * decay_weight
                 loss_dict.update({"depth_loss": depth_loss})
 
-        # NOTE(gls): add road loss, 目前是rgb的loss 除去ego_mask区域
+        # NOTE(gls): add road loss
         if self.road_loss_fn is not None:
             road_mask = image_infos["road_masks"]
             gt_rgb = image_infos["pixels"] * valid_loss_mask[..., None]
             gt_road_rgb = gt_rgb * road_mask[..., None]
             pred_road_rgb = outputs['road_rgb'] * valid_loss_mask[..., None]
-            Ll1 = self.road_loss_fn(pred_road_rgb, gt_road_rgb)
-            road_loss = Ll1 * self.losses_dict.road.w # TODO(gls): we need to make sure weight
-            loss_dict.update({"road_loss": road_loss})
+            ### NOTE(gls): 把路面属性传进去
+            freeze_mask = outputs["freeze_mask"]
+            road_quats = gs.quats[freeze_mask]
+            road_scales = gs.scales[freeze_mask]
 
+            Ll1 = self.road_loss_fn(pred_road_rgb, gt_road_rgb, road_quats, road_scales)
+            
+            simloss_road = 1 - self.ssim(gt_road_rgb.permute(2, 0, 1)[None, ...], pred_road_rgb.permute(2, 0, 1)[None, ...])
+            
+            road_loss = Ll1 * self.losses_dict.road.w # TODO(gls): we need to make sure weight
+            simloss_road = simloss_road * self.losses_dict.ssim.w
+            loss_dict.update({"road_loss": road_loss})
+            loss_dict.update({"ssim_road_loss": simloss_road})
+
+        # 不透明度的熵正则化，其主要作用是鼓励不透明度预测值趋向于两极化（即非常接近0或非常接近1）。
         # ----- reg loss -----
         opacity_entropy_reg = self.losses_dict.get("opacity_entropy", None)
         if opacity_entropy_reg is not None:

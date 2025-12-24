@@ -1,10 +1,10 @@
 # 参数设置
 ################################################################################
-ckpt_path="output/qcraft_20251103_134932_QLC0N1000623_12337_12352/20251121_lidar+cam0_1_2_3_4_5_6_8_9_10_12/checkpoint_final.pth"
+ckpt_path="output/qcraft_20251025_163358_QCOYSD504206_1595_1610/20251222_lidar+cam0_1_2_3_5_6_7_9_10_11_12depth_loss_roadv2/checkpoint_final.pth"
 
 traj_types=(
-    original_traj
-    # left_shift_1m
+    # original_traj
+    left_shift_1m
     left_shift_3m
     # left_shift_5m
     # right_shift_1m
@@ -21,8 +21,8 @@ traj_types=(
     # change_lane_3.5m
 )
 
-cam_ids=(0 1 2 3 4 5 6 7 8 9 10 11 12)
-downscales=(1 1 1 1 1 1 1 1 1 1 1 1 1)
+cam_ids=(0 1 2 3 5 6 7 9 10 11 12)
+downscales=(1 1 1 1 1 1 1 1 1 1 1)
 
 fps=10
 

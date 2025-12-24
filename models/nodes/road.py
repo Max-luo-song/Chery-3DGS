@@ -142,9 +142,15 @@ class RoadNodes(nn.Module):
     def get_quats(self):
         return self.quat_act(self._quats)
     
+    # def quat_act(self, x: torch.Tensor) -> torch.Tensor:
+    #     return x / x.norm(dim=-1, keepdim=True)
+
     def quat_act(self, x: torch.Tensor) -> torch.Tensor:
-        return x / x.norm(dim=-1, keepdim=True)
-    
+        norm = x.norm(dim=-1, keepdim=True)
+        # 防止范数为 0（添加一个很小的 epsilon，如 1e-8）
+        norm = torch.clamp(norm, min=1e-8)
+        return x / norm
+
     def preprocess_per_train_step(self, step: int):
         self.step = step
         

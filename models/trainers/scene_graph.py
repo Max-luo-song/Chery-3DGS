@@ -13,7 +13,7 @@ import os
 from utils.misc import export_points_to_ply, import_str
 DEBUG_PCD = False
 if DEBUG_PCD:
-    DEBUG_OUTPUT_DIR = "debug1"
+    DEBUG_OUTPUT_DIR = "debug2"
     os.makedirs(DEBUG_OUTPUT_DIR, exist_ok=True)
 
 class MultiTrainer(BasicTrainer):
@@ -97,7 +97,7 @@ class MultiTrainer(BasicTrainer):
         dataset: DrivingDataset,
     ) -> None:
         # get instance points
-        rigidnode_pts_dict, deformnode_pts_dict, smplnode_pts_dict, roadnode_pts_dict= {}, {}, {}, {}
+        rigidnode_pts_dict, deformnode_pts_dict, smplnode_pts_dict = {}, {}, {}
         if "RigidNodes" in self.model_config:
             rigidnode_pts_dict = dataset.get_init_objects(
                 cur_node_type='RigidNodes',
@@ -140,35 +140,47 @@ class MultiTrainer(BasicTrainer):
                     sampled_pts, sampled_color, sampled_time = \
                         torch.empty(0, 3).to(self.device), torch.empty(0, 3).to(self.device), None
 
-                if DEBUG_PCD:
-                    export_points_to_ply(
-                        sampled_pts,
-                        sampled_color,
-                        save_path=os.path.join(DEBUG_OUTPUT_DIR, "random_lidar_samples.ply"),
-                    )
+                # if DEBUG_PCD:
+                #     export_points_to_ply(
+                #         sampled_pts,
+                #         sampled_color,
+                #         save_path=os.path.join(DEBUG_OUTPUT_DIR, "random_lidar_samples.ply"),
+                #     )
 
-                ### NOTE(gls): 先把整体路面点拿出来(首先过滤动态物体点)
-                processed_pts_wo_box_road = dataset.filter_pts_in_boxes(
-                    seed_pts=sampled_pts,
-                    seed_colors=sampled_color,
-                    valid_instances_dict=allnode_pts_dict
+                # processed_pts_wo_box_road = dataset.project_aggregated_lidar_ptsv1(
+                #     delete_out_of_view_points=True
+                # )
+                processed_pts_wo_box_road = dataset.project_aggregated_lidar_ptsv2(
+                    delete_out_of_view_points=True
                 )
-                processed_init_wo_road_pts, processed_init_road_pts = dataset.filter_pts_in_road(
+                # if DEBUG_PCD:
+                #     export_points_to_ply(
+                #         processed_pts_wo_box_road["pts"],
+                #         processed_pts_wo_box_road["colors"],
+                #         save_path=os.path.join(DEBUG_OUTPUT_DIR, "all_wo_box.ply"),
+                #     )        
+                # import time
+                # print("time is sleeping")
+                # time.sleep(1000) 
+                processed_init_wo_road_pts, processed_init_road_pts = dataset.filter_pts_in_road( # 限制road点云数
                     seed_pts=processed_pts_wo_box_road["pts"],
                     seed_colors=processed_pts_wo_box_road["colors"],
+                    road_only = True
                 )
                 if DEBUG_PCD:
-                    export_points_to_ply(
-                        processed_init_wo_road_pts["pts"],
-                        processed_init_wo_road_pts["colors"],
-                        save_path=os.path.join(DEBUG_OUTPUT_DIR, "wo_road_lidar_pts.ply"),
-                    )
+                #     export_points_to_ply(
+                #         processed_init_wo_road_pts["pts"],
+                #         processed_init_wo_road_pts["colors"],
+                #         save_path=os.path.join(DEBUG_OUTPUT_DIR, "wo_road_lidar_pts.ply"),
+                #     )
                     export_points_to_ply(
                         processed_init_road_pts["pts"],
                         processed_init_road_pts["colors"],
                         save_path=os.path.join(DEBUG_OUTPUT_DIR, "road_lidar_pts.ply"),
                     )
-                
+                # import time
+                # print("time is sleeping")
+                # time.sleep(1000) 
                 random_pts = []
                 num_near_pts = init_cfg.get('near_randoms', 0)
                 if num_near_pts > 0: # uniformly sample points inside the scene's sphere
@@ -187,25 +199,35 @@ class MultiTrainer(BasicTrainer):
                     
                     sampled_pts = torch.cat([sampled_pts, valid_pts], dim=0)
                     sampled_color = torch.cat([sampled_color, torch.rand(valid_pts.shape, ).to(self.device)], dim=0)
-                
+                ### 获取背景点云，背景点云最好的方式是先去掉物体box内的点云，再去掉路面点云，剩下的点云作为背景点云
                 processed_init_pts = dataset.filter_pts_in_boxes(
                     seed_pts=sampled_pts,
                     seed_colors=sampled_color,
                     valid_instances_dict=allnode_pts_dict
-                )
+                )   
                 processed_env_init_pts, _ = dataset.filter_pts_in_road(
                     seed_pts=processed_init_pts["pts"],
                     seed_colors=processed_init_pts["colors"],
+                    road_only = False
                 )
+
                 if DEBUG_PCD:
+                #     export_points_to_ply(
+                #         processed_init_pts["pts"],
+                #         processed_init_pts["colors"],
+                #         save_path=os.path.join(DEBUG_OUTPUT_DIR, "exclude_box.ply"),
+                #     )
                     export_points_to_ply(
                         processed_env_init_pts["pts"],
                         processed_env_init_pts["colors"],
-                        save_path=os.path.join(DEBUG_OUTPUT_DIR, "env_lidar_pts.ply"),
+                        save_path=os.path.join(DEBUG_OUTPUT_DIR, "env_lidar_pts_plus.ply"),
                     )
                 model.create_from_pcd(
                     init_means=processed_env_init_pts["pts"], init_colors=processed_env_init_pts["colors"]
                 )
+            # import time
+            # print("time is sleeping!")
+            # time.sleep(1000)
             ### Node(gls): RoadNode add
             if class_name == "RoadNodes":
                 model.create_from_pcd(
@@ -295,7 +317,7 @@ class MultiTrainer(BasicTrainer):
             image_ids=image_infos["img_idx"].flatten()[0],
         )
 
-        gs._means.requires_grad_(True) # 强制设为 True,这是注册钩子的前提条件
+        gs.means.requires_grad_(True) # 强制设为 True,这是注册钩子的前提条件
         # 定义一个钩子函数
         def zero_grad_for_road(grad): # grad (N, 3)
             # freeze_mask 是 True 的位置是路面，我们想把这些位置的梯度清零
@@ -307,9 +329,9 @@ class MultiTrainer(BasicTrainer):
 
         # 在 gs._means 上注册这个钩子
         # 同样，用 hasattr 防止重复注册
-        if not hasattr(gs._means, 'road_freeze_hook_registered'):
-            handle = gs._means.register_hook(zero_grad_for_road)
-            gs._means.road_freeze_hook_registered = True
+        if not hasattr(gs.means, 'road_freeze_hook_registered'):
+            handle = gs.means.register_hook(zero_grad_for_road)
+            gs.road_freeze_hook_registered = True
         '''
             outputs = {
                 "rgb_gaussians": rgb,
@@ -340,7 +362,8 @@ class MultiTrainer(BasicTrainer):
         ### Note(gls): 对output['rgb']增加一个road mask，然后把路面独立出来
         road_mask = image_infos["road_masks"]
         outputs['road_rgb'] = outputs['rgb'] * road_mask[..., None]
-
+        ### 带回路面标注
+        outputs["freeze_mask"] = freeze_mask
         if not self.training and self.render_each_class:
             with torch.no_grad():
                 for class_name in self.gaussian_classes.keys():
@@ -357,16 +380,16 @@ class MultiTrainer(BasicTrainer):
                 outputs["Dynamic_rgb"] = self.affine_transformation(sep_rgb, image_infos)
                 outputs["Dynamic_opacity"] = sep_opacity
                 outputs["Dynamic_depth"] = sep_depth
-        
-        return outputs
+        return outputs, gs
 
     def compute_losses(
         self,
         outputs: Dict[str, torch.Tensor],
         image_infos: Dict[str, torch.Tensor],
         cam_infos: Dict[str, torch.Tensor],
+        gs
     ) -> Dict[str, torch.Tensor]:
-        loss_dict = super().compute_losses(outputs, image_infos, cam_infos)
+        loss_dict = super().compute_losses(outputs, image_infos, cam_infos, gs)
         return loss_dict
     
     def compute_metrics(

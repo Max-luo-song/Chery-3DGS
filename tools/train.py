@@ -258,13 +258,14 @@ def main(args):
         
         # forward & backward
         # drivestudio/models/trainers/scene_graph.py
-        outputs = trainer(image_infos, cam_infos)
+        outputs, gs = trainer(image_infos, cam_infos)
         trainer.update_visibility_filter()
 
         loss_dict = trainer.compute_losses(
             outputs=outputs,
             image_infos=image_infos,
             cam_infos=cam_infos,
+            gs=gs 
         )
         # check nan or inf
         for k, v in loss_dict.items():

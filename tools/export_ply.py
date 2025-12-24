@@ -20,13 +20,33 @@ def export_ply(pth_path, out_path):
     data = torch.load(pth_path)
 
     gaussian = Gaussian(data["models"]["Background"])
-    xyz = gaussian._means
+    gaussian_road = Gaussian(data["models"]["RoadNodes"])
+    # merge road nodes into background gaussians
+    # 合并 road nodes into background gaussians
+    # 依次合并各个属性张量
+    xyz = np.concatenate([gaussian._means, gaussian_road._means], axis=0)
+    
     normals = np.zeros_like(xyz)
-    f_dc = gaussian._features_dc.reshape((gaussian._features_dc.shape[0], -1))
-    f_rest = gaussian._features_rest.reshape((gaussian._features_rest.shape[0], -1))
-    opacities = gaussian._opacities
-    scale = gaussian._scales
-    rotation = gaussian._quats
+    
+    f_dc = np.concatenate([gaussian._features_dc, gaussian_road._features_dc], axis=0)
+    f_dc = f_dc.reshape((f_dc.shape[0], -1))
+    
+    f_rest = np.concatenate([gaussian._features_rest, gaussian_road._features_rest], axis=0)
+    f_rest = f_rest.reshape((f_rest.shape[0], -1))
+    
+    opacities = np.concatenate([gaussian._opacities, gaussian_road._opacities], axis=0)
+    
+    scale = np.concatenate([gaussian._scales, gaussian_road._scales], axis=0)
+    
+    rotation = np.concatenate([gaussian._quats, gaussian_road._quats], axis=0)
+    
+    # xyz = gaussian._means
+    # normals = np.zeros_like(xyz)
+    # f_dc = gaussian._features_dc.reshape((gaussian._features_dc.shape[0], -1))
+    # f_rest = gaussian._features_rest.reshape((gaussian._features_rest.shape[0], -1))
+    # opacities = gaussian._opacities
+    # scale = gaussian._scales
+    # rotation = gaussian._quats
 
     def construct_list_of_attributes(gaussian):
         l = ["x", "y", "z", "nx", "ny", "nz"]
