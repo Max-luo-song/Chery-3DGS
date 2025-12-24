@@ -698,10 +698,14 @@ class DrivingDataset(SceneDataset):
         # but train_timesteps are timesteps, so the length is num_train_timesteps (len(unique_train_timestamps))
         return train_timesteps, test_timesteps, train_indices, test_indices
 
-    def project_lidar_pts_on_images(
-        self,
-        delete_out_of_view_points: bool = True
-    ):
+    def project_lidar_pts_on_images(self, delete_out_of_view_points: bool = True):
+        """
+        Project the lidar points on the images and attribute the color of the nearest pixel to the lidar point.
+
+        Args:
+            delete_out_of_view_points: bool
+                If True, the lidar points that are not visible from the camera will be removed.
+        """
         static_lidar_points = []
         for idx, cam in enumerate(self.pixel_source.camera_data.values()):
             lidar_depth_maps = []
