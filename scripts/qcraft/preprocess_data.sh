@@ -5,8 +5,8 @@ scene_id="20251105_152839_QCOYSD504206_1240_1255"
 
 export PYTHONPATH=$(pwd)
 python datasets/preprocess.py \
-    --data_root /nas_thoru/oldbak/baitongyao/qcraft/raw/ \
-    --target_dir /nas_thoru/oldbak/baitongyao/qcraft/processed \
+    --data_root data/qcraft/raw/ \
+    --target_dir data/qcraft/processed \
     --dataset qcraft \
     --split training \
     --scene_ids $scene_id \
