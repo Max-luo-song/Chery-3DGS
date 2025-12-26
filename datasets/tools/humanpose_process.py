@@ -66,11 +66,10 @@ if __name__ == "__main__":
     parser.add_argument("--data_root", type=str, required=True, help="root path of waymo dataset")
     parser.add_argument("--dataset", type=str, default="waymo", help="dataset name")
     parser.add_argument(
-        "--scene_ids",
+        "--scene_id",
         default=None,
-        type=int,
-        nargs="+",
-        help="scene ids to be processed, a list of integers separated by space. Range: [0, 798] for training, [0, 202] for validation",
+        type=str,
+        help="scene id to be processed",
     )
     parser.add_argument(
         "--split_file", type=str, default=None, help="Split file in data/waymo_splits"
@@ -117,11 +116,13 @@ if __name__ == "__main__":
         from datasets.kitti.kitti_human_utils import project_human_boxes, CAMERA_LIST
     elif args.dataset == "nuplan":
         from datasets.nuplan.nuplan_human_utils import project_human_boxes, CAMERA_LIST
+    elif args.dataset == "qcraft":
+        from datasets.qcraft.qcraft_human_utils import project_human_boxes, CAMERA_LIST
     else:
         raise ValueError(f"Unknown dataset {args.dataset}, please choose from waymo, pandaset, argoverse, nuscenes, kitti, nuplan")
     
-    if args.scene_ids is not None:
-        scene_ids_list = args.scene_ids
+    if args.scene_id is not None:
+        scene_ids_list = [args.scene_id]
     elif args.split_file is not None:
         # parse the split file
         split_file = open(args.split_file, "r").readlines()[1:]
@@ -153,5 +154,7 @@ if __name__ == "__main__":
             )
             logger.info(f"Finished processing scene {scene_id}")
         except Exception as e:
+            import traceback
             logger.error(f"Error processing scene {scene_id}: {e}")
+            traceback.print_exc()
             continue

@@ -2,7 +2,7 @@ from typing import Dict, List, Tuple
 from omegaconf import OmegaConf
 import random
 import logging
-
+import os
 import torch
 import numpy as np
 from torch.nn import Parameter
@@ -12,6 +12,10 @@ from models.gaussians.basics import *
 from models.nodes.rigid import RigidNodes
 from models.gaussians.vanilla import VanillaGaussians
 from pytorch3d.ops import knn_points
+
+
+CACHE_DIR = os.path.join(os.environ.get("HOME"), ".cache")
+CACHE_DIR_4DHUMANS = os.path.join(CACHE_DIR, "4DHumans")
 
 RGB_tuples = torch.tensor(np.vstack([phalp_colors] * 10), dtype=torch.float32) / 255.0
 logger = logging.getLogger()
@@ -86,7 +90,7 @@ class SMPLNodes(RigidNodes):
         self.instances_fv    = instances_fv                            # (num_frame, num_instances)
     
         self.template = SMPLTemplate(
-            smpl_model_path="smpl_models/SMPL_NEUTRAL.pkl",
+            smpl_model_path=f'{CACHE_DIR_4DHUMANS}/data/smpl/SMPL_NEUTRAL.pkl',
             num_human=smpl_betas.shape[0],
             init_beta=smpl_betas,
             cano_pose_type="da_pose",
@@ -542,7 +546,7 @@ class SMPLNodes(RigidNodes):
             torch.zeros(self.num_frames, self.num_instances, 23, 4, device=self.device)
         )
         self.template = SMPLTemplate(
-            smpl_model_path="smpl_models/SMPL_NEUTRAL.pkl",
+            smpl_model_path=f'{CACHE_DIR_4DHUMANS}/data/smpl/SMPL_NEUTRAL.pkl',
             num_human=self.num_instances,
             init_beta=torch.zeros(self.num_instances, 10, device=self.device),
             cano_pose_type="da_pose",

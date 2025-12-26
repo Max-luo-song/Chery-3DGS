@@ -20,6 +20,38 @@ from phalp.trackers.PHALP import PHALP
 from phalp.utils import get_pylogger
 from third_party.Humans4D.hmr2.datasets.utils import expand_bbox_to_aspect_ratio
 
+# Patch PHALP Renderer to avoid AttributeError during cleanup and rendering
+try:
+    from phalp.visualize.py_renderer import Renderer
+
+    # Patch __del__
+    original_del = Renderer.__del__
+    def patched_del(self):
+        try:
+            original_del(self)
+        except AttributeError:
+            pass  # Silently ignore renderer cleanup errors
+    Renderer.__del__ = patched_del
+
+    # Patch __getattr__ to provide default values for missing attributes
+    original_getattr = Renderer.__getattribute__
+    def patched_getattr(self, name):
+        try:
+            return original_getattr(self, name)
+        except AttributeError:
+            # Provide sensible defaults for common missing attributes
+            if name == 'focal_length':
+                return 5000.0
+            elif name == 'renderer':
+                return None
+            elif name == 'faces':
+                return None
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+    Renderer.__getattribute__ = patched_getattr
+
+except (ImportError, AttributeError):
+    pass  # If Renderer doesn't exist, skip patching
+
 warnings.filterwarnings('ignore')
 
 logger = logging.getLogger()
@@ -213,7 +245,10 @@ def run_4DHumans(
             continue
         
         cfg = initialize_config()
-        
+
+        # Disable rendering for headless server to avoid OpenGL/pyrender issues
+        cfg.render.enable = False
+
         cached_video_path = os.path.join(temp_dir, 'raw_videos', f'{cam_id}.mp4')
         if not os.path.exists(cached_video_path):
             logger.info(f"Cached video not found at {cached_video_path}, we will create it")
@@ -272,15 +307,16 @@ def run_4DHumans(
                 os.path.join(temp_dir, 'phalp_output', f'cam_{cam_id}.pkl')
             )
         else:
+            # PHALP generates demo_{cam_id}.pkl, not demo_{i}.pkl
             pred_tracks_allcam[cam_id] = joblib.load(
-                os.path.join(temp_dir, 'phalp_output', 'results', f'demo_{i}.pkl')
+                os.path.join(temp_dir, 'phalp_output', 'results', f'demo_{cam_id}.pkl')
             )
-    
+
     # move and rename saved pickle files if save_temp
     if save_temp and not already_done:
         for i, cam_id in enumerate(camera_list):
             os.rename(
-                os.path.join(temp_dir, 'phalp_output', 'results', f'demo_{i}.pkl'),
+                os.path.join(temp_dir, 'phalp_output', 'results', f'demo_{cam_id}.pkl'),
                 os.path.join(temp_dir, 'phalp_output', f'cam_{cam_id}.pkl')
             )
     os.system(f"rm -rf {os.path.join(temp_dir, 'phalp_output', 'results')}")

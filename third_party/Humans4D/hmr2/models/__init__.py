@@ -32,7 +32,7 @@ def check_smpl_exists():
     import os
     candidates = [
         f'{CACHE_DIR_4DHUMANS}/data/smpl/SMPL_NEUTRAL.pkl',
-        f'data/basicModel_neutral_lbs_10_207_0_v1.0.0.pkl',
+        f'{CACHE_DIR_4DHUMANS}/data/smpl/basicmodel_neutral_lbs_10_207_0_v1.1.0.pkl',
     ]
     candidates_exist = [os.path.exists(c) for c in candidates]
     if not any(candidates_exist):
