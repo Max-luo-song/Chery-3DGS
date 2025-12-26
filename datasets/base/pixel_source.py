@@ -445,7 +445,7 @@ class CameraData(object):
             if self.undistort:
                 if ix == 0:
                     print("undistorting vehicle mask")
-                vehicle_mask = cv2.undload_depthistort(
+                vehicle_mask = cv2.undistort(
                     np.array(vehicle_mask),
                     self.intrinsics[ix].numpy(),
                     self.distortions[ix].numpy(),
