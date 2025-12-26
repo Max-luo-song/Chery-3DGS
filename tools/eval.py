@@ -179,12 +179,10 @@ def do_evaluation(
         torch.cuda.empty_cache()
 
         for dirs in os.listdir(f"{cfg.log_dir}/videos{post_fix}"):
-            print("now: ", dirs)
             if (
                 "layout" in dirs
                 and len(os.listdir(f"{cfg.log_dir}/videos{post_fix}/{dirs}")) > 0
             ):
-                print("is: ", dirs)
                 img_dir = f"{cfg.log_dir}/videos{post_fix}/{dirs}"
                 save_mp4 = f"{cfg.log_dir}/videos{post_fix}/{dirs}.mp4"
                 images_to_video(img_dir, save_mp4, cfg.render.fps)
