@@ -11,5 +11,5 @@ python datasets/preprocess.py \
     --split training \
     --scene_ids $scene_id \
     --workers 2 \
-    --process_keys ego_masks images calib pose objects dynamic_masks lidar \
+    --process_keys ego_masks images calib pose objects dynamic_masks lidar mix_novel_views\
     --skip_front_wide_side_cameras

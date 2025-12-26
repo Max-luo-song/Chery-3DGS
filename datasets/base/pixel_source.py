@@ -1,4 +1,4 @@
-from typing import Dict, Tuple, List, Callable
+from typing import Dict, Tuple, List, Callable, Optional, AnyStr
 from omegaconf import OmegaConf
 import os
 import abc
@@ -126,6 +126,8 @@ class CameraData(object):
         # the device to move the camera to
         device: torch.device = torch.device("cpu"),
         novel_view_mode: bool = False,
+        mix_novel_views: bool = False,
+        mix_novel_alias: Optional[str] = None,
     ):
         self.dataset_name = dataset_name
         self.cam_id = cam_id
@@ -137,14 +139,27 @@ class CameraData(object):
         self.device = device
         self.novel_view_mode = novel_view_mode  # syc
 
+        self.mix_novel_alias = mix_novel_alias
+        self.mix_novel_views = mix_novel_views
+        self.from_cam_id = None
+
         if self.dataset_name == "qcraft":
-            self.cam_name = ALL_CAM_SPECS[cam_id].name
-            self.original_size = (ALL_CAM_SPECS[cam_id].height, ALL_CAM_SPECS[cam_id].width)
+            if mix_novel_views and mix_novel_alias is not None:
+                self.from_cam_id = cam_id = 0  # hard replaced here
+                self.cam_name = f"Mixed Novel Camera - {mix_novel_alias}"
+            else:
+                self.cam_name = ALL_CAM_SPECS[cam_id].name
+            self.original_size = (
+                ALL_CAM_SPECS[cam_id].height,
+                ALL_CAM_SPECS[cam_id].width,
+            )
             self.is_fisheye = False  # hard-coded
         else:
             self.cam_name = DATASETS_CONFIG[dataset_name][cam_id]["camera_name"]
             self.original_size = DATASETS_CONFIG[dataset_name][cam_id]["original_size"]
-            self.is_fisheye = DATASETS_CONFIG[dataset_name][cam_id].get("is_fisheye", False)  # syc
+            self.is_fisheye = DATASETS_CONFIG[dataset_name][cam_id].get(
+                "is_fisheye", False
+            )  # syc
 
         self.load_size = [
             int(self.original_size[0] / downscale_when_loading),
@@ -152,10 +167,10 @@ class CameraData(object):
         ]
 
         # Load the images, dynamic masks, sky masks, etc.
-        self.create_all_filelist()
-
-        # NOTE(syc): novel view mode 下只加载相机内外参
-        self.load_calibrations()
+        if mix_novel_views and mix_novel_alias is not None:
+            self.prepare_novel_views_list()
+        else:
+            self.create_all_filelist()
 
         if not self.novel_view_mode:
             self.load_images()
@@ -169,7 +184,7 @@ class CameraData(object):
             self.image_error_maps = (
                 None  # will be built by: self.build_image_error_buffer()
             )
-        self.to(self.device)
+
         self.downscale_factor = 1.0
 
     @property
@@ -265,7 +280,9 @@ class CameraData(object):
                     )
                 )
                 sky_mask_filepaths.append(
-                    os.path.join(self.data_path, "sky_masks", f"{t:06d}_{self.cam_id}.png")
+                    os.path.join(
+                        self.data_path, "sky_masks", f"{t:06d}_{self.cam_id}.png"
+                    )
                 )
             else:
                 img_filepaths.append(
@@ -296,7 +313,9 @@ class CameraData(object):
                     )
                 )
                 sky_mask_filepaths.append(
-                    os.path.join(self.data_path, "sky_masks", f"{t:03d}_{self.cam_id}.png")
+                    os.path.join(
+                        self.data_path, "sky_masks", f"{t:03d}_{self.cam_id}.png"
+                    )
                 )
 
         ego_mask_dir = os.path.join(self.data_path, "ego_masks")
@@ -340,8 +359,12 @@ class CameraData(object):
         Since in some datasets, the ego car body is visible in the images,
         we need to load the ego car mask to mask out the ego car body.
         """
-        
-        egocar_mask = os.path.join(self.ego_mask_dir, f"{self.cam_id}.png")
+        if self.mix_novel_views and self.mix_novel_alias:
+            # novel view without ego mask
+            egocar_mask = ""
+        else:
+            egocar_mask = os.path.join(self.ego_mask_dir, f"{self.cam_id}.png")
+
         if os.path.exists(egocar_mask):
             egocar_mask = Image.open(egocar_mask).convert("L")
             # resize them to the load_size
@@ -422,7 +445,7 @@ class CameraData(object):
             if self.undistort:
                 if ix == 0:
                     print("undistorting vehicle mask")
-                vehicle_mask = cv2.undistort(
+                vehicle_mask = cv2.undload_depthistort(
                     np.array(vehicle_mask),
                     self.intrinsics[ix].numpy(),
                     self.distortions[ix].numpy(),
@@ -453,6 +476,65 @@ class CameraData(object):
                 )
             sky_masks.append(np.array(sky_mask) > 0)
         self.sky_masks = torch.from_numpy(np.stack(sky_masks, axis=0)).float()
+
+    def prepare_novel_views_list(self):
+        assert (
+            self.mix_novel_views and self.mix_novel_alias
+        ), "Not configure novel views mixed training"
+
+        (
+            img_filepaths,
+            dynamic_mask_filepaths,
+            sky_mask_filepaths,
+            human_mask_filepaths,
+            vehicle_mask_filepaths,
+        ) = ([], [], [], [], [])
+
+        # Note: we assume all the files in waymo dataset are synchronized
+        for t in range(self.start_timestep, self.end_timestep):
+            img_filepaths.append(
+                os.path.join(
+                    f"{self.data_path}/novel_views",
+                    f"{self.mix_novel_alias}/images",
+                    f"{t:06d}_{self.from_cam_id}_{self.mix_novel_alias}.00_scale0.3.png",
+                )
+            )
+            dynamic_mask_filepaths.append(
+                os.path.join(
+                    f"{self.data_path}/novel_views",
+                    f"{self.mix_novel_alias}/dynamic_masks",
+                    "all",
+                    f"{t:06d}_{self.mix_novel_alias}.png",
+                )
+            )
+            human_mask_filepaths.append(
+                os.path.join(
+                    f"{self.data_path}/novel_views",
+                    f"{self.mix_novel_alias}/dynamic_masks",
+                    "human",
+                    f"{t:06d}_{self.mix_novel_alias}.png",
+                )
+            )
+            vehicle_mask_filepaths.append(
+                os.path.join(
+                    f"{self.data_path}/novel_views",
+                    f"{self.mix_novel_alias}/dynamic_masks",
+                    "vehicle",
+                    f"{t:06d}_{self.mix_novel_alias}.png",
+                )
+            )
+            sky_mask_filepaths.append(
+                os.path.join(
+                    f"{self.data_path}/novel_views",
+                    f"{self.mix_novel_alias}/sky_masks",
+                    f"{t:06d}_{self.from_cam_id}_{self.mix_novel_alias}.00_scale0.3.png",
+                )
+            )
+        self.img_filepaths = np.array(img_filepaths)
+        self.dynamic_mask_filepaths = np.array(dynamic_mask_filepaths)
+        self.human_mask_filepaths = np.array(human_mask_filepaths)
+        self.vehicle_mask_filepaths = np.array(vehicle_mask_filepaths)
+        self.sky_mask_filepaths = np.array(sky_mask_filepaths)
 
     def load_depth(
         self,
@@ -557,7 +639,7 @@ class CameraData(object):
             if self.image_error_maps is not None:
                 self.image_error_maps = self.image_error_maps.to(device)
 
-    def get_image(self, frame_idx: int) -> Dict[str, Tensor]:
+    def get_image(self, frame_idx: int) -> Tuple[Dict, Dict]:
         """
         Get the rays for rendering the given frame index.
         Args:
@@ -740,6 +822,7 @@ class CameraData(object):
             "width": torch.tensor(img_width, dtype=torch.long, device=c2w.device),
             "intrinsics": intrinsics,
         }
+
         return image_infos, cam_infos
 
 
@@ -826,6 +909,16 @@ class ScenePixelSource(abc.ABC):
         # set initial downscale factor
         for cam_id in self.camera_list:
             self.camera_data[cam_id].set_downscale_factor(self._downscale_factor)
+
+        if (
+            self.data_cfg.get("mix_novel_views", False)
+            and self.data_cfg.mix_novel_views
+            and self.num_cams > len(self.camera_list)
+        ):
+            for cam_id in range(len(self.data_cfg.mix_novel_cams)):
+                self.camera_data[
+                    self.camera_list[-1] + cam_id + 1
+                ].set_downscale_factor(self._downscale_factor)
 
     def to(self, device: torch.device) -> "ScenePixelSource":
         """
@@ -934,6 +1027,11 @@ class ScenePixelSource(abc.ABC):
         Returns:
             the number of cameras in the dataset
         """
+        if (
+            self.data_cfg.get("mix_novel_views", False)
+            and self.data_cfg.mix_novel_views
+        ):
+            return len(self.data_cfg.cameras) + len(self.data_cfg.mix_novel_cams)
         return len(self.data_cfg.cameras)
 
     @property

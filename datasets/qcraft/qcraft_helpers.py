@@ -1,4 +1,4 @@
-import os
+import os, cv2
 import numpy as np
 import json
 from typing import List, Dict
@@ -161,3 +161,14 @@ def load_calibration(datadir, cam_ids: List[int]):
         extrinsics[cam_id] = cam_to_ego
 
     return extrinsics, intrinsics
+
+
+def draw_and_fill_box(img, points2d):
+    # 计算最小外接矩形
+    x, y, w, h = cv2.boundingRect(points2d.astype(int))
+    # print("points2d:", points2d)
+    # print(f"Bounding Rect: x={x}, y={y}, w={w}, h={h}")
+
+    # 绘制并填充矩形
+    cv2.rectangle(img, (x, y), (x + w, y + h), (255, 255, 255), -1)
+    return img
