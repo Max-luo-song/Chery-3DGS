@@ -55,4 +55,4 @@ data:
     # (2) sf_static：仅静态背景的单帧深度点
     # (3) mf_static：聚合所有帧静态背景的深度点
     # 其中 sf: single-frame; mf: multi-frame
-    depth_mode: sf_raw
+    depth_mode: sf_static
