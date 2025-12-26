@@ -5,6 +5,7 @@ import cv2
 import numpy as np
 from tqdm import trange, tqdm
 from omegaconf import OmegaConf
+from enum import Enum
 
 import torch
 from torch import Tensor
@@ -13,9 +14,9 @@ from models.gaussians.basics import *
 from datasets.base.scene_dataset import ModelType
 from datasets.base.scene_dataset import SceneDataset
 from datasets.base.split_wrapper import SplitWrapper
+from datasets.utils.base_utils import project_points_to_image
 from utils.visualization import get_layout
 from utils.geometry import transform_points
-from utils.camera import get_interp_novel_trajectories
 from utils.misc import export_points_to_ply, import_str
 
 logger = logging.getLogger()
@@ -31,6 +32,17 @@ NAME_TO_NODE = {
     "DeformableNodes": ModelType.DeformableNodes,
 }
 
+class DepthMode(Enum):
+    SINGLE_FRAME_RAW: str = "sf_raw"
+    SINGLE_FRAME_STATIC: str = "sf_static"
+    MULTI_FRAME_STATIC: str = "mf_static"
+
+def parse_depth_mode(value: str, default: DepthMode = DepthMode.SINGLE_FRAME_STATIC) -> DepthMode:
+    try:
+        return DepthMode(value)
+    except ValueError:
+        logger.warn(f"Invalid depth_mode: '{value}'. Using default: {default.value}")
+        return default
 
 class DrivingDataset(SceneDataset):
     def __init__(
@@ -82,8 +94,15 @@ class DrivingDataset(SceneDataset):
         self.pixel_source, self.lidar_source = self.build_data_source()
         # assert self.pixel_source is not None and self.lidar_source is not None, \
         #     "Must have both pixel source and lidar source"
+
+        self.depth_mode = None
         if self.lidar_source is not None:  # gls
+            depth_mode = self.lidar_source.data_cfg.get("depth_mode", None)
+            self.depth_mode = parse_depth_mode(depth_mode)
+            logger.info(f"Projecting LiDAR points onto images with depth mode: {self.depth_mode.value}")
+
             self.project_lidar_pts_on_images(delete_out_of_view_points=True)
+
         self.aabb = self.get_aabb()
 
         # ---- define train and test indices ---- #
@@ -580,9 +599,9 @@ class DrivingDataset(SceneDataset):
                 inside_mask = inside_mask | mask
 
         # filter out the points that are inside the bounding boxes
-        # seed_pts = seed_pts[~inside_mask] # 不做mask
-        # if seed_colors is not None:
-        #     seed_colors = seed_colors[~inside_mask]
+        seed_pts = seed_pts[~inside_mask]
+        if seed_colors is not None:
+            seed_colors = seed_colors[~inside_mask]
         if seed_time is not None:
             seed_time = seed_time[~inside_mask]
 
@@ -679,7 +698,7 @@ class DrivingDataset(SceneDataset):
         # but train_timesteps are timesteps, so the length is num_train_timesteps (len(unique_train_timestamps))
         return train_timesteps, test_timesteps, train_indices, test_indices
 
-    def project_lidar_pts_on_images(self, delete_out_of_view_points=True):
+    def project_lidar_pts_on_images(self, delete_out_of_view_points: bool = True):
         """
         Project the lidar points on the images and attribute the color of the nearest pixel to the lidar point.
 
@@ -687,88 +706,152 @@ class DrivingDataset(SceneDataset):
             delete_out_of_view_points: bool
                 If True, the lidar points that are not visible from the camera will be removed.
         """
-        # os.makedirs("depths_gt", exist_ok=True)  # temp
-
-        for cam in self.pixel_source.camera_data.values():
+        static_lidar_points = []
+        for idx, cam in enumerate(self.pixel_source.camera_data.values()):
             lidar_depth_maps = []
+
             for frame_idx in tqdm(
                 range(len(cam)),
-                desc="Projecting lidar pts on images for camera {}".format(
-                    cam.cam_name
-                ),
-                dynamic_ncols=True,
+                desc=f"Processing camera {cam.cam_name}",
+                dynamic_ncols=True
             ):
                 normed_time = self.pixel_source.normalized_time[frame_idx]
 
                 # get lidar depth on image plane
                 closest_lidar_idx = self.lidar_source.find_closest_timestep(normed_time)
                 lidar_infos = self.lidar_source.get_lidar_rays(closest_lidar_idx)
-                lidar_points = (
-                    lidar_infos["lidar_origins"]
-                    + lidar_infos["lidar_viewdirs"] * lidar_infos["lidar_ranges"]
-                )
+                lidar_points_world = lidar_infos["lidar_origins"] + lidar_infos["lidar_viewdirs"] * lidar_infos["lidar_ranges"]
+                lidar_mask = lidar_infos["lidar_mask"]
 
-                # project lidar points to the image plane
                 if cam.undistort:
-                    # TODO: 检查一下这里做 new_camera_matrix 对结果有没有影响
                     new_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(
                         cam.intrinsics[frame_idx].cpu().numpy(),
                         cam.distortions[frame_idx].cpu().numpy(),
                         (cam.WIDTH, cam.HEIGHT),
                         alpha=1,
                     )
-                    intrinsic_4x4 = torch.nn.functional.pad(
-                        torch.from_numpy(new_camera_matrix), (0, 1, 0, 1)
-                    ).to(self.device)
+                    intrinsic = torch.from_numpy(new_camera_matrix).to(self.device)
                 else:
-                    intrinsic_4x4 = torch.nn.functional.pad(
-                        cam.intrinsics[frame_idx], (0, 1, 0, 1)
-                    )
-                intrinsic_4x4[3, 3] = 1.0
-                lidar2img = intrinsic_4x4 @ cam.cam_to_worlds[frame_idx].inverse()
-                lidar_points = (
-                    lidar2img[:3, :3] @ lidar_points.T + lidar2img[:3, 3:4]
-                ).T  # (num_pts, 3)
-
-                depth = lidar_points[:, 2]
-                cam_points = lidar_points[:, :2] / (
-                    depth.unsqueeze(-1) + 1e-6
-                )  # (num_pts, 2)
-                valid_mask = (
-                    (cam_points[:, 0] >= 0)
-                    & (cam_points[:, 0] < cam.WIDTH)
-                    & (cam_points[:, 1] >= 0)
-                    & (cam_points[:, 1] < cam.HEIGHT)
-                    & (depth > 0)
-                )  # (num_pts, )
-                depth = depth[valid_mask]
-
-                _cam_points = cam_points[valid_mask]
-                depth_map = torch.zeros(cam.HEIGHT, cam.WIDTH).to(self.device)
-                depth_map[_cam_points[:, 1].long(), _cam_points[:, 0].long()] = (
-                    depth.squeeze(-1)
+                    intrinsic = cam.intrinsics[frame_idx]
+                                
+                cam_points, depth, valid_mask = project_points_to_image(
+                    xyz=lidar_points_world,
+                    K=intrinsic,
+                    RT=cam.cam_to_worlds[frame_idx].inverse(),
+                    H=cam.HEIGHT,
+                    W=cam.WIDTH
                 )
-                lidar_depth_maps.append(depth_map)
-
-                # # 以图像形式保存深度 temp
-                # depth_img = depth_map.cpu().numpy()
-                # depth_img = (depth_img / np.max(depth_img) * 255).astype(np.uint8)
-                # cv2.imwrite(os.path.join("depths_gt", f"frame_{frame_idx}.png"), depth_img)
-
+                valid_cam_points = cam_points[valid_mask]
+                valid_depth = depth[valid_mask]
+                
                 # used to filter out the lidar points that are visible from the camera
-                visible_indices = torch.arange(
-                    self.lidar_source.num_points, device=self.device
-                )[lidar_infos["lidar_mask"]][valid_mask]
-
-                self.lidar_source.visible_masks[visible_indices] = True
+                global_indices = torch.arange(self.lidar_source.num_points, device=self.device)[lidar_mask][valid_mask]
+                self.lidar_source.visible_masks[global_indices] = True
 
                 # attribute the color of the nearest pixel to the lidar point
-                points_color = cam.images[frame_idx][
-                    _cam_points[:, 1].long(), _cam_points[:, 0].long()
-                ]
-                self.lidar_source.colors[visible_indices] = points_color
+                points_color = cam.images[frame_idx][valid_cam_points[:, 1].long(), valid_cam_points[:, 0].long()]
+                self.lidar_source.colors[global_indices] = points_color
+                
 
-            cam.load_depth(torch.stack(lidar_depth_maps, dim=0).to(self.device).float())
+                if self.depth_mode == DepthMode.SINGLE_FRAME_RAW:
+                    final_cam_points = valid_cam_points
+                    final_depth = valid_depth
+
+                    # 保存单帧深度图
+                    depth_map = torch.zeros(cam.HEIGHT, cam.WIDTH, device=self.device)
+                    depth_map[final_cam_points[:, 1].long(), final_cam_points[:, 0].long()] = final_depth
+                    lidar_depth_maps.append(depth_map)
+                    
+                elif self.depth_mode == DepthMode.SINGLE_FRAME_STATIC:
+                    static_mask = self._get_static_mask_for_frame(lidar_points_world, frame_idx)
+                    logger.info(f"Frame {frame_idx}: Removed {(~static_mask).sum().item()} points inside 3D bounding boxes.")
+                    
+                    final_cam_points = cam_points[static_mask & valid_mask]
+                    final_depth = depth[static_mask & valid_mask]
+
+                    # 保存单帧深度图
+                    depth_map = torch.zeros(cam.HEIGHT, cam.WIDTH, device=self.device)
+                    depth_map[final_cam_points[:, 1].long(), final_cam_points[:, 0].long()] = final_depth
+                    lidar_depth_maps.append(depth_map)
+                
+                elif self.depth_mode == DepthMode.MULTI_FRAME_STATIC:
+                    static_mask = self._get_static_mask_for_frame(lidar_points_world, frame_idx)
+                    logger.info(f"Frame {frame_idx}: Removed {(~static_mask).sum().item()} points inside 3D bounding boxes.")
+                 
+                    # 暂存静态点，待所有帧处理完后聚合生成稠密深度图
+                    static_points_world = lidar_points_world[static_mask]
+                    if idx == 0 and len(static_points_world) > 0:
+                        static_lidar_points.append(static_points_world)
+                
+                else:
+                    raise NotImplementedError(f"Depth mode {self.depth_mode} not implemented")
+                
+            # 单帧模式下直接保存深度图
+            if self.depth_mode in [DepthMode.SINGLE_FRAME_RAW, DepthMode.SINGLE_FRAME_STATIC]:
+                logger.info(f"Loading sparse depth maps for camera {cam.cam_name}")
+                cam.load_depth(torch.stack(lidar_depth_maps, dim=0).float())
+        
+        # 聚合生成稠密深度
+        if self.depth_mode == DepthMode.MULTI_FRAME_STATIC:
+            aggregated_world_points = torch.cat(static_lidar_points, dim=0)
+            logger.info(f"Aggregated {len(aggregated_world_points)} background points for dense depth")
+
+            for cam in self.pixel_source.camera_data.values():
+                dense_depth_maps = []
+                for frame_idx in range(len(cam)):
+                    if cam.undistort:
+                        new_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(
+                            cam.intrinsics[frame_idx].cpu().numpy(),
+                            cam.distortions[frame_idx].cpu().numpy(),
+                            (cam.WIDTH, cam.HEIGHT),
+                            alpha=1,
+                        )
+                        intrinsic = torch.from_numpy(new_camera_matrix).to(self.device)
+                    else:
+                        intrinsic = cam.intrinsics[frame_idx]
+
+                    aggregated_cam_points, aggregated_depth, aggregated_valid_mask = project_points_to_image(
+                        xyz=aggregated_world_points,
+                        K=intrinsic,
+                        RT=cam.cam_to_worlds[frame_idx].inverse(),
+                        H=cam.HEIGHT,
+                        W=cam.WIDTH
+                    )
+                    valid_aggregated_cam_points = aggregated_cam_points[aggregated_valid_mask]
+                    valid_aggregated_depth = aggregated_depth[aggregated_valid_mask]
+                    
+                    dense_map = torch.zeros(cam.HEIGHT, cam.WIDTH, device=self.device)
+                    if len(aggregated_cam_points) > 0:
+                        dense_map[valid_aggregated_cam_points[:, 1].long(), valid_aggregated_cam_points[:, 0].long()] = valid_aggregated_depth
+                    dense_depth_maps.append(dense_map)
+                
+                cam.load_depth(torch.stack(dense_depth_maps, dim=0).float())
+                logger.info(f"Loading aggregated depth maps for camera {cam.cam_name}")
 
         if delete_out_of_view_points:
             self.lidar_source.delete_invisible_pts()
+
+    def _get_static_mask_for_frame(self, lidar_points_world, frame_idx):
+        """针对单帧计算静态点掩码"""
+        static_mask = torch.ones(lidar_points_world.shape[0], dtype=torch.bool, device=self.device)
+        
+        visible_instances = torch.where(self.pixel_source.per_frame_instance_mask[frame_idx])[0]
+        if len(visible_instances) == 0:
+            return static_mask
+        
+        instances_pose_world = self.pixel_source.instances_pose[frame_idx][visible_instances]
+        instances_size = self.pixel_source.instances_size[visible_instances]
+        
+        points_homo = torch.cat([lidar_points_world, torch.ones(lidar_points_world.shape[0], 1, device=self.device)], dim=-1)
+        
+        for pose, size in zip(instances_pose_world, instances_size):
+            points_local = (torch.inverse(pose) @ points_homo.T).T[:, :3]
+            half_size = size / 2
+            in_bbox = (
+                (points_local[:, 0].abs() <= half_size[0]) &
+                (points_local[:, 1].abs() <= half_size[1]) &
+                (points_local[:, 2].abs() <= half_size[2])
+            )
+            static_mask &= ~in_bbox
+
+        return static_mask

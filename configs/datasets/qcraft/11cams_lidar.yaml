@@ -50,3 +50,9 @@ data:
     # 2) compute aabb from the downsampled lidar points by using the percentile of lidar_percentiles 
     lidar_downsample_factor: 4 # downsample lidar by this factor to compute percentile
     lidar_percentile: 0.02  # percentile to compute aabb from lidar
+    # 深度图计算的三种模式
+    # (1) sf_raw：原始的深度计算方法，使用单帧的所有深度点
+    # (2) sf_static：仅静态背景的单帧深度点
+    # (3) mf_static：聚合所有帧静态背景的深度点
+    # 其中 sf: single-frame; mf: multi-frame
+    depth_mode: sf_static

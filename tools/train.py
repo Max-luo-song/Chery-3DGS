@@ -13,8 +13,9 @@ from tools.eval import do_evaluation
 from utils.misc import import_str
 from utils.backup import backup_project
 from utils.logging_utils import MetricLogger, setup_logging
+from models.trainers.base import BasicTrainer
 from models.video_utils import render_images, save_videos
-from datasets.driving_dataset import DrivingDataset
+from datasets.driving_dataset import DrivingDataset, DepthMode
 
 logger = logging.getLogger()
 current_time = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
@@ -111,7 +112,7 @@ def main(args):
     dataset = DrivingDataset(data_cfg=cfg.data)
 
     # setup trainer
-    trainer = import_str(cfg.trainer.type)(
+    trainer: BasicTrainer = import_str(cfg.trainer.type)(
         **cfg.trainer,
         num_timesteps=dataset.num_img_timesteps,
         model_config=cfg.model,
@@ -121,7 +122,16 @@ def main(args):
         scene_aabb=dataset.get_aabb().reshape(2, 3),
         device=device
     )
-    
+    if trainer.depth_loss_fn is not None:
+        # 仅在 static 模式下 mask 掉动态区域
+        mask_out_dynamic_regions = dataset.depth_mode != DepthMode.SINGLE_FRAME_RAW
+        if mask_out_dynamic_regions:
+            logger.info("Dynamic region masking is enabled in depth loss.")
+        else:
+            logger.info("Dynamic region masking is disabled in depth loss.")
+
+        trainer.depth_loss_fn.set_dynamic_region_masking(mask_out_dynamic_regions)
+
     # NOTE: If resume, gaussians will be loaded from checkpoint
     #       If not, gaussians will be initialized from dataset
     if args.resume_from is not None:

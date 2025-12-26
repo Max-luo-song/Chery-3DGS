@@ -11,3 +11,15 @@ def project_numpy(xyz, K, RT, H, W):
     mask = np.logical_and(valid_depth, valid_pixel)
     return xyz_pixel, mask
 
+def project_points_to_image(xyz, K, RT, H, W):
+    """投影世界点到图像平面，返回 cam_points(N,2), depth(N), valid_mask"""
+    points_cam = (RT[:3, :3] @ xyz.T + RT[:3, 3:4]).T  # (num_pts, 3)
+    points_img = (K @ points_cam.T).T  # (num_pts, 3)
+    depth = points_img[:, 2]
+    cam_points = points_img[:, :2] / (depth.unsqueeze(-1) + 1e-6)  # (num_pts, 2)
+    valid_mask = (
+        (cam_points[:, 0] >= 0) & (cam_points[:, 0] < W) &
+        (cam_points[:, 1] >= 0) & (cam_points[:, 1] < H) &
+        (depth > 0)
+    )  # (num_pts, )
+    return cam_points, depth, valid_mask

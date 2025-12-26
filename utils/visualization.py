@@ -122,11 +122,11 @@ def layout_qcraft(imgs: List[np.array], cam_names: List[str]) -> np.array:
     """Combine cameras into a tiled image.
     Layout:
 
-        ##########################################################################################################
-        #                   # front_tele_30         # front_wide_60     # front_tele_15                          #
-        # front_left_99     # front_wide_left_60    # front_wide_110    # front_wide_right_60   # front_right_99 #
-        # rear_left_30      # rear_left_99          # rear_50           # rear_right_99         # rear_right_30  #
-        ##########################################################################################################
+        #########################################################################################################
+        #                       # front_tele_30   # front_wide_60     # front_tele_15                           #
+        # front_wide_left_60    # front_left_99   # front_wide_110    # front_right_99  # front_wide_right_60   #
+        # rear_left_30          # rear_left_99    # rear_50           # rear_right_99   # rear_right_30         #
+        #########################################################################################################
     """
     device = "cuda"
 
@@ -172,60 +172,40 @@ def layout_qcraft(imgs: List[np.array], cam_names: List[str]) -> np.array:
             filled_mask[:max_height, 3 * max_width : 4 * max_width] = 1
 
         elif cam_name == "front_wide_left_60":
-            tiled_img[max_height : 2 * max_height, max_width : 2 * max_width] = img
-            filled_mask[max_height : 2 * max_height, max_width : 2 * max_width] = 1
-
-        elif cam_name == "front_left_99":
             tiled_img[max_height : 2 * max_height, :max_width] = img
             filled_mask[max_height : 2 * max_height, :max_width] = 1
+
+        elif cam_name == "front_left_99":
+            tiled_img[max_height : 2 * max_height, max_width : 2 * max_width] = img
+            filled_mask[max_height : 2 * max_height, max_width : 2 * max_width] = 1
 
         elif cam_name == "rear_left_99":
             tiled_img[2 * max_height :, max_width : 2 * max_width] = img
             filled_mask[2 * max_height :, max_width : 2 * max_width] = 1
 
         elif cam_name == "rear_left_30":
-            tiled_img[
-                2 * max_height : 2 * max_height + min_height,
-                max_width - min_width : max_width,
-            ] = img
-            filled_mask[
-                2 * max_height : 2 * max_height + min_height,
-                max_width - min_width : max_width,
-            ] = 1
+            tiled_img[2 * max_height : 2 * max_height + min_height, max_width - min_width : max_width] = img
+            filled_mask[2 * max_height : 2 * max_height + min_height, max_width - min_width : max_width] = 1
 
-        elif cam_name == "front_wide_right_60":
+        elif cam_name == "front_right_99":
             tiled_img[max_height : 2 * max_height, 3 * max_width : 4 * max_width] = img
             filled_mask[max_height : 2 * max_height, 3 * max_width : 4 * max_width] = 1
 
-        elif cam_name == "front_right_99":
+        elif cam_name == "front_wide_right_60":
             tiled_img[max_height : 2 * max_height, 4 * max_width :] = img
             filled_mask[max_height : 2 * max_height, 4 * max_width :] = 1
 
         elif cam_name == "rear_right_99":
-            tiled_img[
-                2 * max_height : 3 * max_height, 3 * max_width : 4 * max_width
-            ] = img
-            filled_mask[
-                2 * max_height : 3 * max_height, 3 * max_width : 4 * max_width
-            ] = 1
+            tiled_img[2 * max_height : 3 * max_height, 3 * max_width : 4 * max_width] = img
+            filled_mask[2 * max_height : 3 * max_height, 3 * max_width : 4 * max_width] = 1
 
         elif cam_name == "rear_right_30":
-            tiled_img[
-                2 * max_height : 2 * max_height + min_height,
-                4 * max_width : 4 * max_width + min_width,
-            ] = img
-            filled_mask[
-                2 * max_height : 2 * max_height + min_height,
-                4 * max_width : 4 * max_width + min_width,
-            ] = 1
+            tiled_img[2 * max_height : 2 * max_height + min_height, 4 * max_width : 4 * max_width + min_width] = img
+            filled_mask[2 * max_height : 2 * max_height + min_height, 4 * max_width : 4 * max_width + min_width] = 1
 
         elif cam_name == "rear_50":
-            tiled_img[
-                2 * max_height : 3 * max_height, 2 * max_width : 3 * max_width
-            ] = img
-            filled_mask[
-                2 * max_height : 3 * max_height, 2 * max_width : 3 * max_width
-            ] = 1
+            tiled_img[2 * max_height : 3 * max_height, 2 * max_width : 3 * max_width] = img
+            filled_mask[2 * max_height : 3 * max_height, 2 * max_width : 3 * max_width] = 1
 
     min_y, max_y = (
         torch.where(filled_mask)[0].min(),
