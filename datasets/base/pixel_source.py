@@ -1256,7 +1256,6 @@ class ScenePixelSource(abc.ABC):
                 "camera_to_world": c2w,
                 "intrinsics": intrinsics,
                 "kb_coeffs": kb_coeffs,
-                "road_masks": road_masks,
                 "height": torch.tensor([H], dtype=torch.long, device=self.device),
                 "width": torch.tensor([W], dtype=torch.long, device=self.device),
             }
@@ -1279,6 +1278,7 @@ class ScenePixelSource(abc.ABC):
                     [y.float() / H, x.float() / W], dim=-1
                 ),  # [H, W, 2]
                 # "egocar_masks": camera_data.egocar_mask,
+                "road_masks": road_masks,
             }
 
             render_data.append(

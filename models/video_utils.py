@@ -1124,7 +1124,7 @@ def render_novel_views(
                 frame_data["image_infos"][key] = value.cuda(non_blocking=True)
 
             # Perform rendering
-            outputs = trainer(
+            outputs, _ = trainer(
                 image_infos=frame_data["image_infos"],
                 camera_infos=frame_data["cam_infos"],
                 novel_view=True,

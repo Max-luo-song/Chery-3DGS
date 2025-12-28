@@ -18,14 +18,14 @@
 data:
   data_root: data/qcraft/processed/training # data root for the dataset
   dataset: qcraft 
-  scene_idx: 20251025_163358_QCOYSD504206_1595_1610  # which scene to use
+  scene_idx: 0 # which scene to use
   start_timestep: 0 # which timestep to start from
   end_timestep: -1 # which timestep to end at, -1 means the last timestep
   preload_device: cuda # choose from ["cpu", "cuda"], cache the data on this device.
   pixel_source: # image source and object annotations
     type: datasets.qcraft.qcraft_sourceloader.QcraftPixelSource
     cameras: [0, 1, 2, 3, 5, 6, 7, 9, 10, 11, 12] # which cameras to use
-    downscale_when_loading: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1] # the size of the images to load
+    downscale_when_loading: [2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2] # the size of the images to load
     downscale: 1 # downscale factor wrt to the downscale_when_loading
     undistort: False # whether to undistort the images
     test_image_stride: 0 # use every Nth timestep for the test set. if 0, use all images for training and none for testing

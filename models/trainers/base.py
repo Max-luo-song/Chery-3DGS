@@ -257,7 +257,7 @@ class BasicTrainer(nn.Module):
             road_loss_cfg = self.losses_dict.get("road", None)
             if road_loss_cfg is not None:
                 from models.losses import RoadLoss
-                if self.losses_dict.road.w == 0.01:
+                if self.losses_dict.road.w != 0.012:
                     road_loss_fn = RoadLoss(1)  # TODO(gls): args
                 elif self.losses_dict.road.w == 0.012:
                     road_loss_fn = RoadLoss(2)

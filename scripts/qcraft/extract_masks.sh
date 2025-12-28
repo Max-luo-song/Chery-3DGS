@@ -2,9 +2,9 @@
 ################################################################################
 gpu=-1
 
-scene_id="20251103_134932_QLC0N1000623_12337_12352"
+scene_id="20250702_133223_Q2517_60_75"
 
-segformer_path=third_party/SegFormer
+segformer_path=/data4/gls/code/scene_reconstruction/third_party/SegFormer
 ################################################################################
 
 # Pick an avaliable gpu

@@ -208,6 +208,7 @@ class QcraftPixelSource(ScenePixelSource):
                 cam_id=cam_id,
                 start_timestep=self.start_timestep,
                 end_timestep=self.end_timestep,
+                load_road_mask=self.data_cfg.load_road_mask,
                 downscale_when_loading=downscale_when_loading[idx],
                 undistort=False,
                 buffer_downscale=self.buffer_downscale,

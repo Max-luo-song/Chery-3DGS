@@ -163,8 +163,9 @@ class RoadNodes(nn.Module):
         last_size: int,
     ) -> None:
         self.after_train(radii, xys_grad, last_size)
-        if step % self.ctrl_cfg.refine_interval == 0:
-            self.refinement_after(step, optimizer)
+        if step % self.ctrl_cfg.refine_interval == 0:  # 对于路面不采用任何致密化以及过滤策略
+            pass
+            # self.refinement_after(step, optimizer)
 
     def after_train(
         self,
@@ -222,6 +223,7 @@ class RoadNodes(nn.Module):
             )
             # split & duplicate
             print(f"Class {self.class_prefix} current points: {self.num_points} @ step {self.step}")
+            do_densification = False # NOTE(gls): 暂时关闭致密化策略
             if do_densification:
                 ### TODO(gls): 对于路面高斯不采用致密化策略
                 #   something
