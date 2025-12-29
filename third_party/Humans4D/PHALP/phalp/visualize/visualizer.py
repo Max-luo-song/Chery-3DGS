@@ -12,7 +12,7 @@ from torchvision.utils import make_grid
 
 from phalp.utils.utils import (get_colors, numpy_to_torch_image,
                                perspective_projection)
-from phalp.visualize.py_renderer import Renderer
+#from phalp.visualize.py_renderer import Renderer
 
 
 def rect_with_opacity(image, top_left, bottom_right, fill_color, fill_opacity):
