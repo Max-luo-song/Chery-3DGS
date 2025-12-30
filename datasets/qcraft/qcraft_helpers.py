@@ -47,6 +47,24 @@ def euler_to_transform_matrix(x, y, z, yaw, pitch, roll):
     T_matrix[:3, 3] = T
     return T_matrix
 
+
+def project_points_to_image(points3d, intrinsic) -> np.ndarray:
+    # 将3D点转换为齐次坐标
+    points3d_homogeneous = np.concatenate(
+        [points3d, np.ones((points3d.shape[0], 1))], axis=1
+    )
+    # 投影到2D
+    camera_intrinsic_extended = np.hstack([intrinsic, np.zeros((3, 1))])
+    points2d_homogeneous = camera_intrinsic_extended @ points3d_homogeneous.T
+    # 转换为非齐次坐标
+    z = points2d_homogeneous[2, :]
+    points2d = points2d_homogeneous[:2, :] / z
+    # 添加有效性检查
+    valid_mask = z > 0
+    points2d = points2d[:, valid_mask].T
+    return points2d
+
+
 def project_label_to_mask(dim, obj2ego, cam2ego, intrinsic, img_shape):
     bbox_l, bbox_w, bbox_h = dim
     bbox = np.array([[-bbox_l, -bbox_w, -bbox_h], [bbox_l, bbox_w, bbox_h]]) * 0.5
