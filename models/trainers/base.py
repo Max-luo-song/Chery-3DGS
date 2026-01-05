@@ -364,7 +364,7 @@ class BasicTrainer(nn.Module):
                     print(type(replace_obj))
                     if isinstance(replace_obj, str):
                         self.models[class_name].replace_instance_with_ply(target_id=target_id, ply_path=replace_obj)
-                    if isinstance(replace_obj, int):
+                    elif isinstance(replace_obj, int):
                         self.models[class_name].replace_instances(replace_dict={target_id: replace_obj})
                     else:
                         raise ValueError("replace_obj只能是int或者str")
