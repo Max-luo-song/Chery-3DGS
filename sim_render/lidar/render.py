@@ -27,20 +27,10 @@ from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams
 from scene.gaussian_model import GaussianModel
 from scene import Scene
+from scene.unet import UNet
 
 from utils.lidar_utils import pano_to_lidar_with_intensities, filter_pcd
 from scene.cameras import Camera
-import logging
-logger = logging.getLogger("render")
-logger.setLevel(logging.INFO)
-# avoid propagating to root logger (prevents duplicate printing)
-logger.propagate = False
-if not logger.handlers:
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s: %(message)s")
-    ch.setFormatter(formatter)
-    logger.addHandler(ch)
 
 cpu_count = os.cpu_count()
 torch.set_num_threads(cpu_count)
@@ -78,30 +68,19 @@ class EditObjInfo(NamedTuple):
 
 def get_logger(path):
     import logging
-    # use the same named logger to avoid duplicates
-    logger = logging.getLogger("render")
+
+    logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    logger.propagate = False
+    fileinfo = logging.FileHandler(os.path.join(path, "outputs.log"))
+    fileinfo.setLevel(logging.INFO)
+    controlshow = logging.StreamHandler()
+    controlshow.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s: %(message)s")
+    fileinfo.setFormatter(formatter)
+    controlshow.setFormatter(formatter)
 
-    log_file = os.path.join(path, "outputs.log")
-    # add FileHandler only if an identical file handler hasn't been added
-    has_file = any(
-        isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == os.path.abspath(log_file)
-        for h in logger.handlers
-    )
-    if not has_file:
-        fileinfo = logging.FileHandler(log_file)
-        fileinfo.setLevel(logging.INFO)
-        formatter = logging.Formatter("%(asctime)s - %(levelname)s: %(message)s")
-        fileinfo.setFormatter(formatter)
-        logger.addHandler(fileinfo)
-
-    # add StreamHandler only if none present
-    if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
-        controlshow = logging.StreamHandler()
-        controlshow.setLevel(logging.INFO)
-        controlshow.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s: %(message)s"))
-        logger.addHandler(controlshow)
+    logger.addHandler(fileinfo)
+    logger.addHandler(controlshow)
 
     return logger
 
@@ -132,6 +111,21 @@ def render_set(
     # 记录总渲染开始时间
     total_render_start = time.time()
     original_l2ws = gt_dynamic_model.l2ws
+
+    raydrop_unet_available = False
+    ckpt_path = os.path.join(dataset.model_path, "ckpt", "refine.pth")
+    if not os.path.exists(ckpt_path):
+        logger.error(f"UNet checkpoint 不存在: {ckpt_path}")
+    else:
+        raydrop_unet_available = True
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # UNet输入通道从3→1
+        unet = UNet(in_channels=1, out_channels=1)
+        state = torch.load(ckpt_path, map_location="cpu")
+        unet.load_state_dict(state)
+        unet.to(device)
+        unet.eval()
+
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
 
         render_timestamp = view.image_name
@@ -189,7 +183,12 @@ def render_set(
         gt_intensity = (gt[1:2, ...] * ray_drop).detach().cpu().numpy()
         gt_depth = (gt[2:3, ...] * ray_drop).detach().cpu().numpy()
         render_raydrop = rendering[1:2, ...]
-        render_raydrop_mask = torch.where(render_raydrop > 0.5, 1, 0)
+
+        if raydrop_unet_available:
+            raydrop_refine = unet(render_raydrop)
+            render_raydrop_mask = torch.where(raydrop_refine > 0.5, 1, 0)
+        else:
+            render_raydrop_mask = torch.where(render_raydrop > 0.5, 1, 0)
 
         render_intensity = render_intensity * render_raydrop_mask
         depth = depth * render_raydrop_mask
@@ -585,6 +584,7 @@ if __name__ == "__main__":
     parser.add_argument("--block_size", type=int, default=50)
     args = parser.parse_args(sys.argv[1:])
     out_dir = getattr(args, "output_path", None) or "."
+    os.makedirs(out_dir, exist_ok=True)
     logger = get_logger(out_dir)
     # 解析 YAML 编辑配置并映射到 args（如果提供 --edit_yaml）
     parse_and_apply_edit_yaml(args, getattr(args, "edit_yaml", None))
