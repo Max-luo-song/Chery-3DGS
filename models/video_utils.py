@@ -830,9 +830,9 @@ def render(
 
             # ------------- rgb ------------- #
             rgb = results["rgb"]
-            rgbs.append(get_numpy(rgb))
             ### NOTE(gls): 增加ego_mask原始
             rgb = rgb * (1 - image_infos["egocar_masks"][..., None]) + image_infos["pixels"] * image_infos["egocar_masks"][..., None]
+            rgbs.append(get_numpy(rgb))
             if "pixels" in image_infos:
                 gt_rgbs.append(get_numpy(image_infos["pixels"]))
 
