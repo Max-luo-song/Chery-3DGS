@@ -168,11 +168,11 @@ class MultiTrainer(BasicTrainer):
                     road_only = True
                 )
                 if DEBUG_PCD:
-                #     export_points_to_ply(
-                #         processed_init_wo_road_pts["pts"],
-                #         processed_init_wo_road_pts["colors"],
-                #         save_path=os.path.join(DEBUG_OUTPUT_DIR, "wo_road_lidar_pts.ply"),
-                #     )
+                    export_points_to_ply(
+                        processed_init_wo_road_pts["pts"],
+                        processed_init_wo_road_pts["colors"],
+                        save_path=os.path.join(DEBUG_OUTPUT_DIR, "wo_road_lidar_pts.ply"),
+                    )
                     export_points_to_ply(
                         processed_init_road_pts["pts"],
                         processed_init_road_pts["colors"],
@@ -318,6 +318,9 @@ class MultiTrainer(BasicTrainer):
         )
 
         gs.means.requires_grad_(True) # 强制设为 True,这是注册钩子的前提条件
+        gs.quats.requires_grad_(True)
+        gs.scales.requires_grad_(True)
+        gs.opacities.requires_grad_(True)
         # 定义一个钩子函数
         def zero_grad_for_road(grad): # grad (N, 3)
             # freeze_mask 是 True 的位置是路面，我们想把这些位置的梯度清零
@@ -327,11 +330,21 @@ class MultiTrainer(BasicTrainer):
             mask_float = inverted_mask.float()[..., None] # mask_float (N, 1)
             return grad * mask_float
 
-        # 在 gs._means 上注册这个钩子
-        # 同样，用 hasattr 防止重复注册
-        if not hasattr(gs.means, 'road_freeze_hook_registered'):
-            handle = gs.means.register_hook(zero_grad_for_road)
-            gs.road_freeze_hook_registered = True
+        params_to_register = {
+            'means': gs.means,
+            'quats': gs.quats,
+            'scales': gs.scales,
+            'opacities': gs.opacities
+        }
+
+        for name, param in params_to_register.items():
+            # 检查是否已经注册过（通过在 gs 对象上打标记）
+            attr_name = f'road_freeze_hook_registered_{name}'
+            if not hasattr(gs, attr_name):
+                param.register_hook(zero_grad_for_road)
+                # 标记为已注册
+                setattr(gs, attr_name, True)
+
         '''
             outputs = {
                 "rgb_gaussians": rgb,

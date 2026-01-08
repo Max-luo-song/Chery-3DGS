@@ -897,47 +897,73 @@ class DrivingDataset(SceneDataset):
                     # 找到在本帧中被识别为路面点的原始点云索引
                     road_point_indices = point_indices[is_on_road_for_frame_wo_ego.bool()]
                     on_road_mask[road_point_indices] = True
-
-        # 应用 mask，去除路面点
-        final_mask = ~on_road_mask
+        
         final_road_mask = on_road_mask
-        filtered_pts = seed_pts[final_mask]
-        filtered_colors = seed_colors[final_mask] if seed_colors is not None else None
-        filtered_time = seed_time[final_mask] if seed_time is not None else None
-        if not road_only:   ### 目的是什么来着？
-            # 1. 设置 Z 轴过滤的阈值
-            # 如果你想去掉“地下”的点（比如噪音），通常设为 0 或 -0.5
-            z_threshold = 0.0  
-            
-            # 2. 计算过滤掩码
-            # 这里的逻辑是：保留 z_threshold 以上的点 (去除小于阈值的)
-            # 如果你的分界线很明显是负值（比如路面在 -1.5m），直接把上面的 0.0 改成 -1.5 即可
-            z_filter_mask = filtered_pts[:, 2] > z_threshold
-            
-            # 3. 应用掩码
-            # 统计一下去掉了多少点（可选，用于调试）
+        # --- 新增逻辑：根据 Z 轴将路面点分为“真路面”和“高处环境” ---
+        
+        # 1. 提取视觉识别出的所有路面点
+        visual_road_pts = seed_pts[final_road_mask]
+        
+        # 2. 判断 Z 轴高度：保留小于 0.1 的
+        # 注意：这里假设 Z 轴是世界坐标系下的高度
+        z_threshold = 0.1
+        is_low_road = visual_road_pts[:, 2] < z_threshold
+        
+        # 3. 构建最终的“纯路面”掩码 (用于返回路面点云)
+        # 我们需要找到 visual_road_pts 中满足 z < 0.1 的点在原始 seed_pts 中的索引
+        # 首先获取 visual_road_pts 在原始数组中的索引
+        visual_road_indices = torch.where(final_road_mask)[0]
+        
+        # 筛选出低处的索引
+        real_road_indices = visual_road_indices[is_low_road]
+        
+         # 高处路面点索引 (Z >= 0.1) -> 这里显式使用了该变量
+        high_lying_indices = visual_road_indices[~is_low_road]
+
+        # 4. 准备环境点云
+        # 原始环境点索引 (不在视觉路面上的点)
+        non_road_indices = torch.where(~on_road_mask)[0]
+
+        # 【关键步骤】合并索引：环境点 = 原始环境点 + 高处路面误检点
+        final_env_indices = torch.cat([non_road_indices, high_lying_indices])
+
+        # --- 处理环境点云 (去除地下噪音) ---
+        # 先提取坐标用于判断
+        env_pts_candidate = seed_pts[final_env_indices]
+
+        if not road_only:
+            # 去除地下点 (Z < 0)
+            z_filter_mask = env_pts_candidate[:, 2] > 0.0
             num_removed = (~z_filter_mask).sum().item()
             if num_removed > 0:
-                print(f"Removed {num_removed} points below Z threshold {z_threshold}")
+                print(f"Removed {num_removed} underground noise points.")
+            
+            # 获取最终有效的环境点索引
+            valid_env_indices = final_env_indices[z_filter_mask]
+        else:
+            # 如果 road_only=True，暂不额外过滤
+            valid_env_indices = final_env_indices
 
-            filtered_pts = filtered_pts[z_filter_mask]
-            if filtered_colors is not None:
-                filtered_colors = filtered_colors[z_filter_mask]
-            if filtered_time is not None:
-                filtered_time = filtered_time[z_filter_mask]
-        filtered_road_pts = seed_pts[final_road_mask]
-        filtered_road_colors = seed_colors[final_road_mask] if seed_colors is not None else None
-        filtered_road_time = seed_time[final_road_mask] if seed_time is not None else None   
+        # 赋值环境点数据
+        filtered_pts = seed_pts[valid_env_indices]
+        filtered_colors = seed_colors[valid_env_indices] if seed_colors is not None else None
+        filtered_time = seed_time[valid_env_indices] if seed_time is not None else None
+
+        # --- 处理路面点云 (采样) ---
+        filtered_road_pts = seed_pts[real_road_indices]
+        filtered_road_colors = seed_colors[real_road_indices] if seed_colors is not None else None
+        filtered_road_time = seed_time[real_road_indices] if seed_time is not None else None   
 
         # 对路面点云进行随机采样
-        num_samples = 600000
+        num_samples = 400000
         if num_samples > filtered_road_pts.shape[0]:
             num_samples = filtered_road_pts.shape[0]
         sampled_idx = torch.randperm(filtered_road_pts.shape[0])[:num_samples]
 
         filtered_road_pts = filtered_road_pts[sampled_idx]
         filtered_road_colors = filtered_road_colors[sampled_idx] if filtered_road_colors is not None else None
-        filtered_road_time = filtered_road_time[sampled_idx] if filtered_road_time is not None else None
+        filtered_road_time = filtered_road_time[sampled_idx] if filtered_road_time is not None else None   
+
         return {"pts": filtered_pts, "colors": filtered_colors, "time": filtered_time}, {"pts": filtered_road_pts, "colors": filtered_road_colors, "time": filtered_road_time}
 
     def check_pts_visibility(self, pts_xyz):

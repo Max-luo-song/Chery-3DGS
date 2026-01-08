@@ -286,7 +286,7 @@ class RoadLoss(nn.Module):
     ):
         road_loss = self._compute_road_loss(pred_road_rgb, gt_road_rgb)
         # 计算朝向约束损失（这会通过梯度影响road_quats）
-        orientation_loss = self.road_orientation_loss(road_quats, road_scales)
-        total_loss = (1 - self.lambda_dssim) * road_loss + \
-                    self.lambda_dssim * orientation_loss
-        return total_loss
+        # orientation_loss = self.road_orientation_loss(road_quats, road_scales)
+        # total_loss = (1 - self.lambda_dssim) * road_loss + \
+        #             self.lambda_dssim * orientation_loss
+        return road_loss

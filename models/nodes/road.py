@@ -83,14 +83,25 @@ class RoadNodes(nn.Module):
         distances = torch.from_numpy(distances)
         # find the average of the three nearest neighbors for each point and use that as the scale
         avg_dist = distances.mean(dim=-1, keepdim=True).to(self.device)
+        # --- 修改 1: 限制尺度为 (dist, dist, 0) ---
+        # 无论 gaussian_2d 还是 3d，强制第三维为 0 (使用 log(0) 策略)
+        # 注意：torch.log(0) 是 -inf，在训练时梯度会很大，通常做法是设为一个极小值
+        epsilon = 1e-5
+        
+        # 构造基础尺度: (dist, dist, epsilon) -> 对应 x, y, z
+        base_scale = torch.cat([avg_dist, avg_dist, torch.ones_like(avg_dist) * epsilon], dim=-1)
         if self.ball_gaussians:
-            self._scales = Parameter(torch.log(avg_dist.repeat(1, 1)))
+            self._scales = Parameter(torch.log(base_scale))
         else:
             if self.gaussian_2d:
                 self._scales = Parameter(torch.log(avg_dist.repeat(1, 2)))
             else:
-                self._scales = Parameter(torch.log(avg_dist.repeat(1, 3)))
-        self._quats = Parameter(random_quat_tensor(self.num_points).to(self.device))
+                self._scales = Parameter(torch.log(base_scale))
+
+        unit_quats = torch.zeros((self.num_points, 4), dtype=torch.float, device=self.device)
+        unit_quats[:, 0] = 1.0 # w = 1, x=0, y=0, z=0
+        self._quats = Parameter(unit_quats)
+
         dim_sh = num_sh_bases(self.sh_degree)
 
         fused_color = RGB2SH(init_colors) # float range [0, 1] 
