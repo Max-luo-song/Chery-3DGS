@@ -356,8 +356,9 @@ class DrivingDataset(SceneDataset):
                         cur_node_type == "DeformableNodes"
                     ), "Only exclude SMPL for DeformableNodes"
                     true_id = self.pixel_source.instances_true_id[ins_id].item()
-                    if true_id in self.pixel_source.smpl_human_all.keys():
-                        continue
+                    if hasattr(self.pixel_source, 'smpl_human_all') and self.pixel_source.smpl_human_all is not None:
+                        if true_id in self.pixel_source.smpl_human_all.keys():
+                            continue
 
                 if ins_id not in instance_dict:
                     instance_dict[ins_id] = {
@@ -400,6 +401,7 @@ class DrivingDataset(SceneDataset):
                 # instance_dict[ins_id]["flows"].append(valid_flows)
 
         logger.info(f"Aggregating lidar points across {self.frame_num} frames")
+        min_points_threshold = 100  # 如果点云数量少于这个值，使用 bounding box 生成点云
         for ins_id in instance_dict:
             instance_dict[ins_id]["pts"] = torch.cat(
                 instance_dict[ins_id]["pts"], dim=0
@@ -409,6 +411,44 @@ class DrivingDataset(SceneDataset):
             )
             # instance_dict[ins_id]["flows"] = torch.cat(instance_dict[ins_id]["flows"], dim=0)
             instance_dict[ins_id]["num_pts"] = instance_dict[ins_id]["pts"].shape[0]
+            
+            # 如果点云数量太少（可能因为只有前视 LiDAR，后视车辆没有点云），使用 bounding box 生成点云
+            if instance_dict[ins_id]["num_pts"] < min_points_threshold:
+                logger.warning(
+                    f"Instance {ins_id} has only {instance_dict[ins_id]['num_pts']} lidar points, "
+                    f"generating points from bounding box"
+                )
+                # 获取该实例的 bounding box 尺寸
+                o_size = self.pixel_source.instances_size[ins_id]
+                # 在 bounding box 内均匀采样点云
+                num_generated_pts = max(instance_max_pts // 2, min_points_threshold)
+                generated_pts = torch.rand(num_generated_pts, 3, device=self.device) - 0.5
+                generated_pts = generated_pts * o_size.unsqueeze(0)  # 缩放到 bounding box 尺寸
+                # 使用随机颜色或平均颜色
+                if instance_dict[ins_id]["num_pts"] > 0:
+                    avg_color = instance_dict[ins_id]["colors"].mean(dim=0)
+                    generated_colors = avg_color.unsqueeze(0).repeat(num_generated_pts, 1)
+                else:
+                    generated_colors = torch.rand(num_generated_pts, 3, device=self.device)
+                
+                # 合并原始点云和生成的点云
+                if instance_dict[ins_id]["num_pts"] > 0:
+                    instance_dict[ins_id]["pts"] = torch.cat([
+                        instance_dict[ins_id]["pts"], generated_pts
+                    ], dim=0)
+                    instance_dict[ins_id]["colors"] = torch.cat([
+                        instance_dict[ins_id]["colors"], generated_colors
+                    ], dim=0)
+                else:
+                    instance_dict[ins_id]["pts"] = generated_pts
+                    instance_dict[ins_id]["colors"] = generated_colors
+                instance_dict[ins_id]["num_pts"] = instance_dict[ins_id]["pts"].shape[0]
+                logger.info(
+                    f"Instance {ins_id} now has {instance_dict[ins_id]['num_pts']} points "
+                    f"({instance_dict[ins_id]['num_pts'] - num_generated_pts} from lidar, "
+                    f"{num_generated_pts} generated from bbox)"
+                )
+            
             if instance_dict[ins_id]["num_pts"] > instance_max_pts:
                 # randomly sample points
                 sampled_idx = torch.randperm(instance_dict[ins_id]["num_pts"])[
@@ -486,6 +526,8 @@ class DrivingDataset(SceneDataset):
 
         for ins_id in range(self.instance_num):
             true_id = self.pixel_source.instances_true_id[ins_id].item()
+            if not hasattr(self.pixel_source, 'smpl_human_all') or self.pixel_source.smpl_human_all is None:
+                continue
             if true_id in self.pixel_source.smpl_human_all.keys():
                 if self.pixel_source.smpl_human_all[true_id]["frame_valid"].sum() == 0:
                     continue
