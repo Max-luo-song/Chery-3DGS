@@ -67,14 +67,21 @@ class TCPServer:
 
                 print(f"[Socket] Received pose from {addr}: "
                       f"x={pose_msg.x}, y={pose_msg.y}, z={pose_msg.z}, yaw={pose_msg.yaw}, roll={pose_msg.roll}, pitch={pose_msg.pitch}, timestamp={pose_msg.timestamp}, camera_id={pose_msg.camera_id}")
-                
+                print("pose_msg", pose_msg)
                 start_time = time.time()
                 # render cam images
-                output = inference.cam_renderer_manager.render_from_pose(pose_msg)
+                try:                
+                    output = inference.cam_renderer_manager.render_from_pose(pose_msg)
+                except Exception as e:
+                    traceback.print_exc()
+                    output = None
+                # output = {0: "realtime_output/cam0_1766045546.420.png"}
+                print("output:", output)
+                # time.sleep(5)
                 end_time_model = time.time()
                 print(f"render_from_pose模型执行时间: {end_time_model - start_time:.4f} 秒")
 
-                # render lidar points, lidar还没调通，暂时注释
+                # render lidar points (lidar还没调通，暂时注释)
                 # lidar_output = inference.lidar_renderer_manager.render_from_pose(pose_msg)
                 # lidar_render_result_path = os.path.join(lidar_output, "renders")
                 # lidar_txt_files = glob.glob(os.path.join(lidar_render_result_path, "*.txt"))
@@ -102,7 +109,42 @@ class TCPServer:
 
                             conn.sendall(struct.pack('>I', len(data_bytes)) + data_bytes)  
                             #conn.sendall(data_bytes)
+                        """
+                        items = []
 
+                        for cam_id, image_path in output.items():
+                            with open(image_path, 'rb') as f:
+                                image_data = f.read()
+                            name = str(cam_id)
+                            items.append((1, name, image_data))
+
+                        # for txt_file in lidar_txt_files:
+                        #     with open(txt_file, 'rb') as f:
+                        #         txt_data = f.read()
+                        #     name = os.path.basename(txt_file)
+                        #     items.append((2, name, txt_data))
+
+                        # 先发送 item 数量
+                        conn.sendall(struct.pack('>I', len(items)))
+
+                        # 发送每一项：1字节type + 4字节name_len + name + 4字节data_len + data
+                        for typ, name, data_bytes in items:
+                            try:
+                                conn.sendall(bytes([typ]))
+                                name_b = name.encode('utf-8')
+                                conn.sendall(struct.pack('>I', len(name_b)))
+                                conn.sendall(name_b)
+                                conn.sendall(struct.pack('>I', len(data_bytes)))
+                                conn.sendall(data_bytes)
+                            except (ConnectionResetError, BrokenPipeError) as e:
+                                print(f"发送时连接被重置或断开: {e}")
+                                break
+
+                            if typ == 1:
+                                print(f"图片发送成功: {name}")
+                            else:
+                                print(f"Lidar数据发送成功: {name}")
+                            """
                     else:
                         response_proto = Pose_pb2.MainCarInfo()
                         response_proto.timestamp = pose_msg.timestamp
@@ -120,6 +162,16 @@ class TCPServer:
                 except Exception as e:
                     print(f"发送失败: {e}")
                     traceback.print_exc()
+                
+                """
+                # 发送结束状态（长度前缀 + 内容）
+                try:
+                    status = b"OK"
+                    conn.sendall(struct.pack('>I', len(status)))
+                    conn.sendall(status)
+                except Exception:
+                    pass
+                """
 
         except Exception as e:
             print(f"[Socket] Error with {addr}: {e}")
@@ -155,14 +207,14 @@ if __name__ == "__main__":
     # eval
     parser.add_argument(
         "--resume_from",
-        default="/home/data/qcraft_20251025_163358_QCOYSD504206_1595_1610/checkpoint_final.pth",
+        default="/nas_thoru/oldbak/zyj/workspace/scene_reconstruction/output/qcraft_20251025_163358_QCOYSD504206_1595_1610/20260104_lidar+cam0_1_2_3_5_6_7_9_10_11_12depth_loss/checkpoint_final.pth",
         help="path to checkpoint to resume from",
         type=str,
         required=False,
     )
     parser.add_argument(
         "--source_path",
-        default="/home/data/20251025_163358_QCOYSD504QCRAFT_CAMERA_DICT206_1595_1610",
+        default="/nas_thoru/scenario_output/zhangyingjun/processed/training/20251025_163358_QCOYSD504206_1595_1610",
         help="data source path",
         type=str,
         required=False,

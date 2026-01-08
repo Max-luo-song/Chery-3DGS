@@ -1336,6 +1336,73 @@ class ScenePixelSource(abc.ABC):
 
         return render_data
 
+    def _build_online_render_data(
+        self,
+        dataset_type: str,
+        traj: torch.Tensor,
+        camera_data: CameraData = None,
+        frame_id: int = None,   #new
+    ) -> list:
+        intrinsics = camera_data.intrinsics[0]
+        kb_coeffs = camera_data.distortions[0]
+        H, W = camera_data.HEIGHT, camera_data.WIDTH
+
+        original_frame_count = self.num_frames
+
+        # 显式时间逻辑
+        if frame_id is not None:
+            normed_time = frame_id / (original_frame_count - 1)
+            frame_idx = frame_id
+        else:
+            # fallback：老逻辑
+            normed_time = 0.0
+            frame_idx = 0
+
+        render_data = []
+
+        for i in range(len(traj)):
+            c2w = traj[i]
+
+            x, y = torch.meshgrid(
+                torch.arange(W), torch.arange(H), indexing="xy"
+            )
+            x, y = x.to(self.device), y.to(self.device)
+
+            origins, viewdirs, direction_norm = get_rays(
+                x.flatten(), y.flatten(), c2w, intrinsics
+            )
+
+            origins = origins.reshape(H, W, 3)
+            viewdirs = viewdirs.reshape(H, W, 3)
+            direction_norm = direction_norm.reshape(H, W, 1)
+
+            cam_infos = {
+                "camera_to_world": c2w,
+                "intrinsics": intrinsics,
+                "kb_coeffs": kb_coeffs,
+                "height": torch.tensor([H], device=self.device),
+                "width": torch.tensor([W], device=self.device),
+            }
+
+            image_infos = {
+                "origins": origins,
+                "viewdirs": viewdirs,
+                "direction_norm": direction_norm,
+                "img_idx": torch.full((H, W), frame_idx, device=self.device),
+                "normed_time": torch.tensor(
+                    [normed_time], device=self.device
+                ),
+                "pixel_coords": torch.stack(
+                    [y.float() / H, x.float() / W], dim=-1
+                ),
+            }
+
+            render_data.append(
+                {"cam_infos": cam_infos, "image_infos": image_infos}
+            )
+
+        return render_data
+
     def prepare_novel_view_render_data(
         self,
         dataset_type: str,
@@ -1359,3 +1426,27 @@ class ScenePixelSource(abc.ABC):
             camera_data=target_cam_data,
         )
         return render_data
+
+    def prepare_online_render_data(
+        self,
+        dataset_type: str,
+        ref_cam_novel_traj: torch.Tensor,
+        ref_cam_data: CameraData,
+        target_cam_data: CameraData,
+        frame_id: int = None,
+    ) -> list:
+        T_cam0_to_world_start = ref_cam_data.cam_to_worlds[0]
+        T_camX_to_world_start = target_cam_data.cam_to_worlds[0]
+        T_camX_to_cam0 = torch.linalg.inv(T_cam0_to_world_start) @ T_camX_to_world_start
+
+        camX_traj = []
+        for T_cam0_to_world in ref_cam_novel_traj:
+            T_camX_to_world = T_cam0_to_world @ T_camX_to_cam0
+            camX_traj.append(T_camX_to_world)
+
+        return self._build_online_render_data(
+            dataset_type=dataset_type,
+            traj=camX_traj,
+            camera_data=target_cam_data,
+            frame_id=frame_id
+        )

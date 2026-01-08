@@ -241,6 +241,33 @@ class DrivingDatasetNovelView(SceneDataset):
             target_cam_data=target_cam_data,
         )
 
+    def prepare_online_render_data(
+        self,
+        traj: torch.Tensor,
+        ref_cam_data: CameraData,
+        target_cam_data: CameraData,
+        frame_id: int,
+    ) -> list:
+        """
+        Prepare all necessary elements for online rendering.
+
+        Args:
+            traj (torch.Tensor): Novel view trajectory, shape (N, 4, 4)
+
+        Returns:
+            list: List of dicts, each containing elements required for rendering a single frame:
+                - cam_infos: Camera information (extrinsics, intrinsics, image dimensions)
+                - image_infos: Image-related information (indices, normalized time, viewdirs, etc.)
+        """
+        # Call the PixelSource's method
+        return self.pixel_source.prepare_online_render_data(
+            dataset_type=self.type,
+            ref_cam_novel_traj=traj,
+            ref_cam_data=ref_cam_data,
+            target_cam_data=target_cam_data,
+            frame_id=frame_id,
+        )
+    
     def load_specified_cameras(
         self, cam_ids: List[int], downscales: List[float]
     ) -> Dict[int, CameraData]:
