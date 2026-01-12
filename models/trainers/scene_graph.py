@@ -147,24 +147,24 @@ class MultiTrainer(BasicTrainer):
                 #         save_path=os.path.join(DEBUG_OUTPUT_DIR, "random_lidar_samples.ply"),
                 #     )
 
-                # processed_pts_wo_box_road = dataset.project_aggregated_lidar_ptsv1(
+                # processed_pts_wo_box = dataset.project_aggregated_lidar_ptsv1(
                 #     delete_out_of_view_points=True
                 # )
-                processed_pts_wo_box_road = dataset.project_aggregated_lidar_ptsv2(
+                processed_pts_wo_box = dataset.project_aggregated_lidar_ptsv2(
                     delete_out_of_view_points=True
                 )
                 # if DEBUG_PCD:
                 #     export_points_to_ply(
-                #         processed_pts_wo_box_road["pts"],
-                #         processed_pts_wo_box_road["colors"],
+                #         processed_pts_wo_box["pts"],
+                #         processed_pts_wo_box["colors"],
                 #         save_path=os.path.join(DEBUG_OUTPUT_DIR, "all_wo_box.ply"),
                 #     )        
                 # import time
                 # print("time is sleeping")
                 # time.sleep(1000) 
                 processed_init_wo_road_pts, processed_init_road_pts = dataset.filter_pts_in_road( # 限制road点云数
-                    seed_pts=processed_pts_wo_box_road["pts"],
-                    seed_colors=processed_pts_wo_box_road["colors"],
+                    seed_pts=processed_pts_wo_box["pts"],
+                    seed_colors=processed_pts_wo_box["colors"],
                     road_only = True
                 )
                 if DEBUG_PCD:
@@ -211,17 +211,17 @@ class MultiTrainer(BasicTrainer):
                     road_only = False
                 )
 
-                if DEBUG_PCD:
+                # if DEBUG_PCD:
                 #     export_points_to_ply(
                 #         processed_init_pts["pts"],
                 #         processed_init_pts["colors"],
                 #         save_path=os.path.join(DEBUG_OUTPUT_DIR, "exclude_box.ply"),
                 #     )
-                    export_points_to_ply(
-                        processed_env_init_pts["pts"],
-                        processed_env_init_pts["colors"],
-                        save_path=os.path.join(DEBUG_OUTPUT_DIR, "env_lidar_pts_plus.ply"),
-                    )
+                    # export_points_to_ply(
+                    #     processed_env_init_pts["pts"],
+                    #     processed_env_init_pts["colors"],
+                    #     save_path=os.path.join(DEBUG_OUTPUT_DIR, "env_lidar_pts_plus.ply"),
+                    # )
                 model.create_from_pcd(
                     init_means=processed_env_init_pts["pts"], init_colors=processed_env_init_pts["colors"]
                 )

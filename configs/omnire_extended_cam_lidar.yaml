@@ -69,6 +69,7 @@ trainer:
     stop_screen_size_at: 5000     # stop culling/splitting at this step WRT screen size of gaussians
     stop_split_at: 20000          # stop splitting at this step
     sh_degree: 3                  # sh degree for gaussians
+    road_sh_degree: 1
 
 # ------------- Model ------------ #
 model:

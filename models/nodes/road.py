@@ -74,22 +74,30 @@ class RoadNodes(nn.Module):
         
     @property
     def sh_degree(self):
-        return self.ctrl_cfg.sh_degree
+        return self.ctrl_cfg.road_sh_degree
 
     def create_from_pcd(self, init_means: torch.Tensor, init_colors: torch.Tensor) -> None:
         self._means = Parameter(init_means)
         
-        distances, _ = k_nearest_sklearn(self._means.data, 3)
-        distances = torch.from_numpy(distances)
-        # find the average of the three nearest neighbors for each point and use that as the scale
-        avg_dist = distances.mean(dim=-1, keepdim=True).to(self.device)
-        # --- 修改 1: 限制尺度为 (dist, dist, 0) ---
-        # 无论 gaussian_2d 还是 3d，强制第三维为 0 (使用 log(0) 策略)
-        # 注意：torch.log(0) 是 -inf，在训练时梯度会很大，通常做法是设为一个极小值
-        epsilon = 1e-5
-        
-        # 构造基础尺度: (dist, dist, epsilon) -> 对应 x, y, z
-        base_scale = torch.cat([avg_dist, avg_dist, torch.ones_like(avg_dist) * epsilon], dim=-1)
+        ### NOTE(gls)：尺度初始化方式——距离平均值((dist, dist, epsilon))
+        # distances, _ = k_nearest_sklearn(self._means.data, 3)
+        # distances = torch.from_numpy(distances)
+        # # find the average of the three nearest neighbors for each point and use that as the scale
+        # avg_dist = distances.mean(dim=-1, keepdim=True).to(self.device)
+        # # --- 修改 1: 限制尺度为 (dist, dist, 0) ---
+        # epsilon = 1e-5
+        # # 构造基础尺度: (dist, dist, epsilon) -> 对应 x, y, z
+        # base_scale = torch.cat([avg_dist, avg_dist, torch.ones_like(avg_dist) * epsilon], dim=-1)
+
+        # --- 修改: 使用固定值 0.5 ---
+        fixed_value = 0.05 * 1.5
+        # 创建一个全为 0.5 的张量，形状，并确保它在正确的设备上
+        # self.num_points 通常可以从 init_means.shape[0] 获取
+        num_points = init_means.shape[0]
+        fixed_scale = torch.full((num_points, 1), fixed_value, device=self.device)
+        epsilon = 0.005
+        base_scale = torch.cat([fixed_scale, fixed_scale, torch.ones_like(fixed_scale) * epsilon], dim=-1)
+
         if self.ball_gaussians:
             self._scales = Parameter(torch.log(base_scale))
         else:

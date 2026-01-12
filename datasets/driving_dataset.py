@@ -17,12 +17,12 @@ from utils.visualization import get_layout
 from utils.geometry import transform_points
 from utils.camera import get_interp_novel_trajectories
 from utils.misc import export_points_to_ply, import_str
-
+import open3d as o3d
 logger = logging.getLogger()
 
 DEBUG_PCD = False
 if DEBUG_PCD:
-    DEBUG_OUTPUT_DIR = "debug"
+    DEBUG_OUTPUT_DIR = "debug2"
     os.makedirs(DEBUG_OUTPUT_DIR, exist_ok=True)
 
 NAME_TO_NODE = {
@@ -887,7 +887,7 @@ class DrivingDataset(SceneDataset):
                     # 找到这些有效点在原始点云中的索引
                     point_indices = torch.where(final_valid_mask)[0]
                     
-                    # 在 road_mask 中查找这些像素点
+                    # 在road_mask的点去掉ego_mask部分
                     is_on_road_for_frame = current_road_mask[valid_pixels[:, 1], valid_pixels[:, 0]]
                     current_ego_mask = (1.0 - current_ego_mask).float()
                     ego_mask_at_valid_pixels = current_ego_mask[valid_pixels[:, 1], valid_pixels[:, 0]]
@@ -897,16 +897,22 @@ class DrivingDataset(SceneDataset):
                     # 找到在本帧中被识别为路面点的原始点云索引
                     road_point_indices = point_indices[is_on_road_for_frame_wo_ego.bool()]
                     on_road_mask[road_point_indices] = True
-        
+        ### 逻辑：对于每个相机每一帧，找到相机视线+路面mask+去除ego_mask下所有点（存在冗余：路面分割错误识别
+
         final_road_mask = on_road_mask
         # --- 新增逻辑：根据 Z 轴将路面点分为“真路面”和“高处环境” ---
         
+        ### TODO(gls)：可视化地面点云
+        before_sample_road_pts = seed_pts[final_road_mask]
+        before_sample_road_colors = seed_colors[final_road_mask] if seed_colors is not None else None
+        before_sample_road_time = seed_time[final_road_mask] if seed_time is not None else None
+
         # 1. 提取视觉识别出的所有路面点
         visual_road_pts = seed_pts[final_road_mask]
         
         # 2. 判断 Z 轴高度：保留小于 0.1 的
         # 注意：这里假设 Z 轴是世界坐标系下的高度
-        z_threshold = 0.1
+        z_threshold = -1.3  # 可以根据需要调整阈值
         is_low_road = visual_road_pts[:, 2] < z_threshold
         
         # 3. 构建最终的“纯路面”掩码 (用于返回路面点云)
@@ -952,10 +958,57 @@ class DrivingDataset(SceneDataset):
         # --- 处理路面点云 (采样) ---
         filtered_road_pts = seed_pts[real_road_indices]
         filtered_road_colors = seed_colors[real_road_indices] if seed_colors is not None else None
-        filtered_road_time = seed_time[real_road_indices] if seed_time is not None else None   
+        filtered_road_time = seed_time[real_road_indices] if seed_time is not None else None 
 
+       # 1. 准备数据：确保传入 Open3D 的是 float64 的 numpy array
+        # 使用辅助函数处理可能的 Tensor 输入
+        # def to_numpy_float64(data):
+        #     if isinstance(data, torch.Tensor):
+        #         return data.cpu().numpy().astype(np.float64)
+        #     elif isinstance(data, np.ndarray):
+        #         return data.astype(np.float64)
+        #     return data
+
+        # # 准备点云数据
+        # pts_np = to_numpy_float64(filtered_road_pts)
+
+        # # 构建 Open3D 点云对象
+        # pcd = o3d.geometry.PointCloud()
+        # pcd.points = o3d.utility.Vector3dVector(pts_np)
+
+        # min_bound = pcd.get_min_bound()
+        # max_bound = pcd.get_max_bound()
+        # # 2. 执行体素下采样并追踪索引
+        # downsampled_pcd, voxel_indices, _ = pcd.voxel_down_sample_and_trace(
+        #     voxel_size=0.05, 
+        #     min_bound=min_bound, 
+        #     max_bound=max_bound, 
+        #     approximate_class=False
+        # )
+
+        # sampled_indices = voxel_indices.flatten()
+        # 获取保留点的索引
+        # sampled_indices = [indices[0] for indices in voxel_indices if len(indices) > 0]
+        # sampled_indices = np.array(sampled_indices)
+
+        # 3. 更新变量
+        # 对 Tensor/Numpy 进行索引切片，并保持原有类型（如果是 Tensor 则切片后仍是 Tensor）
+
+        # 更新点云
+        # filtered_road_pts = filtered_road_pts[sampled_indices]
+
+        # # 更新颜色
+        # if filtered_road_colors is not None:
+        #     filtered_road_colors = filtered_road_colors[sampled_indices]
+
+        # # 更新时间
+        # if filtered_road_time is not None:
+        #     filtered_road_time = filtered_road_time[sampled_indices]
+  
+        # print("体素化时候数值", filtered_road_pts.shape[0])
         # 对路面点云进行随机采样
-        num_samples = 400000
+        num_samples = 800000
+
         if num_samples > filtered_road_pts.shape[0]:
             num_samples = filtered_road_pts.shape[0]
         sampled_idx = torch.randperm(filtered_road_pts.shape[0])[:num_samples]
@@ -963,6 +1016,18 @@ class DrivingDataset(SceneDataset):
         filtered_road_pts = filtered_road_pts[sampled_idx]
         filtered_road_colors = filtered_road_colors[sampled_idx] if filtered_road_colors is not None else None
         filtered_road_time = filtered_road_time[sampled_idx] if filtered_road_time is not None else None   
+
+        before_sample_road_pts = before_sample_road_pts[sampled_idx]
+        before_sample_road_colors = before_sample_road_colors[sampled_idx]
+        # before_sample_road_time = before_sample_road_time[sampled_idx]
+        
+        if DEBUG_PCD:
+            export_points_to_ply(
+                before_sample_road_pts,
+                before_sample_road_colors,
+                save_path=os.path.join(DEBUG_OUTPUT_DIR, "before_low_road.ply"),
+            )
+        
 
         return {"pts": filtered_pts, "colors": filtered_colors, "time": filtered_time}, {"pts": filtered_road_pts, "colors": filtered_road_colors, "time": filtered_road_time}
 
