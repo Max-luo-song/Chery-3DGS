@@ -63,7 +63,8 @@ import time
 import pdb
 
 cpu_count = os.cpu_count()
-torch.set_num_threads(cpu_count)
+# Reduce PyTorch intra-op threads to avoid saturating CPU and improve GPU throughput
+torch.set_num_threads(max(1, cpu_count // 2))
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -647,7 +648,7 @@ def train_composite_report(
         points_meter = PointsMeter(
             scale=1,
             intrinsics=None,
-            beam_inclinations=scene_view.beam_inclinations.detach().cpu().numpy(),
+            beam_inclinations=scene_view.beam_inclinations.detach(),
         )
 
         points_meter.update(depth, gt_depth, Filter=False)
