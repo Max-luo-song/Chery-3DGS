@@ -92,6 +92,9 @@ class ModelParams(ParamGroup):
         self.add_cov_dist = True
         self.add_color_dist = True
 
+        # UNet Model Parameters
+        self.unet_iterations = 1500
+
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

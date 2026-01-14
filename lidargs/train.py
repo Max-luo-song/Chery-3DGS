@@ -304,9 +304,9 @@ def training(
         gt_intensity = gt_image[1:2, ...] * ray_drop * gt_objmask
         gt_depth = gt_image[2:3, ...] * ray_drop * gt_objmask
         render_intensity = image[0:1, ...]
+        render_raydrop = image[1:2, ...]
 
-        if True:
-            render_raydrop = image[1:2, ...]
+        if False:
             render_raydrop_mask = torch.where(render_raydrop > 0.5, 1, 0)
             render_intensity = render_intensity * render_raydrop_mask * gt_objmask
             depth = depth * render_raydrop_mask * gt_objmask
@@ -317,7 +317,7 @@ def training(
                 render_intensity * ray_drop * gt_objmask
             )  # 直接使用gt的raydrop mask
             depth = depth * ray_drop * gt_objmask
-            raydrop_loss = torch.tensor([0.0], device="cuda")
+            raydrop_loss = torch.nn.BCEWithLogitsLoss()(render_raydrop, ray_drop)
 
         Ll1 = l1_loss(render_intensity, gt_intensity)
         depth_loss = l1_loss(depth, gt_depth)
@@ -390,8 +390,9 @@ def training(
                 progress_bar.close()
 
             if iteration in testing_iterations:
-                lidarpose_filefolder = os.path.join(dataset.source_path, "lidar_pose")
-                start_frame = train_frame_times[0]
+                save_unet_refine_data = (
+                    iteration == opt.iterations
+                ) and dataset.enable_raydrop_unet
                 print("---------------------train----------------------")
                 train_composite_report(
                     tb_writer,
@@ -405,6 +406,8 @@ def training(
                     pipe,
                     background,
                     logger,
+                    is_train_views=True,
+                    save_unet_refine_data=save_unet_refine_data,
                 )
 
                 print("---------------------test----------------------")
@@ -420,6 +423,8 @@ def training(
                     pipe,
                     background,
                     logger,
+                    is_train_views=False,
+                    save_unet_refine_data=save_unet_refine_data,
                 )
             for model_id, model_info in model_id_scene_info.items():
                 densify_until_num_points = opt.densify_until_num_points
@@ -523,6 +528,8 @@ def train_composite_report(
     pipe,
     background,
     logger,
+    is_train_views=True,
+    save_unet_refine_data=False,
 ):
     l1_test = 0.0
     psnr_test = 0.0
@@ -584,14 +591,47 @@ def train_composite_report(
         ray_drop = gt_image[0:1, ...]
         gt_intensity = gt_image[1:2, ...] * ray_drop * gt_objmask
         gt_depth = gt_image[2:3, ...] * ray_drop * gt_objmask
-        render_intensity = image[0:1, ...]
 
+        render_intensity = image[0:1, ...]
         render_raydrop = image[1:2, ...]
         render_raydrop_mask = torch.where(render_raydrop > 0.5, 1, 0)
         render_intensity = (
             render_intensity * render_raydrop_mask
         )  # Align with dynfl without considering raydrop
         depth = depth * render_raydrop_mask
+
+        # Save data for UNet refine if needed
+        if save_unet_refine_data:
+            ray_drop_datasets_dir = os.path.join(
+                model_args.model_path, "ray_drop_datasets"
+            )
+            gt_dir = os.path.join(ray_drop_datasets_dir, "gt")
+            render_dir = os.path.join(
+                ray_drop_datasets_dir,
+                "render_train" if is_train_views else "render_test",
+            )
+
+            gt_save_path = os.path.join(gt_dir, f"{render_timestamp}.pt")
+            # gt_image: [raydrop, intensity, depth, beam_inclinations]
+            # Save as dict to include beam_inclinations for evaluation
+            save_dict = {
+                "gt_image": gt_image.detach().cpu(),
+                "beam_inclinations": scene_view.beam_inclinations.detach().cpu(),
+            }
+            torch.save(save_dict, gt_save_path)
+
+            # Save rendered data: [raydrop, intensity, depth]
+            render_save_path = os.path.join(render_dir, f"{render_timestamp}.pt")
+            render_data = torch.cat(
+                [
+                    render_pkg["render"][1:2, ...],
+                    render_pkg["render"][0:1, ...],
+                    render_pkg["depth"],
+                    render_pkg["mid_depth_diff"],
+                ],
+                dim=0,
+            )
+            torch.save(render_data.detach().cpu(), render_save_path)
 
         if True:  # new trick: using depth_distortion_aware
             depth_distortion_aware = render_pkg["mid_depth_diff"]
@@ -710,14 +750,14 @@ if __name__ == "__main__":
     parser.add_argument("--gpu", type=str, default="-1")
     parser.add_argument("--dataset", type=str, default="chery")
     parser.add_argument("--block_size", type=int, default=50)
+    parser.add_argument("--enable_raydrop_unet", action="store_true", default=False)
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
     # enable logging
     dataset = args.source_path.split("/")[-1]
-    model_path = args.model_path
-    os.makedirs(model_path, exist_ok=True)
-    logger = get_logger(model_path)
+    os.makedirs(args.model_path, exist_ok=True)
+    logger = get_logger(args.model_path)
     logger.info(f"args: {args}")
     logger.info("SourcePath " + args.source_path)
     logger.info("Optimizing " + args.model_path)
@@ -734,6 +774,7 @@ if __name__ == "__main__":
 
     # multi-block render for large scene
     model_args = lp.extract(args)
+    model_args.enable_raydrop_unet = args.enable_raydrop_unet
 
     # load dynamic info
     if args.dataset == "chery":
@@ -755,6 +796,13 @@ if __name__ == "__main__":
         block_info_with_extend, block_info_without_extend = dataPartitionSimple(
             model_args, single_block_test=True
         )
+
+    if model_args.enable_raydrop_unet:
+        # Create directories for UNet refine
+        ray_drop_datasets_dir = os.path.join(args.model_path, "ray_drop_datasets")
+        os.makedirs(os.path.join(ray_drop_datasets_dir, "gt"), exist_ok=True)
+        os.makedirs(os.path.join(ray_drop_datasets_dir, "render_train"), exist_ok=True)
+        os.makedirs(os.path.join(ray_drop_datasets_dir, "render_test"), exist_ok=True)
 
     for block_id, train_frame_times in block_info_with_extend.items():
         model_args.block_id = block_id  # update block id
