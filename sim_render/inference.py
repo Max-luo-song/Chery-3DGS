@@ -37,12 +37,12 @@ class CamRendererManager:
         """
 
         raw = {
-            "x": pose_msg.x,
-            "y": pose_msg.y,
-            "z": pose_msg.z,
-            "yaw": pose_msg.yaw,
-            "roll": pose_msg.roll,
-            "pitch": pose_msg.pitch,
+            "x": float(pose_msg.x),
+            "y": float(pose_msg.y),
+            "z": float(pose_msg.z),
+            "yaw": float(pose_msg.yaw),
+            "roll": float(pose_msg.roll),
+            "pitch": float(pose_msg.pitch),
         }
 
         pose = pose_to_transform_matrix(**raw)
@@ -59,8 +59,10 @@ class CamRendererManager:
 
 
         print("cam_id: ", cam_id)
+        frame_id = round(max(0, (float(pose_msg.timestamp) - self.renderer.start_timestamp)) / 0.1)
+        print("pose_msg.timestamp: ", pose_msg.timestamp)
 
-        output_paths = self.renderer.render_single_frame(cam2world, cam_id)
+        output_paths = self.renderer.render_single_frame(cam2world, cam_id, frame_id)
 
         # output = self.renderer.render_single_frame(cam2world)
         print("[Render] Output:", output_paths)

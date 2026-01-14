@@ -51,32 +51,35 @@ class Renderer:
             load_only_model=True,
         )
         self.trainer.set_eval()
+        self.start_timestamp = 1761382840.001
 
         print("[Renderer] Initialization completed.")
 
     @torch.no_grad()
-    def render_single_frame(self, pose_cam2world: np.ndarray, cam_id, ref_cam_id=0):
-        """
-        输入外部 4*4 位姿，对所有相机渲染一帧
-        """
+    def render_single_frame(
+        self,
+        pose_cam2world: np.ndarray,
+        cam_id: int,
+        frame_id: int,
+        ref_cam_id: int = 0,
+    ):
+
+        print("start prepare_online_render_data")
         render_results = {}
-
-        # 单帧轨迹
-        traj = torch.from_numpy(pose_cam2world).float().to(self.trainer.device),
-        
         start_time = time.time()
-        # for cam_id in self.cam_ids:
+        print("pose_cam2world: ", pose_cam2world)
+        traj = torch.from_numpy(pose_cam2world).float().to(self.trainer.device)
+        traj = traj.unsqueeze(0)   # (1, 4, 4)
         cam_data = self.camera_data_dict[cam_id]
-
-        # 数据准备
-        # start_time_single = time.time()
         ref_cam_data = self.camera_data_dict[ref_cam_id]
-        render_data = self.dataset.prepare_novel_view_render_data(
+
+        render_data = self.dataset.prepare_online_render_data(
             traj=traj,
             ref_cam_data=ref_cam_data,
             target_cam_data=cam_data,
+            frame_id=frame_id,
         )
-
+        print("start render")
         # 渲染
         results = render_novel_views(self.trainer, render_data, cam_data)
         end_time_single = time.time()
@@ -87,6 +90,7 @@ class Renderer:
         rgb = (rgb * 255).astype(np.uint8)
 
         timestamp = time.time()
+        # out_path = os.path.join(self.output_dir, f"cam{cam_id}_{timestamp:.0f}.png")
         out_path = os.path.join(self.output_dir, f"cam{cam_id}_{timestamp:.3f}.png")
         imwrite(out_path, rgb)
 

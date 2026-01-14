@@ -7,17 +7,20 @@ import socket
 import random
 import os
 
+
 def data():
     # 1. 创建Protobuf消息对象并填充数据
     my_msg = Pose_pb2.MainCarInfo()
-    my_msg.x = 7987.086396549613
-    my_msg.y = -2964.653905917249
-    my_msg.z = -396.08292995686327
-    my_msg.yaw = 1.9627021134112075
-    my_msg.roll = 0
-    my_msg.pitch = 0
-    my_msg.camera_id = "CAM_PBQ_FRONT_RIGHT_RESET_OPTICAL_H99"
-    print(my_msg.x, my_msg.y)
+    # x=7969.7074556988155, y=-2922.589950684925, yaw=1.9608628455457437,camera_id=CAM_PBQ_FRONT_RIGHT_RESET_OPTICAL_H99
+    my_msg.x = 7987.08639
+    my_msg.y = -2964.6539
+    my_msg.z = -396.08292
+    my_msg.yaw = 1.9608628455457437
+    my_msg.roll = 0.000000
+    my_msg.pitch = 0.000000
+    my_msg.timestamp = 1761382841.0010262
+    my_msg.camera_id = "CAM_PBQ_FRONT_WIDE_RESET_OPTICAL_H60"
+    print(my_msg.x, my_msg.y, my_msg.z, my_msg.yaw)
     return my_msg
 
 class TCPClient:
