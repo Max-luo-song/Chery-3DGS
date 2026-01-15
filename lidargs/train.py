@@ -618,6 +618,7 @@ def train_composite_report(
             save_dict = {
                 "gt_image": gt_image.detach().cpu(),
                 "beam_inclinations": scene_view.beam_inclinations.detach().cpu(),
+                "gt_objmask": gt_objmask.detach().cpu(),
             }
             torch.save(save_dict, gt_save_path)
 
@@ -667,10 +668,23 @@ def train_composite_report(
         )
 
         fscore_test += cd_fs[1]
+         # 计算深度误差时，只考虑有效区域（有 raydrop 且经过 depth_distortion_aware 筛选的区域）
+        valid_depth_mask = (ray_drop > 0.5) & (gt_objmask > 0.5)
+        if depth_distortion_aware is not None:  # 如果使用了 depth_distortion_aware
+            valid_depth_mask = valid_depth_mask & (depth_distortion_aware > 0.5)
+        
         error_depth_abs = torch.abs(depth - gt_depth)
-        mae += error_depth_abs.mean()
-        rmse += torch.sqrt((error_depth_abs * error_depth_abs).mean())
-        medae += error_depth_abs.median()
+        if valid_depth_mask.sum() > 0:
+            valid_error = error_depth_abs[valid_depth_mask]
+            mae += valid_error.mean()
+            rmse += torch.sqrt((valid_error * valid_error).mean())
+            medae += valid_error.median()
+        else:
+            # 如果没有有效像素，记录为 0（或者你可以选择跳过这一帧）
+            mae += 0
+            rmse += 0
+            medae += 0
+
 
     psnr_test /= total_number
     l1_test /= total_number
