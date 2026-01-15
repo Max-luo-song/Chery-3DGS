@@ -90,7 +90,7 @@ class RoadNodes(nn.Module):
         # base_scale = torch.cat([avg_dist, avg_dist, torch.ones_like(avg_dist) * epsilon], dim=-1)
 
         # --- 修改: 使用固定值 0.5 ---
-        fixed_value = 0.05 * 1.5
+        fixed_value = 0.03
         # 创建一个全为 0.5 的张量，形状，并确保它在正确的设备上
         # self.num_points 通常可以从 init_means.shape[0] 获取
         num_points = init_means.shape[0]
@@ -121,7 +121,7 @@ class RoadNodes(nn.Module):
             shs[:, 0, :3] = torch.logit(init_colors, eps=1e-10)
         self._features_dc = Parameter(shs[:, 0, :])
         self._features_rest = Parameter(shs[:, 1:, :])
-        self._opacities = Parameter(torch.logit(0.1 * torch.ones(self.num_points, 1, device=self.device)))
+        self._opacities = Parameter(torch.logit(0.99 * torch.ones(self.num_points, 1, device=self.device)))
         
     @property
     def colors(self):

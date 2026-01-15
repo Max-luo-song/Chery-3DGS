@@ -2,7 +2,7 @@
 ################################################################################
 gpu=-1
 
-scene_idx="20251025_163358_QCOYSD504206_1595_1610"
+scene_idx="20250702_133223_Q2517_60_75"
 
 camera_ids=(0 1 2 3 5 6 7 9 10 11 12)  # camera IDs to use, e.g., (0), (0 2 4)
 # camera_ids=(0)  # camera IDs to use, e.g., (0), (0 2 4)
@@ -10,7 +10,7 @@ lidar_type="lidar"  # lidar（运动补偿前）/visual（纯视觉）
 
 config_file="configs/omnire_extended_cam_lidar.yaml"
 dataset_config="qcraft/11cams_${lidar_type}"
-extra_config_info="road0.1_80w_fixscale0.05*1.5_sh1"  # 额外信息 不开启models/nodes/road.py中的refine_after
+extra_config_info="roadw1_600w_fixscale0.03_sh0_opacity0.99_afterann"  # 额外信息 不开启models/nodes/road.py中的refine_after
 
 start_timestep=0 # start frame index for training
 end_timestep=-1 # end frame index, -1 for the last frame
@@ -63,68 +63,70 @@ CUDA_VISIBLE_DEVICES=${gpu} python tools/train.py \
     data.end_timestep=$end_timestep
 
 
-# ckpt_path="${run_dir}/checkpoint_final.pth"
+ckpt_path="${run_dir}/checkpoint_final.pth"
 
-# traj_types=(
-#     # original_traj
-#     left_shift_1m
-#     left_shift_3m
-#     # left_shift_5m
-#     right_shift_1m
-#     right_shift_3m
-#     # right_shift_5m
-#     # front_shift_1m
-#     # front_shift_3m
-#     # front_shift_5m
-#     # back_shift_1m
-#     # back_shift_3m
-#     # back_shift_5m
-#     # change_lane_1m
-#     # change_lane_2m
-#     # change_lane_3.5m
-# )
+traj_types=(
+    # original_traj
+    left_shift_1m
+    left_shift_3m
+    # left_shift_5m
+    right_shift_1m
+    right_shift_3m
+    # right_shift_5m
+    # front_shift_1m
+    # front_shift_3m
+    # front_shift_5m
+    # back_shift_1m
+    # back_shift_3m
+    # back_shift_5m
+    # change_lane_1m
+    # change_lane_2m
+    # change_lane_3.5m
+)
 
-# cam_ids=(0 1 2 3 5 6 7 9 10 11 12)
-# downscales=(1 1 1 1 1 1 1 1 1 1 1)
+cam_ids=(0 1 2 3 5 6 7 9 10 11 12)
+downscales=(1 1 1 1 1 1 1 1 1 1 1)
 
-# fps=10
+fps=10
 
-# render_rgb=true
-# render_depth=false
-# save_images=true
-# generate_lidar_pc=false
-# ################################################################################
-# source scripts/utils.sh
+render_rgb=true
+render_depth=false
+save_images=true
+generate_lidar_pc=false
+################################################################################
+source scripts/utils.sh
 
-# export PYTHONPATH=$(pwd)
+export PYTHONPATH=$(pwd)
 
-# gpu=$(pick_gpu)
-# if [ -z "${gpu}" ]; then
-#     echo "no gpu found"
-#     exit 1
-# fi
+gpu=$(pick_gpu)
+if [ -z "${gpu}" ]; then
+    echo "no gpu found"
+    exit 1
+fi
 
 
-# echo "Using checkpoint: $ckpt_path"
+echo "Using checkpoint: $ckpt_path"
 
-# bool_args=""
-# if [ "$render_rgb" = true ]; then
-#     bool_args="$bool_args --render_rgb"
-# fi
-# if [ "$render_depth" = true ]; then
-#     bool_args="$bool_args --render_depth"
-# fi
-# if [ "$save_images" = true ]; then
-#     bool_args="$bool_args --save_images"
-# fi
-# if [ "$generate_lidar_pc" = true ]; then
-#     bool_args="$bool_args --generate_lidar_pc"
-# fi
+bool_args=""
+if [ "$render_rgb" = true ]; then
+    bool_args="$bool_args --render_rgb"
+fi
+if [ "$render_depth" = true ]; then
+    bool_args="$bool_args --render_depth"
+fi
+if [ "$save_images" = true ]; then
+    bool_args="$bool_args --save_images"
+fi
+if [ "$generate_lidar_pc" = true ]; then
+    bool_args="$bool_args --generate_lidar_pc"
+fi
 
-# CUDA_VISIBLE_DEVICES=${gpu} python sim_render/cam/render_novel_trajectory.py \
-#     --resume_from $ckpt_path \
-#     --traj_types "${traj_types[@]}" \
-#     --cam_ids "${cam_ids[@]}" \
-#     --downscales "${downscales[@]}" \
-#     --fps $fps \
-#     $bool_args
+CUDA_VISIBLE_DEVICES=${gpu} python sim_render/cam/render_novel_trajectory.py \
+    --resume_from $ckpt_path \
+    --traj_types "${traj_types[@]}" \
+    --cam_ids "${cam_ids[@]}" \
+    --downscales "${downscales[@]}" \
+    --fps $fps \
+    $bool_args
+
+
