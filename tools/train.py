@@ -19,6 +19,51 @@ from datasets.driving_dataset import DrivingDataset
 logger = logging.getLogger()
 current_time = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
 
+def clean_road_overhead_during_training(trainer, road_xyz_stats, height_limit=0.3, xy_margin=0.05):
+    """
+    在线清理路面上方的背景杂点。
+    
+    Args:
+        bg_model: 背景的高斯模型对象
+        road_xyz_stats: 一个字典，包含路面几何的统计信息 {'min_x', 'max_x', 'min_y', 'max_y', 'avg_z'}
+        height_limit: 清理高度 (米)，路面以上多少米内是禁区
+        xy_margin: 水平缩进 (米)，防止切掉路边的路缘石
+    """
+    # 获取背景点坐标 [N, 3]
+    bg_model=trainer.models['Background']
+    bg_xyz = bg_model._means
+    
+    # 1. 水平范围判断 (XY Plane)
+    # 只处理位于路面垂直投影范围内的点
+    mask_x = (bg_xyz[:, 0] > road_xyz_stats['min_x'] + xy_margin) & \
+             (bg_xyz[:, 0] < road_xyz_stats['max_x'] - xy_margin)
+    mask_y = (bg_xyz[:, 1] > road_xyz_stats['min_y'] + xy_margin) & \
+             (bg_xyz[:, 1] < road_xyz_stats['max_y'] - xy_margin)
+    in_road_footprint = mask_x & mask_y
+    
+    # 如果没有点在路面范围内，直接返回，节省计算
+    if not in_road_footprint.any():
+        return
+        
+    # 2. 垂直高度判断 (Z Axis)
+    # 假设路面大致是一个平面，或者你已经将其转换到了 Z=0 附近
+    # 逻辑：在路面以下 (z < road_z) 或者 路面以上 height_limit 内 (z < road_z + limit) 的背景点都要死
+    # 这里的 min_z - 0.5 是为了把那种错误的地下点也顺手清了
+    
+    road_z = road_xyz_stats['avg_z'] # 或者使用更复杂的平面拟合 z = ax + by + c
+    
+    # 禁区：从地下 0.5m 到 路面上方 0.15m
+    mask_z = (bg_xyz[:, 2] > road_z - 0.5) & (bg_xyz[:, 2] < road_z + height_limit)
+    
+    # 3. 最终死刑名单
+    kill_mask = in_road_footprint & mask_z
+    
+    if kill_mask.sum() > 0:
+        # 执行剔除
+        bg_model.prune_points(kill_mask, optimizer=trainer.optimizer)
+        # 这是一个可选的打印，调试时开启，平时关闭以免刷屏
+        # print(f"Cleaned {kill_mask.sum()} interference points from background.")
+
 def set_seeds(seed=31):
     """
     Fix random seeds.
@@ -185,6 +230,26 @@ def main(args):
     #     args=args,
     # )
 
+    # ------------------  Preparation for Geometric Pruning  ---------------------
+    # 假设你的 Road 模型名字叫 'Road'，请根据实际情况修改 key
+    if 'RoadNodes' in trainer.gaussian_classes:
+        road_model = trainer.models['RoadNodes']
+        road_xyz = road_model._means.detach()
+        
+        # 预计算路面包围盒信息
+        road_stats = {
+            'min_x': road_xyz[:, 0].min().item(),
+            'max_x': road_xyz[:, 0].max().item(),
+            'min_y': road_xyz[:, 1].min().item(),
+            'max_y': road_xyz[:, 1].max().item(),
+            # 假设路面大致平坦，取平均高度；如果有坡度，后续逻辑需要改为 KNN
+            'avg_z': road_xyz[:, 2].mean().item() 
+        }
+        print(f"Road Geometry Loaded: Z~={road_stats['avg_z']:.2f}, X[{road_stats['min_x']:.1f}, {road_stats['max_x']:.1f}]")
+    else:
+        road_stats = None
+        print("Warning: Road model not found, skipping geometric pruning setup.")
+
     for step in metric_logger.log_every(all_iters, cfg.logging.print_freq):
         #----------------------------------------------------------------------------
         #----------------------------     Validate     ------------------------------
@@ -278,6 +343,24 @@ def main(args):
         # after training step
         trainer.postprocess_per_train_step(step=step)
         
+        # ----------------------------------------------------------------------------
+        # -----------------------  Geometric Pruning Step  ---------------------------
+        # 建议在一定步数后开始清理（比如 500 步后），并每隔几百步执行一次
+        # 这里的 'Background' 是你背景模型的 key，请确保和 trainer.models 里的 key 一致
+        if 'RoadNodes' in trainer.gaussian_classes and 'Background' in trainer.gaussian_classes:
+            # 只有在做了致密化之后清理才有意义，或者每隔 200~500 step
+            if step > 500 and step % 500 == 0:
+            # if step > 0:
+                print("发生过滤～")
+                clean_road_overhead_during_training(
+                    trainer = trainer,
+                    road_xyz_stats=road_stats,
+                    height_limit=0.3,  # 清理路面上方 15cm 内的杂点
+                    xy_margin=0.05      # 稍微向内收缩，防止切到路沿
+                )
+                
+                # 可选：清理完后清理显存，防止碎片化
+                torch.cuda.empty_cache()
         #----------------------------------------------------------------------------
         #-------------------------------  logging  ----------------------------------
         with torch.no_grad():

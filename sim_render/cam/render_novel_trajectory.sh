@@ -1,14 +1,14 @@
 # 参数设置
 ################################################################################
-ckpt_path="output/qcraft_20251025_163358_QCOYSD504206_1595_1610/20260114_lidar+cam0_1_2_3_5_6_7_9_10_11_12roadw1_600w_fixscale0.01_sh2_opacity0.99_afterann/checkpoint_final.pth"
+ckpt_path="output/qcraft_20250702_133223_Q2517_60_75/20260115_lidar+cam0_1_2_3_5_6_7_9_10_11_12roadw1_600w_fixscale0.03_sh0_opacity0.99_afterann_filterbg/checkpoint_final.pth"
 
 traj_types=(
-    # original_traj
-    left_shift_1m
-    left_shift_3m
+    original_traj
+    # left_shift_1m
+    # left_shift_3m
     # left_shift_5m
-    right_shift_1m
-    right_shift_3m
+    # right_shift_1m
+    # right_shift_3m
     # right_shift_5m
     # front_shift_1m
     # front_shift_3m
