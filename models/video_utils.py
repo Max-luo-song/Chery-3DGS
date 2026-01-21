@@ -1063,6 +1063,94 @@ def render(
     return results_dict
 
 
+def save_images(
+    render_results: Dict[str, List[Tensor]],
+    save_pth: str,
+    layout: Callable,
+    timestamps: int,
+    keys: List[str] = ["gt_rgbs", "rgbs", "depths"],
+    verbose: bool = True,
+):
+    return_frame = save_seperate_images(
+        render_results,
+        save_pth,
+        layout,
+        timestamps=timestamps,
+        keys=keys,
+        verbose=verbose,
+    )
+    return return_frame
+
+
+def save_seperate_images(
+    render_results: Dict[str, List[Tensor]],
+    save_pth: str,
+    layout: Callable,
+    timestamps: int,
+    keys: List[str] = ["gt_rgbs", "rgbs", "depths"],
+    verbose: bool = False,
+):
+    return_frame_dict = {}
+    for key in keys:
+        video_save_pth = save_pth.replace(".mp4", f"_{key}_layout.mp4")
+        img_save_pth = save_pth.replace(".mp4", f"_{key}.png")
+        if not os.path.exists(img_save_pth.replace(".png", "")):
+            os.makedirs(img_save_pth.replace(".png", ""), exist_ok=True) 
+        if not os.path.exists(video_save_pth.replace(".mp4", "")):
+            os.makedirs(video_save_pth.replace(".mp4", ""), exist_ok=True) 
+
+        if "mask" not in key:
+            if key not in render_results or len(render_results[key]) == 0:
+                continue
+
+        cam_names = render_results["cam_names"]
+        # skip if the key is not in render_results
+        if "mask" in key:
+            new_key = key.replace("mask", "opacities")
+            if new_key not in render_results or len(render_results[new_key]) == 0:
+                continue
+            frames = render_results[new_key]
+        else:
+            if key not in render_results or len(render_results[key]) == 0:
+                continue
+            frames = render_results[key]
+        # convert to rgb if necessary
+        if key == "gt_sky_masks":
+            frames = [np.stack([frame, frame, frame], axis=-1) for frame in frames]
+        elif "mask" in key:
+            frames = [np.stack([frame, frame, frame], axis=-1) for frame in frames]
+        elif "depth" in key:
+            try:
+                opacities = render_results[key.replace("depths", "opacities")]
+            except:
+                if "median" in key:
+                    opacities = render_results[
+                        key.replace("median_depths", "opacities")
+                    ]
+                else:
+                    continue
+            frames = [
+                depth_visualizer(frame, opacity)
+                for frame, opacity in zip(frames, opacities)
+            ]
+
+        for j, frame in enumerate(frames):
+            imageio.imwrite(
+                img_save_pth.replace(".png", f"/{timestamps:06d}_{j:03d}.png"),
+                to8b(frame),
+            )
+        tiled_img = layout(frames, cam_names)
+        tiled_img = to8b(tiled_img)
+        video_save_pth = video_save_pth.replace(".mp4", f"/{timestamps:06d}.png")
+        imageio.imwrite(
+            video_save_pth,
+            tiled_img,
+        )
+        return_frame_dict[key] = tiled_img
+    del render_results
+    return return_frame_dict
+
+
 def save_videos(
     render_results: Dict[str, List[Tensor]],
     save_pth: str,

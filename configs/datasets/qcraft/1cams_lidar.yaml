@@ -17,7 +17,7 @@
 
 
 data:
-  data_root: data/qcraft/processed/training # data root for the dataset
+  data_root: /inspire/hdd/project/continuinglearningtheory/guoluosong-253108120129/project/data/qcraft/processed/training # data root for the dataset
   dataset: qcraft 
   scene_idx: 0 # which scene to use
   start_timestep: 0 # which timestep to start from
