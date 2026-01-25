@@ -18,51 +18,114 @@ from datasets.driving_dataset import DrivingDataset
 
 logger = logging.getLogger()
 current_time = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-
-def clean_road_overhead_during_training(trainer, road_xyz_stats, height_limit=0.3, xy_margin=0.05):
-    """
-    在线清理路面上方的背景杂点。
+### v1
+# def clean_road_overhead_during_training(trainer, road_xyz_stats, height_limit=0.3, xy_margin=0.05):
+#     """
+#     在线清理路面上方的背景杂点。
     
-    Args:
-        bg_model: 背景的高斯模型对象
-        road_xyz_stats: 一个字典，包含路面几何的统计信息 {'min_x', 'max_x', 'min_y', 'max_y', 'avg_z'}
-        height_limit: 清理高度 (米)，路面以上多少米内是禁区
-        xy_margin: 水平缩进 (米)，防止切掉路边的路缘石
-    """
-    # 获取背景点坐标 [N, 3]
-    bg_model=trainer.models['Background']
-    bg_xyz = bg_model._means
+#     Args:
+#         bg_model: 背景的高斯模型对象
+#         road_xyz_stats: 一个字典，包含路面几何的统计信息 {'min_x', 'max_x', 'min_y', 'max_y', 'avg_z'}
+#         height_limit: 清理高度 (米)，路面以上多少米内是禁区
+#         xy_margin: 水平缩进 (米)，防止切掉路边的路缘石
+#     """
+#     # 获取背景点坐标 [N, 3]
+#     bg_model=trainer.models['Background']
+#     bg_xyz = bg_model._means
     
-    # 1. 水平范围判断 (XY Plane)
-    # 只处理位于路面垂直投影范围内的点
-    mask_x = (bg_xyz[:, 0] > road_xyz_stats['min_x'] + xy_margin) & \
-             (bg_xyz[:, 0] < road_xyz_stats['max_x'] - xy_margin)
-    mask_y = (bg_xyz[:, 1] > road_xyz_stats['min_y'] + xy_margin) & \
-             (bg_xyz[:, 1] < road_xyz_stats['max_y'] - xy_margin)
-    in_road_footprint = mask_x & mask_y
+#     # 1. 水平范围判断 (XY Plane)
+#     # 只处理位于路面垂直投影范围内的点
+#     mask_x = (bg_xyz[:, 0] > road_xyz_stats['min_x'] + xy_margin) & \
+#              (bg_xyz[:, 0] < road_xyz_stats['max_x'] - xy_margin)
+#     mask_y = (bg_xyz[:, 1] > road_xyz_stats['min_y'] + xy_margin) & \
+#              (bg_xyz[:, 1] < road_xyz_stats['max_y'] - xy_margin)
+#     in_road_footprint = mask_x & mask_y
     
-    # 如果没有点在路面范围内，直接返回，节省计算
-    if not in_road_footprint.any():
-        return
+#     # 如果没有点在路面范围内，直接返回，节省计算
+#     if not in_road_footprint.any():
+#         return
         
-    # 2. 垂直高度判断 (Z Axis)
-    # 假设路面大致是一个平面，或者你已经将其转换到了 Z=0 附近
-    # 逻辑：在路面以下 (z < road_z) 或者 路面以上 height_limit 内 (z < road_z + limit) 的背景点都要死
-    # 这里的 min_z - 0.5 是为了把那种错误的地下点也顺手清了
+#     # 2. 垂直高度判断 (Z Axis)
+#     # 假设路面大致是一个平面，或者你已经将其转换到了 Z=0 附近
+#     # 逻辑：在路面以下 (z < road_z) 或者 路面以上 height_limit 内 (z < road_z + limit) 的背景点都要死
+#     # 这里的 min_z - 0.5 是为了把那种错误的地下点也顺手清了
     
-    road_z = road_xyz_stats['avg_z'] # 或者使用更复杂的平面拟合 z = ax + by + c
+#     road_z = road_xyz_stats['avg_z'] # 或者使用更复杂的平面拟合 z = ax + by + c
     
-    # 禁区：从地下 0.5m 到 路面上方 0.15m
-    mask_z = (bg_xyz[:, 2] > road_z - 0.5) & (bg_xyz[:, 2] < road_z + height_limit)
+#     # 禁区：从地下 0.5m 到 路面上方 0.15m
+#     mask_z = (bg_xyz[:, 2] > road_z - 0.5) & (bg_xyz[:, 2] < road_z + height_limit)
     
-    # 3. 最终死刑名单
-    kill_mask = in_road_footprint & mask_z
+#     # 3. 最终死刑名单
+#     kill_mask = in_road_footprint & mask_z
     
-    if kill_mask.sum() > 0:
-        # 执行剔除
-        bg_model.prune_points(kill_mask, optimizer=trainer.optimizer)
-        # 这是一个可选的打印，调试时开启，平时关闭以免刷屏
-        # print(f"Cleaned {kill_mask.sum()} interference points from background.")
+#     if kill_mask.sum() > 0:
+#         # 执行剔除
+#         bg_model.prune_points(kill_mask, optimizer=trainer.optimizer)
+#         # 这是一个可选的打印，调试时开启，平时关闭以免刷屏
+#         # print(f"Cleaned {kill_mask.sum()} interference points from background.")
+
+@torch.no_grad()
+def clean_road_overhead_during_training(trainer, road_model, height_limit=0.3, xy_margin=0.05, grid_spacing=0.1):
+    bg_model = trainer.models['Background']
+    bg_xyz = bg_model._means
+    road_xyz = road_model._means
+
+    # 1. 准备全局布尔掩码（初始化全为 False，表示默认全部保留）
+    full_kill_mask = torch.zeros(bg_xyz.shape[0], dtype=torch.bool, device=bg_xyz.device)
+
+    # 1. 快速粗筛
+    x_min, x_max = road_xyz[:, 0].min(), road_xyz[:, 0].max()
+    y_min, y_max = road_xyz[:, 1].min(), road_xyz[:, 1].max()
+    
+    mask_in_box = (bg_xyz[:, 0] > x_min + xy_margin) & (bg_xyz[:, 0] < x_max - xy_margin) & \
+                  (bg_xyz[:, 1] > y_min + xy_margin) & (bg_xyz[:, 1] < y_max - xy_margin)
+    
+    if not mask_in_box.any():
+        return
+
+    # 2. 构建高度查找表 (仅在第一次或路面变化时执行，开销极小)
+    # 逻辑：利用 Grid A 的规律性建立索引
+    nx = int((x_max - x_min) / (grid_spacing / 2)) + 2 # 使用一半间距兼容交错网格
+    ny = int((y_max - y_min) / (grid_spacing / 2)) + 2
+    
+    # 创建一个 2D 网格高度图
+    height_map = torch.full((nx, ny), -999.0, device=bg_xyz.device)
+    
+    # 计算路面点在 map 中的索引
+    road_ix = ((road_xyz[:, 0] - x_min) / (grid_spacing / 2)).long()
+    road_iy = ((road_xyz[:, 1] - y_min) / (grid_spacing / 2)).long()
+    
+    # 填充高度 (如果有多个点落入同一个格，scatter 会保留最后一个，对均匀网格没影响)
+    height_map[road_ix, road_iy] = road_xyz[:, 2]
+
+    # 3. 背景点映射查找 (无矩阵运算，极省显存)
+    relevant_indices = torch.where(mask_in_box)[0]
+    relevant_bg = bg_xyz[relevant_indices]
+    
+    bg_ix = ((relevant_bg[:, 0] - x_min) / (grid_spacing / 2)).long()
+    bg_iy = ((relevant_bg[:, 1] - y_min) / (grid_spacing / 2)).long()
+    
+    # 确保索引不越界
+    bg_ix = torch.clamp(bg_ix, 0, nx - 1)
+    bg_iy = torch.clamp(bg_iy, 0, ny - 1)
+    
+    # 获取对应的局部路面高度
+    nearest_road_z = height_map[bg_ix, bg_iy]
+    
+    # 4. 判定逻辑
+    # 如果 nearest_road_z 还是 -999，说明该背景点下方没有路面点
+    is_on_road = nearest_road_z > -900.0
+    is_in_z = (relevant_bg[:, 2] > nearest_road_z - 0.5) & \
+              (relevant_bg[:, 2] < nearest_road_z + height_limit)
+    
+    local_kill_mask = is_on_road & is_in_z
+    full_kill_mask[mask_in_box] = local_kill_mask
+    # 5. 执行剔除
+    if full_kill_mask.any():
+        num_to_kill = full_kill_mask.sum().item()
+        print(f"--- 逻辑确认：计划删除 {num_to_kill} 个背景点 ---")
+        # 传入的是布尔 mask，不是索引！
+        bg_model.prune_points(full_kill_mask, optimizer=trainer.optimizer)
 
 def set_seeds(seed=31):
     """
@@ -353,11 +416,12 @@ def main(args):
             # if step > 0:
                 print("发生过滤～")
                 clean_road_overhead_during_training(
-                    trainer = trainer,
-                    road_xyz_stats=road_stats,
-                    height_limit=0.3,  # 清理路面上方 15cm 内的杂点
-                    xy_margin=0.05      # 稍微向内收缩，防止切到路沿
-                )
+                        trainer = trainer,
+                        road_model = trainer.models['RoadNodes'], # 确保 key 与你注册模型时一致
+                        height_limit = 0.3, 
+                        xy_margin = 0.05,
+                        grid_spacing=0.1
+                    )
                 
                 # 可选：清理完后清理显存，防止碎片化
                 torch.cuda.empty_cache()

@@ -75,54 +75,150 @@ class RoadNodes(nn.Module):
     @property
     def sh_degree(self):
         return self.ctrl_cfg.road_sh_degree
-
-    def create_from_pcd(self, init_means: torch.Tensor, init_colors: torch.Tensor) -> None:
-        self._means = Parameter(init_means)
+    ### version: 根据点云初始化位置，随距离初始化scale/固定scale
+    # def create_from_pcd(self, init_means: torch.Tensor, init_colors: torch.Tensor) -> None:
+    #     self._means = Parameter(init_means)
         
-        ### NOTE(gls)：尺度初始化方式——距离平均值((dist, dist, epsilon))
-        # distances, _ = k_nearest_sklearn(self._means.data, 3)
-        # distances = torch.from_numpy(distances)
-        # # find the average of the three nearest neighbors for each point and use that as the scale
-        # avg_dist = distances.mean(dim=-1, keepdim=True).to(self.device)
-        # # --- 修改 1: 限制尺度为 (dist, dist, 0) ---
-        # epsilon = 1e-5
-        # # 构造基础尺度: (dist, dist, epsilon) -> 对应 x, y, z
-        # base_scale = torch.cat([avg_dist, avg_dist, torch.ones_like(avg_dist) * epsilon], dim=-1)
+    #     ### NOTE(gls)：尺度初始化方式——距离平均值((dist, dist, epsilon))
+    #     # distances, _ = k_nearest_sklearn(self._means.data, 3)
+    #     # distances = torch.from_numpy(distances)
+    #     # # find the average of the three nearest neighbors for each point and use that as the scale
+    #     # avg_dist = distances.mean(dim=-1, keepdim=True).to(self.device)
+    #     # # --- 修改 1: 限制尺度为 (dist, dist, 0) ---
+    #     # epsilon = 1e-5
+    #     # # 构造基础尺度: (dist, dist, epsilon) -> 对应 x, y, z
+    #     # base_scale = torch.cat([avg_dist, avg_dist, torch.ones_like(avg_dist) * epsilon], dim=-1)
 
-        # --- 修改: 使用固定值 0.5 ---
-        fixed_value = 0.03
-        # 创建一个全为 0.5 的张量，形状，并确保它在正确的设备上
-        # self.num_points 通常可以从 init_means.shape[0] 获取
-        num_points = init_means.shape[0]
-        fixed_scale = torch.full((num_points, 1), fixed_value, device=self.device)
+    #     # --- 修改: 使用固定值 0.5 ---
+    #     fixed_value = 0.03
+    #     # 创建一个全为 0.5 的张量，形状，并确保它在正确的设备上
+    #     # self.num_points 通常可以从 init_means.shape[0] 获取
+    #     num_points = init_means.shape[0]
+    #     fixed_scale = torch.full((num_points, 1), fixed_value, device=self.device)
+    #     epsilon = 0.005
+    #     base_scale = torch.cat([fixed_scale, fixed_scale, torch.ones_like(fixed_scale) * epsilon], dim=-1)
+
+    #     if self.ball_gaussians:
+    #         self._scales = Parameter(torch.log(base_scale))
+    #     else:
+    #         if self.gaussian_2d:
+    #             self._scales = Parameter(torch.log(avg_dist.repeat(1, 2)))
+    #         else:
+    #             self._scales = Parameter(torch.log(base_scale))
+
+    #     unit_quats = torch.zeros((self.num_points, 4), dtype=torch.float, device=self.device)
+    #     unit_quats[:, 0] = 1.0 # w = 1, x=0, y=0, z=0
+    #     self._quats = Parameter(unit_quats)
+
+    #     dim_sh = num_sh_bases(self.sh_degree)
+
+    #     fused_color = RGB2SH(init_colors) # float range [0, 1] 
+    #     shs = torch.zeros((fused_color.shape[0], dim_sh, 3)).float().to(self.device)
+    #     if self.sh_degree > 0:
+    #         shs[:, 0, :3] = fused_color
+    #         shs[:, 1:, 3:] = 0.0
+    #     else:
+    #         shs[:, 0, :3] = torch.logit(init_colors, eps=1e-10)
+    #     self._features_dc = Parameter(shs[:, 0, :])
+    #     self._features_rest = Parameter(shs[:, 1:, :])
+    #     self._opacities = Parameter(torch.logit(0.99 * torch.ones(self.num_points, 1, device=self.device)))
+
+    ### init_means是采样的路面点
+    def create_from_pcd(self, init_means: torch.Tensor, init_colors: torch.Tensor) -> None:
+        grid_spacing = 0.1 # 10cm一个点
+        k = 3
+        chunk_size = 10000  # 每次处理1万个网格点，显存压力极小
+
+        # 1. 建立基础网格 (同前)
+        x_min, x_max = init_means[:, 0].min(), init_means[:, 0].max()
+        y_min, y_max = init_means[:, 1].min(), init_means[:, 1].max()
+        # v1:纯矩形
+        # x_coords = torch.arange(x_min, x_max, grid_spacing, device=self.device)
+        # y_coords = torch.arange(y_min, y_max, grid_spacing, device=self.device)
+        # grid_x, grid_y = torch.meshgrid(x_coords, y_coords, indexing='ij')
+        # grid_xy_all = torch.stack([grid_x.flatten(), grid_y.flatten()], dim=-1)
+
+        # v2：纯矩形+又一层
+        x_coords = torch.arange(x_min, x_max, grid_spacing, device=self.device)
+        y_coords = torch.arange(y_min, y_max, grid_spacing, device=self.device)
+        grid_x, grid_y = torch.meshgrid(x_coords, y_coords, indexing='ij')
+        grid_a = torch.stack([grid_x.flatten(), grid_y.flatten()], dim=-1)
+        # 2. 偏移网格 (Grid B) - 填补 Grid A 的缝隙
+        # 偏移量是间距的一半
+        offset = grid_spacing / 2.0
+        grid_b = grid_a + offset 
+        # 3. 合并
+        grid_xy_all = torch.cat([grid_a, grid_b], dim=0)
+
+        resampled_means_list = []
+        resampled_colors_list = []
+
+        # 2. 分块处理网格点
+        for i in range(0, grid_xy_all.shape[0], chunk_size):
+            grid_xy = grid_xy_all[i : i + chunk_size]
+            
+            # 只计算当前 chunk 到原始点云的距离
+            # 注意：如果 init_means 依然几千万，这里还是会大。解决办法见方案2。
+            dist_mat = torch.cdist(grid_xy, init_means[:, :2]) 
+            topk_dist, topk_idx = torch.topk(dist_mat, k, largest=False, dim=-1)
+            
+            valid_mask = topk_dist[:, 0] < (grid_spacing * 4.0) #阈值调大一些
+            if not valid_mask.any(): continue
+
+            # 执行插值逻辑 (同前)
+            curr_weights = 1.0 / (topk_dist[valid_mask] + 1e-6)
+            curr_weights /= curr_weights.sum(dim=-1, keepdim=True)
+            
+            interp_z = (init_means[topk_idx[valid_mask], 2] * curr_weights).sum(dim=-1, keepdim=True)
+            resampled_means_list.append(torch.cat([grid_xy[valid_mask], interp_z], dim=-1))
+            
+            neighbor_rgb = init_colors[topk_idx[valid_mask]]
+            resampled_colors_list.append((neighbor_rgb * curr_weights[..., None]).sum(dim=1))
+
+        resampled_means = torch.cat(resampled_means_list, dim=0)
+        resampled_colors = torch.cat(resampled_colors_list, dim=0)
+
+        # --- 步骤 3: 使用重采样后的数据进行初始化 ---
+        self._means = Parameter(resampled_means)
+        num_points = resampled_means.shape[0]
+        
+        # 你原来的 fixed_scale 逻辑
+        # 建议：fixed_value 设为 grid_spacing * 0.7 左右可以实现良好的覆盖
+        fixed_value = grid_spacing * 0.3 ### scale大小是0.03
+        fixed_scale_tensor = torch.full((num_points, 1), fixed_value, device=self.device)
         epsilon = 0.005
-        base_scale = torch.cat([fixed_scale, fixed_scale, torch.ones_like(fixed_scale) * epsilon], dim=-1)
+        # 注意：这里我们让高斯在 XY 方向平铺，Z 方向极薄
+        base_scale = torch.cat([fixed_scale_tensor, fixed_scale_tensor, torch.ones_like(fixed_scale_tensor) * epsilon], dim=-1)
 
         if self.ball_gaussians:
-            self._scales = Parameter(torch.log(base_scale))
+            # 如果是球形，取最大值
+            self._scales = Parameter(torch.log(fixed_scale_tensor))
         else:
-            if self.gaussian_2d:
-                self._scales = Parameter(torch.log(avg_dist.repeat(1, 2)))
-            else:
-                self._scales = Parameter(torch.log(base_scale))
+            self._scales = Parameter(torch.log(base_scale))
 
-        unit_quats = torch.zeros((self.num_points, 4), dtype=torch.float, device=self.device)
-        unit_quats[:, 0] = 1.0 # w = 1, x=0, y=0, z=0
+        # 旋转初始化：w=1, 意味着高斯主轴对齐世界坐标轴 (配合你压缩 Z 的策略，正好贴合路面)
+        unit_quats = torch.zeros((num_points, 4), dtype=torch.float, device=self.device)
+        unit_quats[:, 0] = 1.0 
         self._quats = Parameter(unit_quats)
 
+        # SH 颜色初始化
         dim_sh = num_sh_bases(self.sh_degree)
-
-        fused_color = RGB2SH(init_colors) # float range [0, 1] 
-        shs = torch.zeros((fused_color.shape[0], dim_sh, 3)).float().to(self.device)
+        fused_color = RGB2SH(resampled_colors) 
+        shs = torch.zeros((num_points, dim_sh, 3), device=self.device)
+        
         if self.sh_degree > 0:
             shs[:, 0, :3] = fused_color
-            shs[:, 1:, 3:] = 0.0
+            # 高阶系数置零
+            shs[:, 1:, :] = 0.0
         else:
-            shs[:, 0, :3] = torch.logit(init_colors, eps=1e-10)
+            shs[:, 0, :3] = torch.logit(resampled_colors, eps=1e-10)
+            
         self._features_dc = Parameter(shs[:, 0, :])
         self._features_rest = Parameter(shs[:, 1:, :])
-        self._opacities = Parameter(torch.logit(0.99 * torch.ones(self.num_points, 1, device=self.device)))
         
+        # 透明度初始化：因为是均匀分布且有覆盖，不透明度可以设高一点 (0.9 或 0.99)
+        self._opacities = Parameter(torch.logit(0.99 * torch.ones(num_points, 1, device=self.device)))
+    
     @property
     def colors(self):
         if self.sh_degree > 0:

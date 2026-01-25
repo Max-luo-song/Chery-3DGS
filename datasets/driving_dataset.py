@@ -1043,7 +1043,7 @@ class DrivingDataset(SceneDataset):
   
         # print("体素化时候数值", filtered_road_pts.shape[0])
         # 对路面点云进行随机采样
-        num_samples = 6000000
+        num_samples = 100000
 
         if num_samples > filtered_road_pts.shape[0]:
             num_samples = filtered_road_pts.shape[0]

@@ -485,6 +485,10 @@ class VanillaGaussians(nn.Module):
             if not mask.any():
                 return
 
+            # 确保是布尔型
+                if mask.dtype != torch.bool:
+                    mask = mask.to(torch.bool)
+
             n_bef = self.num_points
             # 这里的 ~mask 表示保留下来的点
             keep_mask = ~mask

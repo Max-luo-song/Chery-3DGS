@@ -10,7 +10,7 @@ lidar_type="lidar"  # lidar（运动补偿前）/visual（纯视觉）
 
 config_file="configs/omnire_extended_cam_lidar.yaml"
 dataset_config="qcraft/11cams_${lidar_type}"
-extra_config_info="roadw1_600w_fixscale0.03_sh0_opacity0.99_afterann_filterbg"  # 额外信息 不开启models/nodes/road.py中的refine_after
+extra_config_info="roadw1_unisam_sh0_opacity0.99_scale0.03_afterann_filterg"  # 额外信息 不开启models/nodes/road.py中的refine_after
 
 start_timestep=0 # start frame index for training
 end_timestep=-1 # end frame index, -1 for the last frame
@@ -128,5 +128,3 @@ CUDA_VISIBLE_DEVICES=${gpu} python sim_render/cam/render_novel_trajectory.py \
     --downscales "${downscales[@]}" \
     --fps $fps \
     $bool_args
-
-
