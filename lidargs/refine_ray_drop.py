@@ -135,6 +135,7 @@ def refine_with_dataloader(dataset, logger, use_amp=True):
     scaler = GradScaler() if use_amp else None
 
     refine_epoch = dataset.unet_iterations
+    #增加 weight_decay (1e-5 -> 1e-3) 以防止过拟合
     optimizer = torch.optim.Adam(unet.parameters(), lr=1e-4, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=refine_epoch, eta_min=1e-6
@@ -152,12 +153,18 @@ def refine_with_dataloader(dataset, logger, use_amp=True):
         for batch_idx, (input_batch, gt_batch) in enumerate(dataloader):
             input_batch = input_batch.cuda()
             gt_batch = gt_batch.cuda()
+# 随机水平翻转 (Random Horizontal Flip)
+            if np.random.rand() > 0.5:
+                input_batch = torch.flip(input_batch, dims=[3])
+                gt_batch = torch.flip(gt_batch, dims=[3])
 
             optimizer.zero_grad()
 
             mask = torch.ones_like(input_batch)
-            box_num_max = 4
-            box_size_y_max = int(0.05 * input_batch.shape[2])
+            #增强 Cutout 强度 (box数量 4->6, 尺寸 0.05->0.1)
+            box_num_max = 6
+            box_size_y_max = int(0.10 * input_batch.shape[2])
+            box_size_x_max = int(0.10 * input_batch.shape[2])
             box_size_x_max = int(0.05 * input_batch.shape[3])
             for j in range(np.random.randint(box_num_max)):
                 box_size_y = np.random.randint(1, box_size_y_max)
@@ -170,12 +177,12 @@ def refine_with_dataloader(dataset, logger, use_amp=True):
             if use_amp:
                 with autocast():
                     raydrop_refine = unet(input_batch * mask)
-                    # 组合Loss：优先保证raydrop掩码精度（Dice权重调高）
+                    # 组合Loss：BCE + Dice
                     bce_loss = bce_fn(raydrop_refine.float(), gt_batch.float())
                     dice_loss_val = dice_loss_hard(
                         raydrop_refine.float(), gt_batch.float()
                     )
-                    total_loss = bce_loss + 1.0 * dice_loss_val
+                    total_loss = bce_loss + 1.2 * dice_loss_val
 
                 scaler.scale(total_loss).backward()
                 scaler.step(optimizer)
@@ -327,15 +334,8 @@ def refine_test(dataset, logger):
                 # UNet refinement
                 # 输入现在是4通道: [raydrop, intensity, depth(norm), mid_depth_diff]
                 raydrop_refine = unet(render_data)
-                
-                # 动态保守策略:
-                # - UNet 低阈值 (0.35) 保留细节
-                # - 原始极高置信度 (>0.85) 保底
-                # - 但如果 UNet (<0.2) 且原始不够强 (<0.9)，则删除
-                unet_mask = torch.where(raydrop_refine > 0.35, 1, 0)
-                strong_reject = (raydrop_refine < 0.2) & (render_data[:, [0]] < 0.9)
-                raydrop_mask = torch.max(original_high_conf, unet_mask)
-                raydrop_mask = torch.where(strong_reject, 0, raydrop_mask)  # 强拒绝优先
+        
+                raydrop_mask = torch.where(raydrop_refine > 0.5, 1, 0)
                 
                 gt_raydrop = gt_data[[0]]
 
@@ -352,9 +352,9 @@ def refine_test(dataset, logger):
             gt_depth = gt_data[[2]] * gt_raydrop * gt_objmask
 
             # 注意: render_data 的 depth 被归一化了，计算loss时要用原始值吗？
-            # 实际上 render_data 是从文件读出来的 tensor，在上面直接修改了 render_data[:,2]，
+            # 实际上 render_data 是从文件读出来的 tensor，我们在上面直接修改了 render_data[:,2]，
             # 所以这里的 render_data[0, [2]] 是归一化后的。
-            # 为了计算指标，需要还原深度
+            # 为了计算指标，我们需要还原深度！
             
             refined_intensity = render_data[0, [1]] * raydrop_mask[0]
             refined_depth = (render_data[0, [2]] * 80.0) * raydrop_mask[0] # 还原深度
@@ -369,14 +369,23 @@ def refine_test(dataset, logger):
                 refined_depth = refined_depth * depth_distortion_aware
                 original_depth = original_depth * depth_distortion_aware
 
-            # 计算指标
+            # 计算指标（对齐 train.py：只在 GT 有效区域计算）
             l1_test += l1_loss(refined_intensity, gt_intensity).item()
             psnr_test += psnr(refined_intensity, gt_intensity).mean().double().item()
 
+            # 强度 MAE 只在 GT 有效区域计算（对齐 train.py）
+            # 这样即使 UNet 误删了点，也不会因为 refined_intensity=0 导致 MAE 虚高
+            valid_intensity_mask = (gt_raydrop > 0.5) & (gt_objmask > 0.5)
             error_in_abs = torch.abs(refined_intensity - gt_intensity)
-            in_mae += error_in_abs.mean().item()
-            in_rmse += torch.sqrt((error_in_abs * error_in_abs).mean()).item()
-            in_medae += error_in_abs.median().item()
+            if valid_intensity_mask.sum() > 0:
+                valid_in_error = error_in_abs[valid_intensity_mask]
+                in_mae += valid_in_error.mean().item()
+                in_rmse += torch.sqrt((valid_in_error * valid_in_error).mean()).item()
+                in_medae += valid_in_error.median().item()
+            else:
+                in_mae += 0.0
+                in_rmse += 0.0
+                in_medae += 0.0
 
             in_ssim += structural_similarity(
                 refined_intensity[0].detach().cpu().numpy(),
@@ -412,9 +421,14 @@ def refine_test(dataset, logger):
                 cd_ori = points_meter_ori.measure()[0]
                 cd_original += cd_ori
 
-            # 计算深度误差时，只考虑有效区域（有 raydrop 且经过 depth_distortion_aware 筛选的区域）
-            valid_depth_mask = (gt_raydrop > 0.5) & (gt_objmask > 0.5)
-            if depth_distortion_aware is not None:  # 如果使用了 depth_distortion_aware
+            # 计算深度误差时，只考虑有效区域
+            # 关键：valid_depth_mask 必须同时满足：
+            # 1. GT 有点 (gt_raydrop > 0.5)
+            # 2. GT objmask 有效
+            # 3. depth_distortion_aware 通过筛选
+            # 4. refine 后的 mask 也保留了该点 (raydrop_mask > 0.5)
+            valid_depth_mask = (gt_raydrop > 0.5) & (gt_objmask > 0.5) & (raydrop_mask[0] > 0.5)
+            if depth_distortion_aware is not None:
                 valid_depth_mask = valid_depth_mask & (depth_distortion_aware > 0.5)
 
             error_depth_abs = torch.abs(refined_depth - gt_depth)

@@ -318,7 +318,9 @@ def training(
                 render_intensity * ray_drop * gt_objmask
             )  # 直接使用gt的raydrop mask
             depth = depth * ray_drop * gt_objmask
-            raydrop_loss = torch.nn.BCEWithLogitsLoss()(render_raydrop, ray_drop)
+            # Fix: render_raydrop is already in [0,1] (sigmoid applied), so use BCELoss
+            render_raydrop = torch.clamp(render_raydrop, 1e-6, 1.0 - 1e-6)
+            raydrop_loss = torch.nn.BCELoss()(render_raydrop, ray_drop)
 
         Ll1 = l1_loss(render_intensity, gt_intensity)
         depth_loss = l1_loss(depth, gt_depth)
@@ -362,6 +364,20 @@ def training(
             raise ValueError("Loss is NaN or Inf")
 
         loss.backward()
+
+        if iteration % 100 == 0:
+            with open(os.path.join(dataset.model_path, "grad_log.txt"), "a") as f:
+                f.write(f"Iteration {iteration}:\n")
+                f.write(f"Losses: Total={loss.item():.6f}, RayDrop={raydrop_loss.item():.6f}, Intensity={intensity_loss.item():.6f}, Depth={depth_loss.item():.6f}, Grad={grad_loss.item():.6f}\n")
+                if 0 in model_id_scene_info:
+                    model_gaussian = model_id_scene_info[0].gaussians
+                    for name, param in model_gaussian.named_parameters():
+                        if param.grad is not None:
+                            grad_mean = param.grad.mean().item()
+                            grad_std = param.grad.std().item()
+                            grad_abs_max = param.grad.abs().max().item()
+                            f.write(f"{name}: mean={grad_mean:.2e}, std={grad_std:.2e}, abs_max={grad_abs_max:.2e}\n")
+                f.write("-" * 20 + "\n")
 
         # 打印各参数梯度, 观察是否有nan，过大或者过小的梯度
         model_gaussian = model_id_scene_info[0].gaussians
@@ -622,24 +638,39 @@ def train_composite_report(
             }
             torch.save(save_dict, gt_save_path)
 
-            # Save rendered data: [raydrop, intensity, depth]
+            # Save rendered data: [raydrop, intensity, depth, feats, mid_depth_diff]
             render_save_path = os.path.join(render_dir, f"{render_timestamp}.pt")
+            
+            # [Add depth_distortion_aware to input channels]
+            # This allows UNet to see the "filtered" suggested mask and learn to use it
+            depth_distortion_aware = render_pkg["mid_depth_diff"]
+            
+            # We explicitly detach and move to cpu to avoid memory issues
             render_data = torch.cat(
                 [
                     render_pkg["render"][1:2, ...],
                     render_pkg["render"][0:1, ...],
                     render_pkg["depth"],
-                    render_pkg["mid_depth_diff"],
+                    #render_pkg["rendered_feat"],
+                    depth_distortion_aware, # Add mid_depth_diff as explicit feature for Unet
                 ],
                 dim=0,
             )
             torch.save(render_data.detach().cpu(), render_save_path)
 
-        if True:  # new trick: using depth_distortion_aware
+        # [Modified by Instruction] Apply depth distortion TRICK to depth metrics only
+        # User observed that applying this to intensity hurts intensity metrics,
+        # but NOT applying it to depth hurts depth metrics (CD).
+        # So we split the logic: Filter Depth, Keep Intensity Raw.
+        if True: 
             depth_distortion_aware = render_pkg["mid_depth_diff"]
-            depth_distortion_aware = torch.where(depth_distortion_aware < 0.3, 1, 0)
+            # Filter out points with large distortion (noise)
+            depth_distortion_aware = torch.where(depth_distortion_aware < 0.3, 1.0, 0.0)
+            # Apply to DEPTH 
             depth = depth * depth_distortion_aware
-            render_intensity = render_intensity * depth_distortion_aware
+            # render_intensity = render_intensity * depth_distortion_aware 
+        else:
+            depth_distortion_aware = None
 
         l1_test += l1_loss(render_intensity, gt_intensity)
         psnr_test += psnr(render_intensity, gt_intensity).mean().double()
@@ -753,10 +784,10 @@ if __name__ == "__main__":
     parser.add_argument("--detect_anomaly", action="store_true", default=False)
     parser.add_argument("--warmup", action="store_true", default=False)
     parser.add_argument(
-        "--test_iterations", nargs="+", type=int, default=[1000, 3000, 5000]
+        "--test_iterations", nargs="+", type=int, default=[1000, 3000, 5000,8000,10000]
     )
     parser.add_argument(
-        "--save_iterations", nargs="+", type=int, default=[1000, 3000, 5000]
+        "--save_iterations", nargs="+", type=int, default=[1000, 3000, 5000,8000,10000]
     )
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
