@@ -863,117 +863,302 @@ class DrivingDataset(SceneDataset):
         self,
         seed_pts: Tensor,
         seed_colors: Tensor = None,
+        TYPE: str = None,
+        road_only: bool = False,
+        seed_time: Tensor = None,
+    ):
+        if TYPE == "IMAGE":
+            # 使用一个布尔张量来记录一个点是否在任意一帧的任意相机中被识别为路面点
+            on_road_mask = torch.zeros_like(seed_pts[:, 0]).bool()
+            
+            # 遍历所有有效相机
+            for cam_id in self.pixel_source.camera_list:
+                camera_info = self.pixel_source.camera_data[cam_id]
+                intrinsics = camera_info.intrinsics.to(seed_pts.device)  # (3, 3)
+                cam_to_worlds = camera_info.cam_to_worlds.to(seed_pts.device) # (F, 4, 4)
+                road_masks = camera_info.road_masks.to(seed_pts.device)     # (F, H, W)
+                ego_masks = camera_info.egocar_mask.to(seed_pts.device) # (F, H, W)
+
+                num_frames = cam_to_worlds.shape[0]
+                img_h, img_w = road_masks.shape[1], road_masks.shape[2]
+                
+                # --- 核心改动：逐帧处理 ---
+                for frame_idx in range(num_frames):
+                    # 1. 获取当前帧的变换矩阵和 road mask
+                    cam_to_world = cam_to_worlds[frame_idx] # (4, 4)
+                    world_to_cam = torch.linalg.inv(cam_to_world) # (4, 4)
+                    current_road_mask = road_masks[frame_idx] # (H, W)
+                    current_ego_mask = ego_masks # (H, W) # 为什么是(1024)? egocar_mask 对于同一个相机来说是固定不变的，它不随 frame_idx 变化
+
+                    # 2. 将所有点云变换到当前帧的相机坐标系
+                    #    pts_cam: (N, 3)
+                    pts_cam = transform_points(seed_pts, world_to_cam)
+
+                    # 3. 筛选出在相机前方的点
+                    in_front_of_cam_mask = pts_cam[:, 2] > 0  # (N,)
+
+                    fx, fy = intrinsics[frame_idx][0, 0], intrinsics[frame_idx][1, 1]
+                    cx, cy = intrinsics[frame_idx][0, 2], intrinsics[frame_idx][1, 2]
+        
+                    u = (fx * pts_cam[:, 0] / pts_cam[:, 2] + cx).long()
+                    v = (fy * pts_cam[:, 1] / pts_cam[:, 2] + cy).long()
+
+                    # 4. 筛选在图像范围内的点（坐标在0w 0h之间）
+                    h, w = img_h, img_w
+                    in_image_bounds_mask = (u >= 0) & (u < w) & (v >= 0) & (v < h)
+                    
+                    # 6. 合并当前帧的所有有效条件
+                    final_valid_mask = in_front_of_cam_mask & in_image_bounds_mask # (N,) # 所有点里在相机前方且投影在相机平面上的
+
+                    ### 对pts_cam_valid
+                    # 7. 对满足条件的点，检查它们是否在路面 mask 上
+                    if final_valid_mask.any():
+                        # 获取满足条件的点的像素坐标
+                        valid_u = u[final_valid_mask]
+                        valid_v = v[final_valid_mask]
+                        valid_pixels = torch.stack([valid_u, valid_v], dim=1)
+                        
+                        # 找到这些有效点在原始点云中的索引
+                        point_indices = torch.where(final_valid_mask)[0]
+                        
+                        # 在road_mask的点去掉ego_mask部分
+                        is_on_road_for_frame = current_road_mask[valid_pixels[:, 1], valid_pixels[:, 0]]
+                        current_ego_mask = (1.0 - current_ego_mask).float()
+                        ego_mask_at_valid_pixels = current_ego_mask[valid_pixels[:, 1], valid_pixels[:, 0]]
+                        is_on_road_for_frame_wo_ego = is_on_road_for_frame * ego_mask_at_valid_pixels
+                            
+                        # 更新全局 on_road_mask
+                        # 找到在本帧中被识别为路面点的原始点云索引
+                        road_point_indices = point_indices[is_on_road_for_frame_wo_ego.bool()]
+                        on_road_mask[road_point_indices] = True
+            ### 逻辑：对于每个相机每一帧，找到相机视线+路面mask+去除ego_mask下所有点（存在冗余：路面分割错误识别
+
+            final_road_mask = on_road_mask
+            # --- 新增逻辑：根据 Z 轴将路面点分为“真路面”和“高处环境” ---
+            
+            # 1. 提取视觉识别出的所有路面点
+            visual_road_pts = seed_pts[final_road_mask]
+            
+            # 2. 判断 Z 轴高度：保留小于 0.1 的
+            # 注意：这里假设 Z 轴是世界坐标系下的高度
+            z_threshold = -1.3  # 可以根据需要调整阈值 可视化点云测试1.3消除栅栏
+            is_low_road = visual_road_pts[:, 2] < z_threshold
+            
+            # 3. 构建最终的“纯路面”掩码 (用于返回路面点云)
+            # 我们需要找到 visual_road_pts 中满足 z < 0.1 的点在原始 seed_pts 中的索引
+            # 首先获取 visual_road_pts 在原始数组中的索引
+            visual_road_indices = torch.where(final_road_mask)[0]
+            
+            # 筛选出低处的索引
+            real_road_indices = visual_road_indices[is_low_road]
+            
+            # 高处路面点索引 (Z >= 0.1) -> 这里显式使用了该变量
+            high_lying_indices = visual_road_indices[~is_low_road]
+
+            # 4. 准备环境点云
+            # 原始环境点索引 (不在视觉路面上的点)
+            non_road_indices = torch.where(~on_road_mask)[0]
+
+            # 【关键步骤】合并索引：环境点 = 原始环境点 + 高处路面误检点
+            final_env_indices = torch.cat([non_road_indices, high_lying_indices])
+
+            # --- 处理环境点云 (去除地下噪音) ---
+            # 先提取坐标用于判断
+            env_pts_candidate = seed_pts[final_env_indices]
+
+            if not road_only:
+                # 去除地下点 (Z < 0)
+                z_filter_mask = env_pts_candidate[:, 2] > 0.0
+                num_removed = (~z_filter_mask).sum().item()
+                if num_removed > 0:
+                    print(f"Removed {num_removed} underground noise points.")
+                
+                # 获取最终有效的环境点索引
+                valid_env_indices = final_env_indices[z_filter_mask]
+            else:
+                # 如果 road_only=True，暂不额外过滤
+                valid_env_indices = final_env_indices
+
+            # 赋值环境点数据
+            filtered_pts = seed_pts[valid_env_indices]
+            filtered_colors = seed_colors[valid_env_indices] if seed_colors is not None else None
+            filtered_time = seed_time[valid_env_indices] if seed_time is not None else None
+
+            # --- 处理路面点云 (采样) ---
+            filtered_road_pts = seed_pts[real_road_indices]
+            filtered_road_colors = seed_colors[real_road_indices] if seed_colors is not None else None
+            filtered_road_time = seed_time[real_road_indices] if seed_time is not None else None 
+
+            # 对路面点云进行随机采样
+            num_samples = 100000
+
+            if num_samples > filtered_road_pts.shape[0]:
+                num_samples = filtered_road_pts.shape[0]
+            sampled_idx = torch.randperm(filtered_road_pts.shape[0])[:num_samples]
+
+            filtered_road_pts = filtered_road_pts[sampled_idx]
+            filtered_road_colors = filtered_road_colors[sampled_idx] if filtered_road_colors is not None else None
+            filtered_road_time = filtered_road_time[sampled_idx] if filtered_road_time is not None else None   
+
+            ### TODO(gls)：可视化地面点云
+            if DEBUG_PCD:
+                before_sample_road_pts = seed_pts[final_road_mask]
+                before_sample_road_colors = seed_colors[final_road_mask] if seed_colors is not None else None
+                before_sample_road_time = seed_time[final_road_mask] if seed_time is not None else None
+                before_sample_road_pts = before_sample_road_pts[sampled_idx]
+                before_sample_road_colors = before_sample_road_colors[sampled_idx]
+                export_points_to_ply(
+                    before_sample_road_pts,
+                    before_sample_road_colors,
+                    save_path=os.path.join(DEBUG_OUTPUT_DIR, "before_low_road.ply"),
+                )
+
+        elif TYPE == "LIDAR":
+            filtered_pts, filtered_colors, filtered_time, filtered_road_pts, filtered_road_colors, filtered_road_time = self.filter_pts_in_road_lidar(seed_pts, seed_colors, road_only, seed_time)
+        return {"pts": filtered_pts, "colors": filtered_colors, "time": filtered_time}, {"pts": filtered_road_pts, "colors": filtered_road_colors, "time": filtered_road_time}
+
+    def filter_pts_in_road_lidar(
+        self,
+        seed_pts: Tensor,
+        seed_colors: Tensor = None,
         road_only: bool = False,
         seed_time: Tensor = None,
     ):
         """
-        Identifies points that lie on the road surface by projecting all points onto all camera views across all frames.
-        (Optimized for memory: processes frames sequentially)
+        使用 Progressive Morphological Filter (PMF) 算法分离路面点云和环境点云
+        
+        
+            seed_pts: 输入点云 (N, 3)
+            seed_colors: 点云颜色 (N, 3)
+            road_only: 是否只关注地面点
+            seed_time: 点云时间戳 (N,)
+        
+        返回:
+            env_dict: 环境点云字典 {"pts": ..., "colors": ..., "time": ...}
+            road_dict: 路面点云字典 {"pts": ..., "colors": ..., "time": ...}
         """
-        # 使用一个布尔张量来记录一个点是否在任意一帧的任意相机中被识别为路面点
-        on_road_mask = torch.zeros_like(seed_pts[:, 0]).bool()
         
-        # 遍历所有有效相机
-        for cam_id in self.pixel_source.camera_list:
-            camera_info = self.pixel_source.camera_data[cam_id]
-            intrinsics = camera_info.intrinsics.to(seed_pts.device)  # (3, 3)
-            cam_to_worlds = camera_info.cam_to_worlds.to(seed_pts.device) # (F, 4, 4)
-            road_masks = camera_info.road_masks.to(seed_pts.device)     # (F, H, W)
-            ego_masks = camera_info.egocar_mask.to(seed_pts.device) # (F, H, W)
+        # ==================== Progressive Morphological Filter 实现 ====================
+        @torch.no_grad()
+        def progressive_morphological_filter_optimized(
+            points: Tensor,
+            max_window_size: int = 20,
+            slope: float = 0.05,        # 建议设小，针对平坦路面
+            initial_distance: float = 0.15,
+            max_distance: float = 2.5,
+            cell_size: float = 0.5,     # 建议 0.5，增加稳健性
+            exponential: bool = True
+        ):
+            device = points.device
+            N = points.shape[0]
 
-            num_frames = cam_to_worlds.shape[0]
-            img_h, img_w = road_masks.shape[1], road_masks.shape[2]
+            # --- 1. 预处理：简单的统计去噪 (SOR) ---
+            # 目的：剔除悬浮的孤立杂点，防止它们污染初始高度图
+            # 如果点云极其密集，可以跳过此步以节省时间
+            if N > 0:
+                # 取前 100w 点做示例，实际建议全量或随机采样检查
+                # 这里的逻辑是：如果一个点在局部范围内太孤立，它很可能是噪点
+                pass 
+
+            # --- 2. 向量化计算网格索引 ---
+            coords_min = points[:, :2].min(dim=0)[0]
+            coords_max = points[:, :2].max(dim=0)[0]
             
-            # --- 核心改动：逐帧处理 ---
-            for frame_idx in range(num_frames):
-                # 1. 获取当前帧的变换矩阵和 road mask
-                cam_to_world = cam_to_worlds[frame_idx] # (4, 4)
-                world_to_cam = torch.linalg.inv(cam_to_world) # (4, 4)
-                current_road_mask = road_masks[frame_idx] # (H, W)
-                current_ego_mask = ego_masks # (H, W) # 为什么是(1024)? egocar_mask 对于同一个相机来说是固定不变的，它不随 frame_idx 变化
+            grid_width = int(torch.ceil((coords_max[0] - coords_min[0]) / cell_size).item()) + 1
+            grid_height = int(torch.ceil((coords_max[1] - coords_min[1]) / cell_size).item()) + 1
+            
+            grid_x = ((points[:, 0] - coords_min[0]) / cell_size).long().clamp(0, grid_width - 1)
+            grid_y = ((points[:, 1] - coords_min[1]) / cell_size).long().clamp(0, grid_height - 1)
+            linear_indices = grid_y * grid_width + grid_x
 
-                # 2. 将所有点云变换到当前帧的相机坐标系
-                #    pts_cam: (N, 3)
-                pts_cam = transform_points(seed_pts, world_to_cam)
+            # --- 3. 初始高程图 ---
+            elevation_map_flat = torch.full((grid_height * grid_width,), float('inf'), device=device)
+            elevation_map_flat.scatter_reduce_(0, linear_indices, points[:, 2], reduce="amin", include_self=False)
+            
+            scene_min_z = points[:, 2].min()
+            mask_inf = elevation_map_flat == float('inf')
+            elevation_map_flat = torch.where(mask_inf, scene_min_z, elevation_map_flat)
+            
+            elevation_map = elevation_map_flat.view(grid_height, grid_width)
+            working_map = elevation_map.clone() # 用于迭代更新的地图
 
-                # 3. 筛选出在相机前方的点
-                in_front_of_cam_mask = pts_cam[:, 2] > 0  # (N,)
+            # 2. 【关键优化】将高程图移至 CPU 进行形态学操作
+            elevation_map_cpu = elevation_map.cpu()
+            working_map_cpu = elevation_map_cpu.clone()
+            # --- 4. 优化后的 PMF 迭代 ---
+            window_sizes = []
+            k = 0
+            while True:
+                window_size = 2 * (2**k if exponential else k) + 1
+                if window_size > max_window_size: break
+                window_sizes.append(window_size)
+                k += 1
 
-                fx, fy = intrinsics[frame_idx][0, 0], intrinsics[frame_idx][1, 1]
-                cx, cy = intrinsics[frame_idx][0, 2], intrinsics[frame_idx][1, 2]
-    
-                u = (fx * pts_cam[:, 0] / pts_cam[:, 2] + cx).long()
-                v = (fy * pts_cam[:, 1] / pts_cam[:, 2] + cy).long()
-
-                # 4. 筛选在图像范围内的点（坐标在0w 0h之间）
-                h, w = img_h, img_w
-                in_image_bounds_mask = (u >= 0) & (u < w) & (v >= 0) & (v < h)
+            for window_size in window_sizes:
+                # 计算当前窗口下的高度阈值
+                dhp = slope * (window_size - 1) * cell_size + initial_distance
+                dhp = min(dhp, max_distance)
                 
-                # 6. 合并当前帧的所有有效条件
-                final_valid_mask = in_front_of_cam_mask & in_image_bounds_mask # (N,) # 所有点里在相机前方且投影在相机平面上的
+                # 执行开运算 (Opening)
+                padding = window_size // 2
 
-                ### 对pts_cam_valid
-                # 7. 对满足条件的点，检查它们是否在路面 mask 上
-                if final_valid_mask.any():
-                    # 获取满足条件的点的像素坐标
-                    valid_u = u[final_valid_mask]
-                    valid_v = v[final_valid_mask]
-                    valid_pixels = torch.stack([valid_u, valid_v], dim=1)
-                    
-                    # 找到这些有效点在原始点云中的索引
-                    point_indices = torch.where(final_valid_mask)[0]
-                    
-                    # 在road_mask的点去掉ego_mask部分
-                    is_on_road_for_frame = current_road_mask[valid_pixels[:, 1], valid_pixels[:, 0]]
-                    current_ego_mask = (1.0 - current_ego_mask).float()
-                    ego_mask_at_valid_pixels = current_ego_mask[valid_pixels[:, 1], valid_pixels[:, 0]]
-                    is_on_road_for_frame_wo_ego = is_on_road_for_frame * ego_mask_at_valid_pixels
-                        
-                    # 更新全局 on_road_mask
-                    # 找到在本帧中被识别为路面点的原始点云索引
-                    road_point_indices = point_indices[is_on_road_for_frame_wo_ego.bool()]
-                    on_road_mask[road_point_indices] = True
-        ### 逻辑：对于每个相机每一帧，找到相机视线+路面mask+去除ego_mask下所有点（存在冗余：路面分割错误识别
+                # 在 CPU 上运行 max_pool2d
+                map_4d = working_map_cpu.unsqueeze(0).unsqueeze(0)
+                # torch.nn.functional.max_pool2d 在 CPU 下内存管理更保守
+                eroded = -torch.nn.functional.max_pool2d(-map_4d, window_size, stride=1, padding=padding)
+                dilated = torch.nn.functional.max_pool2d(eroded, window_size, stride=1, padding=padding)
+                dilated = dilated.squeeze()
+                
+                # 截断和更新同样在 CPU 完成
+                if dilated.shape != working_map_cpu.shape:
+                    dilated = dilated[:grid_height, :grid_width]
+                
+                mask_non_ground = (working_map_cpu - dilated) > dhp
+                working_map_cpu = torch.where(mask_non_ground, dilated, working_map_cpu)
 
-        final_road_mask = on_road_mask
-        # --- 新增逻辑：根据 Z 轴将路面点分为“真路面”和“高处环境” ---
+            # 3. 最后将结果移回 GPU 进行 Mask 判定
+            working_map = working_map_cpu.to(device)
+            # --- 5. 最终判定 ---
+            # 使用最后一轮迭代产生的平滑地表作为基准
+            point_ground_heights = working_map[grid_y, grid_x]
+            
+            # 地面点判定：点的高度与估计地表高度差在阈值内
+            height_diff = points[:, 2] - point_ground_heights
+            # 注意：只保留在上方一定范围内的点，排除掉由于遮挡产生的虚假地下点
+            ground_mask = (height_diff < initial_distance) & (height_diff > -initial_distance)
+            
+            return ground_mask
         
-        ### TODO(gls)：可视化地面点云
-        before_sample_road_pts = seed_pts[final_road_mask]
-        before_sample_road_colors = seed_colors[final_road_mask] if seed_colors is not None else None
-        before_sample_road_time = seed_time[final_road_mask] if seed_time is not None else None
-
-        # 1. 提取视觉识别出的所有路面点
-        visual_road_pts = seed_pts[final_road_mask]
+        # ==================== 主处理流程 ====================
+        print(f"Starting PMF ground segmentation on {seed_pts.shape[0]} points...")
         
-        # 2. 判断 Z 轴高度：保留小于 0.1 的
-        # 注意：这里假设 Z 轴是世界坐标系下的高度
-        z_threshold = -1.3  # 可以根据需要调整阈值 可视化点云测试1.3消除栅栏
-        is_low_road = visual_road_pts[:, 2] < z_threshold
+
+
+        # 使用简单的分位数裁剪或者指定范围裁剪
+        def crop_outliers(points):
+            # 假设正常的驾驶场景路面点不会超过中心点 200 米
+            mask = (points[:, 0].abs() < 200) & (points[:, 1].abs() < 200) & (points[:, 2].abs() < 50)
+            return points[mask]
+
+        ground_mask = progressive_morphological_filter_optimized(
+            seed_pts,
+            max_window_size=20,    # 对应 PCL 的 setMaxWindowSize
+            slope=0.05,             # 对应 PCL 的 setSlope
+            initial_distance=0.15,  # 对应 PCL 的 setInitialDistance
+            max_distance=2.5,      # 对应 PCL 的 setMaxDistance
+            cell_size=0.5         # 网格分辨率
+        )
+        num_ground_points = ground_mask.sum().item()
+        num_object_points = (~ground_mask).sum().item()
+        print(f"PMF segmentation complete: {num_ground_points} ground points, {num_object_points} object points")
         
-        # 3. 构建最终的“纯路面”掩码 (用于返回路面点云)
-        # 我们需要找到 visual_road_pts 中满足 z < 0.1 的点在原始 seed_pts 中的索引
-        # 首先获取 visual_road_pts 在原始数组中的索引
-        visual_road_indices = torch.where(final_road_mask)[0]
+        # 提取路面点和环境点
+        road_indices = torch.where(ground_mask)[0]
+        env_indices = torch.where(~ground_mask)[0]
         
-        # 筛选出低处的索引
-        real_road_indices = visual_road_indices[is_low_road]
-        
-         # 高处路面点索引 (Z >= 0.1) -> 这里显式使用了该变量
-        high_lying_indices = visual_road_indices[~is_low_road]
-
-        # 4. 准备环境点云
-        # 原始环境点索引 (不在视觉路面上的点)
-        non_road_indices = torch.where(~on_road_mask)[0]
-
-        # 【关键步骤】合并索引：环境点 = 原始环境点 + 高处路面误检点
-        final_env_indices = torch.cat([non_road_indices, high_lying_indices])
-
-        # --- 处理环境点云 (去除地下噪音) ---
-        # 先提取坐标用于判断
-        env_pts_candidate = seed_pts[final_env_indices]
-
-        if not road_only:
+        # 处理环境点云（去除地下点）
+        if not road_only and env_indices.numel() > 0:
+            env_pts_candidate = seed_pts[env_indices]
             # 去除地下点 (Z < 0)
             z_filter_mask = env_pts_candidate[:, 2] > 0.0
             num_removed = (~z_filter_mask).sum().item()
@@ -981,92 +1166,47 @@ class DrivingDataset(SceneDataset):
                 print(f"Removed {num_removed} underground noise points.")
             
             # 获取最终有效的环境点索引
-            valid_env_indices = final_env_indices[z_filter_mask]
+            valid_env_indices = env_indices[z_filter_mask]
         else:
-            # 如果 road_only=True，暂不额外过滤
-            valid_env_indices = final_env_indices
-
-        # 赋值环境点数据
+            valid_env_indices = env_indices
+        
+        # 提取环境点数据
         filtered_pts = seed_pts[valid_env_indices]
         filtered_colors = seed_colors[valid_env_indices] if seed_colors is not None else None
         filtered_time = seed_time[valid_env_indices] if seed_time is not None else None
-
-        # --- 处理路面点云 (采样) ---
-        filtered_road_pts = seed_pts[real_road_indices]
-        filtered_road_colors = seed_colors[real_road_indices] if seed_colors is not None else None
-        filtered_road_time = seed_time[real_road_indices] if seed_time is not None else None 
-
-       # 1. 准备数据：确保传入 Open3D 的是 float64 的 numpy array
-        # 使用辅助函数处理可能的 Tensor 输入
-        # def to_numpy_float64(data):
-        #     if isinstance(data, torch.Tensor):
-        #         return data.cpu().numpy().astype(np.float64)
-        #     elif isinstance(data, np.ndarray):
-        #         return data.astype(np.float64)
-        #     return data
-
-        # # 准备点云数据
-        # pts_np = to_numpy_float64(filtered_road_pts)
-
-        # # 构建 Open3D 点云对象
-        # pcd = o3d.geometry.PointCloud()
-        # pcd.points = o3d.utility.Vector3dVector(pts_np)
-
-        # min_bound = pcd.get_min_bound()
-        # max_bound = pcd.get_max_bound()
-        # # 2. 执行体素下采样并追踪索引
-        # downsampled_pcd, voxel_indices, _ = pcd.voxel_down_sample_and_trace(
-        #     voxel_size=0.05, 
-        #     min_bound=min_bound, 
-        #     max_bound=max_bound, 
-        #     approximate_class=False
-        # )
-
-        # sampled_indices = voxel_indices.flatten()
-        # 获取保留点的索引
-        # sampled_indices = [indices[0] for indices in voxel_indices if len(indices) > 0]
-        # sampled_indices = np.array(sampled_indices)
-
-        # 3. 更新变量
-        # 对 Tensor/Numpy 进行索引切片，并保持原有类型（如果是 Tensor 则切片后仍是 Tensor）
-
-        # 更新点云
-        # filtered_road_pts = filtered_road_pts[sampled_indices]
-
-        # # 更新颜色
-        # if filtered_road_colors is not None:
-        #     filtered_road_colors = filtered_road_colors[sampled_indices]
-
-        # # 更新时间
-        # if filtered_road_time is not None:
-        #     filtered_road_time = filtered_road_time[sampled_indices]
-  
-        # print("体素化时候数值", filtered_road_pts.shape[0])
-        # 对路面点云进行随机采样
+        
+        # 提取路面点数据
+        filtered_road_pts = seed_pts[road_indices]
+        filtered_road_colors = seed_colors[road_indices] if seed_colors is not None else None
+        filtered_road_time = seed_time[road_indices] if seed_time is not None else None
+        
+        # 对路面点云进行随机采样（与 filter_pts_in_road 保持一致）
         num_samples = 100000
-
         if num_samples > filtered_road_pts.shape[0]:
             num_samples = filtered_road_pts.shape[0]
-        sampled_idx = torch.randperm(filtered_road_pts.shape[0])[:num_samples]
-
-        filtered_road_pts = filtered_road_pts[sampled_idx]
-        filtered_road_colors = filtered_road_colors[sampled_idx] if filtered_road_colors is not None else None
-        filtered_road_time = filtered_road_time[sampled_idx] if filtered_road_time is not None else None   
-
-        before_sample_road_pts = before_sample_road_pts[sampled_idx]
-        before_sample_road_colors = before_sample_road_colors[sampled_idx]
-        # before_sample_road_time = before_sample_road_time[sampled_idx]
         
+        if num_samples > 0:
+            sampled_idx = torch.randperm(filtered_road_pts.shape[0], device=seed_pts.device)[:num_samples]
+            filtered_road_pts = filtered_road_pts[sampled_idx]
+            filtered_road_colors = filtered_road_colors[sampled_idx] if filtered_road_colors is not None else None
+            filtered_road_time = filtered_road_time[sampled_idx] if filtered_road_time is not None else None
+        
+        # 可视化调试（如果需要）
         if DEBUG_PCD:
             export_points_to_ply(
-                before_sample_road_pts,
-                before_sample_road_colors,
-                save_path=os.path.join(DEBUG_OUTPUT_DIR, "before_low_road.ply"),
+                filtered_road_pts,
+                filtered_road_colors,
+                save_path=os.path.join(DEBUG_OUTPUT_DIR, "lidar_road.ply"),
+            )
+            export_points_to_ply(
+                filtered_pts,
+                filtered_colors,
+                save_path=os.path.join(DEBUG_OUTPUT_DIR, "lidar_env.ply"),
             )
         
-
-        return {"pts": filtered_pts, "colors": filtered_colors, "time": filtered_time}, {"pts": filtered_road_pts, "colors": filtered_road_colors, "time": filtered_road_time}
-
+        # 返回环境点和路面点
+        return filtered_pts, filtered_colors, filtered_time, filtered_road_pts, filtered_road_colors, filtered_road_time
+        
     def check_pts_visibility(self, pts_xyz):
         # filter out the lidar points that are not visible from the camera
         pts_xyz = pts_xyz.to(self.device)

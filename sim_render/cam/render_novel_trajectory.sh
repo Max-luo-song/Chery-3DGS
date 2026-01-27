@@ -1,6 +1,6 @@
 # 参数设置
 ################################################################################
-ckpt_path="output/qcraft_20250702_133223_Q2517_60_75/20260122_lidar+cam0_1_2_3_5_6_7_9_10_11_12roadw1_unisam_sh0_opacity0.99_scale0.03_afterann_filterg/checkpoint_20000.pth"
+ckpt_path="output/qcraft_20250702_133223_Q2517_60_75/20260115baseline_lidar+cam0_1_2_3_5_6_7_9_10_11_12roadw1_600w_fixscale0.03_sh0_opacity0.99_afterann_filterbg/checkpoint_final.pth"
 
 traj_types=(
     # original_traj

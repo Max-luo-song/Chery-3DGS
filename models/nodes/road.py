@@ -139,16 +139,31 @@ class RoadNodes(nn.Module):
         # grid_xy_all = torch.stack([grid_x.flatten(), grid_y.flatten()], dim=-1)
 
         # v2：纯矩形+又一层
+        # x_coords = torch.arange(x_min, x_max, grid_spacing, device=self.device)
+        # y_coords = torch.arange(y_min, y_max, grid_spacing, device=self.device)
+        # grid_x, grid_y = torch.meshgrid(x_coords, y_coords, indexing='ij')
+        # grid_a = torch.stack([grid_x.flatten(), grid_y.flatten()], dim=-1)
+        # # 2. 偏移网格 (Grid B) - 填补 Grid A 的缝隙
+        # # 偏移量是间距的一半
+        # offset = grid_spacing / 2.0
+        # grid_b = grid_a + offset 
+        # # 3. 合并
+        # grid_xy_all = torch.cat([grid_a, grid_b], dim=0)
+
+        # v3: 反复增加层
         x_coords = torch.arange(x_min, x_max, grid_spacing, device=self.device)
         y_coords = torch.arange(y_min, y_max, grid_spacing, device=self.device)
         grid_x, grid_y = torch.meshgrid(x_coords, y_coords, indexing='ij')
+        # 1. 基础网格 Grid A
         grid_a = torch.stack([grid_x.flatten(), grid_y.flatten()], dim=-1)
-        # 2. 偏移网格 (Grid B) - 填补 Grid A 的缝隙
-        # 偏移量是间距的一半
+        # 2. 三个方向的偏移
         offset = grid_spacing / 2.0
-        grid_b = grid_a + offset 
-        # 3. 合并
-        grid_xy_all = torch.cat([grid_a, grid_b], dim=0)
+        grid_b = grid_a + torch.tensor([offset, 0.0], device=self.device)   # X 偏移
+        grid_c = grid_a + torch.tensor([0.0, offset], device=self.device)   # Y 偏移
+        grid_d = grid_a + torch.tensor([offset, offset], device=self.device) # 对角线偏移
+
+        # 3. 合并后的点数是原来的 4 倍
+        grid_xy_all = torch.cat([grid_a, grid_b, grid_c, grid_d], dim=0)
 
         resampled_means_list = []
         resampled_colors_list = []

@@ -2,7 +2,7 @@
 ################################################################################
 gpu=-1
 
-scene_idx="20251025_163358_QCOYSD504206_1595_1610"
+scene_idx="20251203_095105_QCOYSD968166_893_908"
 
 camera_ids=(0 1 2 3 5 6 7 9 10 11 12)  # camera IDs to use, e.g., (0), (0 2 4)
 # camera_ids=(0)  # camera IDs to use, e.g., (0), (0 2 4)
@@ -10,7 +10,7 @@ lidar_type="lidar"  # lidar（运动补偿前）/visual（纯视觉）
 
 config_file="configs/omnire_extended_cam_lidar.yaml"
 dataset_config="qcraft/11cams_${lidar_type}"
-extra_config_info="roadw1_unisam_sh0_opacity0.99_scale0.03_afterann_filterg"  # 额外信息 不开启models/nodes/road.py中的refine_after
+extra_config_info="roadw1_unisam_sh0_opacity0.99_scale0.03_afterann_filterg_PMF"  # 额外信息 不开启models/nodes/road.py中的refine_after
 
 start_timestep=0 # start frame index for training
 end_timestep=-1 # end frame index, -1 for the last frame

@@ -162,11 +162,22 @@ class MultiTrainer(BasicTrainer):
                 # import time
                 # print("time is sleeping")
                 # time.sleep(1000) 
-                processed_init_wo_road_pts, processed_init_road_pts = dataset.filter_pts_in_road( # 限制road点云数
-                    seed_pts=processed_pts_wo_box["pts"],
-                    seed_colors=processed_pts_wo_box["colors"],
-                    road_only = True
-                )
+                SEG_TYPE = "LIDAR"
+                if SEG_TYPE == "LIDAR":
+                    # 返回值：路面点+
+                    processed_init_wo_road_pts, processed_init_road_pts = dataset.filter_pts_in_road( # 限制road点云数
+                        seed_pts=processed_pts_wo_box["pts"],
+                        seed_colors=processed_pts_wo_box["colors"],
+                        TYPE = "LIDAR",
+                        road_only= True
+                    )
+                elif SEG_TYPE == "IMAGE":
+                    processed_init_wo_road_pts, processed_init_road_pts = dataset.filter_pts_in_road( # 限制road点云数
+                        seed_pts=processed_pts_wo_box["pts"],
+                        seed_colors=processed_pts_wo_box["colors"],
+                        TYPE = "IMAGE",
+                        road_only = True
+                    )  
                 if DEBUG_PCD:
                     export_points_to_ply(
                         processed_init_wo_road_pts["pts"],
@@ -199,7 +210,8 @@ class MultiTrainer(BasicTrainer):
                     
                     sampled_pts = torch.cat([sampled_pts, valid_pts], dim=0)
                     sampled_color = torch.cat([sampled_color, torch.rand(valid_pts.shape, ).to(self.device)], dim=0)
-                ### 获取背景点云，背景点云最好的方式是先去掉物体box内的点云，再去掉路面点云，剩下的点云作为背景点云
+    
+                ### 获取背景点云：背景点云最好的方式是先去掉物体box内的点云，再去掉路面点云，剩下的点云作为背景点云
                 processed_init_pts = dataset.filter_pts_in_boxes(
                     seed_pts=sampled_pts,
                     seed_colors=sampled_color,
@@ -208,20 +220,16 @@ class MultiTrainer(BasicTrainer):
                 processed_env_init_pts, _ = dataset.filter_pts_in_road(
                     seed_pts=processed_init_pts["pts"],
                     seed_colors=processed_init_pts["colors"],
+                    TYPE = SEG_TYPE,
                     road_only = False
                 )
 
-                # if DEBUG_PCD:
-                #     export_points_to_ply(
-                #         processed_init_pts["pts"],
-                #         processed_init_pts["colors"],
-                #         save_path=os.path.join(DEBUG_OUTPUT_DIR, "exclude_box.ply"),
-                #     )
-                    # export_points_to_ply(
-                    #     processed_env_init_pts["pts"],
-                    #     processed_env_init_pts["colors"],
-                    #     save_path=os.path.join(DEBUG_OUTPUT_DIR, "env_lidar_pts_plus.ply"),
-                    # )
+                if DEBUG_PCD:
+                    export_points_to_ply(
+                        processed_env_init_pts["pts"],
+                        processed_env_init_pts["colors"],
+                        save_path=os.path.join(DEBUG_OUTPUT_DIR, "env_final_pts.ply"),
+                    )
                 model.create_from_pcd(
                     init_means=processed_env_init_pts["pts"], init_colors=processed_env_init_pts["colors"]
                 )

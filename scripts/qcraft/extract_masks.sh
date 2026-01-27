@@ -2,9 +2,9 @@
 ################################################################################
 gpu=-1
 
-scene_id="20251025_163358_QCOYSD504206_1595_1610"
+scene_id="20251203_095105_QCOYSD968166_893_908"
 
-segformer_path=/data4/gls/code/scene_reconstruction/third_party/SegFormer
+segformer_path=/inspire/hdd/project/continuinglearningtheory/guoluosong-253108120129/project/scene_reconstruction/SegFormer
 ################################################################################
 
 # Pick an avaliable gpu
@@ -24,8 +24,8 @@ source "${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate segformer
 
 CUDA_VISIBLE_DEVICES=${gpu} python datasets/tools/extract_masks.py \
-    --data_root data/qcraft/processed/training \
+    --data_root ../data/qcraft/processed/training \
     --segformer_path=$segformer_path \
     --checkpoint=$segformer_path/pretrained/segformer.b5.1024x1024.city.160k.pth \
-    --scene_ids=$scene_id \
+    --scene_ids=$scene_id
     # --process_dynamic_mask
