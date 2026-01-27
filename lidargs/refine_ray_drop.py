@@ -153,7 +153,7 @@ def refine_with_dataloader(dataset, logger, use_amp=True):
         for batch_idx, (input_batch, gt_batch) in enumerate(dataloader):
             input_batch = input_batch.cuda()
             gt_batch = gt_batch.cuda()
-# 随机水平翻转 (Random Horizontal Flip)
+    # 随机水平翻转 (Random Horizontal Flip)
             if np.random.rand() > 0.5:
                 input_batch = torch.flip(input_batch, dims=[3])
                 gt_batch = torch.flip(gt_batch, dims=[3])
