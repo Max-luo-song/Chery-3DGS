@@ -23,6 +23,7 @@ OBJECT_CLASS_NODE_MAPPING = {
     "Vehicle": ModelType.RigidNodes,
     "Pedestrian": ModelType.SMPLNodes,
     "Cyclist": ModelType.DeformableNodes,
+    "TrafficBarrier": ModelType.TrafficLightNodes,
 }
 SMPLNODE_CLASSES = ["Pedestrian"]
 

@@ -806,7 +806,7 @@ class DrivingDataset(SceneDataset):
                     
                 elif self.depth_mode == DepthMode.SINGLE_FRAME_STATIC:
                     static_mask = self._get_static_mask_for_frame(lidar_points_world, frame_idx)
-                    logger.info(f"Frame {frame_idx}: Removed {(~static_mask).sum().item()} points inside 3D bounding boxes.")
+                    # logger.info(f"Frame {frame_idx}: Removed {(~static_mask).sum().item()} points inside 3D bounding boxes.")
                     
                     final_cam_points = cam_points[static_mask & valid_mask]
                     final_depth = depth[static_mask & valid_mask]
@@ -818,7 +818,7 @@ class DrivingDataset(SceneDataset):
                 
                 elif self.depth_mode == DepthMode.MULTI_FRAME_STATIC:
                     static_mask = self._get_static_mask_for_frame(lidar_points_world, frame_idx)
-                    logger.info(f"Frame {frame_idx}: Removed {(~static_mask).sum().item()} points inside 3D bounding boxes.")
+                    # logger.info(f"Frame {frame_idx}: Removed {(~static_mask).sum().item()} points inside 3D bounding boxes.")
                  
                     # 暂存静态点，待所有帧处理完后聚合生成稠密深度图
                     static_points_world = lidar_points_world[static_mask]

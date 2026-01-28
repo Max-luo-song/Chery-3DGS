@@ -32,6 +32,8 @@ class MultiTrainer(BasicTrainer):
             self.gaussian_classes["SMPLNodes"] = GSModelType.SMPLNodes
         if "DeformableNodes" in self.model_config:
             self.gaussian_classes["DeformableNodes"] = GSModelType.DeformableNodes
+        if "TrafficLightNodes" in self.model_config:
+            self.gaussian_classes["TrafficLightNodes"] = GSModelType.TrafficLightNodes
            
         for class_name, model_cfg in self.model_config.items():
             # update model config for gaussian classes
@@ -88,7 +90,7 @@ class MultiTrainer(BasicTrainer):
         dataset: DrivingDataset,
     ) -> None:
         # get instance points
-        rigidnode_pts_dict, deformnode_pts_dict, smplnode_pts_dict = {}, {}, {}
+        rigidnode_pts_dict, deformnode_pts_dict, smplnode_pts_dict, trafficlightnode_pts_dict = {}, {}, {}, {}
         if "RigidNodes" in self.model_config:
             rigidnode_pts_dict = dataset.get_init_objects(
                 cur_node_type='RigidNodes',
@@ -106,7 +108,13 @@ class MultiTrainer(BasicTrainer):
             smplnode_pts_dict = dataset.get_init_smpl_objects(
                 **self.model_config["SMPLNodes"]["init"]
             )
-        allnode_pts_dict = {**rigidnode_pts_dict, **deformnode_pts_dict, **smplnode_pts_dict}
+
+        if "TrafficLightNodes" in self.model_config:
+            trafficlightnode_pts_dict = dataset.get_init_objects(
+                cur_node_type='TrafficLightNodes',
+                **self.model_config["TrafficLightNodes"]["init"]
+            )
+        allnode_pts_dict = {**rigidnode_pts_dict, **deformnode_pts_dict, **smplnode_pts_dict, **trafficlightnode_pts_dict}
         
         # NOTE: Some gaussian classes may be empty (because no points for initialization)
         #       We will delete these classes from the model_config and models
@@ -176,6 +184,12 @@ class MultiTrainer(BasicTrainer):
                 empty = self.safe_init_models(
                     model=model,
                     instance_pts_dict=smplnode_pts_dict
+                )
+
+            if class_name == 'TrafficLightNodes':
+                empty = self.safe_init_models(
+                    model=model,
+                    instance_pts_dict=trafficlightnode_pts_dict
                 )
                 
             if empty:
