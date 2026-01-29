@@ -77,7 +77,7 @@ class TrafficLightNodes(RigidNodes):
         # get colors of gaussians
         colors = torch.cat((self._features_dc[:, None, :], self._features_rest), dim=1)
         if delta_color is not None:
-            # residual update，强烈建议缩放 
+            # residual update，建议缩放 
             # TODO(yingjun): 0.01 is a hyperparameter that may need tuning
             colors = colors + 0.01 * delta_color.view_as(colors)
         
@@ -130,19 +130,19 @@ class TrafficLightNodes(RigidNodes):
                 per_pts_size = self.instances_size[self.point_ids[..., 0]]
                 loss_dict["out_of_bound_loss"] = torch.relu(local_xyz_deformed.abs() - per_pts_size / 2).mean() * w
 
-        # color temporal loss 
-        # TODO(yingjun): maybe not right
-        if "colors" in self._gs_cache:
-            colors = self._gs_cache["colors"]
-            colors_prev = self._gs_cache.get("colors", None)
+        # # color temporal loss 
+        # # TODO(zhangyingjun): maybe not right
+        # if "colors" in self._gs_cache:
+        #     colors = self._gs_cache["colors"]
+        #     colors_prev = self._gs_cache.get("colors", None)
 
-            if colors is not None and colors_prev is not None:
-                diff = (colors - colors_prev).abs().mean(dim=-1)
+        #     if colors is not None and colors_prev is not None:
+        #         diff = (colors - colors_prev).abs().mean(dim=-1)
 
-                # heuristic gate：大跳变不惩罚
-                gate = (diff < self.ctrl_cfg.color_jump_thresh).float()
+        #         # heuristic gate：大跳变不惩罚
+        #         gate = (diff < self.ctrl_cfg.color_jump_thresh).float()
 
-                loss_dict["color_temporal"] = (gate * diff).mean() * w
+        #         loss_dict["color_temporal"] = (gate * diff).mean() * w
 
         return loss_dict
 

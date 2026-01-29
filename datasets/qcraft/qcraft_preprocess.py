@@ -28,9 +28,10 @@ from .qcraft_helpers import (
     convert_raw_object_type_to_class_name,
 )
 
-QCRAFT_CLASSES = ["unknown", "Vehicle", "Pedestrian", "Sign", "Cyclist", "TrafficBarrier"]
+QCRAFT_CLASSES = ["unknown", "Vehicle", "Pedestrian", "Sign", "Cyclist", "TrafficBarrier", "TrafficLight"]
 # TODO(ziyu): consider all dynamic classes
-QCRAFT_DYNAMIC_CLASSES = ["Vehicle", "Pedestrian", "Cyclist", "TrafficBarrier"]
+QCRAFT_DYNAMIC_CLASSES = ["Vehicle", "Pedestrian", "Cyclist", "TrafficBarrier", "TrafficLight"]
+QCRAFT_TRAFFIC_LIGHT_CLASSES = ["TrafficBarrier", "TrafficLight"]
 QCRAFT_HUMAN_CLASSES = ["Pedestrian", "Cyclist"]
 QCRAFT_VEHICLE_CLASSES = ["Vehicle"]
 
@@ -491,6 +492,7 @@ class QcraftProcessor(object):
                 if lidar_name.endswith(".pcd")
                 and f"-{scene_data.main_lidar_name}-" in lidar_name
             ]
+            # print("main lidar names: ", scene_data.main_lidar_name)
             lidar_paths = [
                 os.path.join(sample_dir, lidar_name) for lidar_name in lidar_names
             ]

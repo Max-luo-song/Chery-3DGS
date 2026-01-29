@@ -297,7 +297,7 @@ class DrivingDataset(SceneDataset):
 
     def get_init_objects(
         self,
-        cur_node_type: Literal["RigidNodes", "DeformableNodes"],
+        cur_node_type: Literal["RigidNodes", "DeformableNodes", "TrafficLightNodes"],
         instance_max_pts: int = 5000,
         only_moving: bool = True,
         traj_length_thres: float = 0.5,
@@ -348,6 +348,9 @@ class DrivingDataset(SceneDataset):
                         continue
                 elif cur_node_type == "RigidNodes":
                     if not o_type == ModelType.RigidNodes:
+                        continue
+                elif cur_node_type == "TrafficLightNodes":
+                    if not o_type == ModelType.TrafficLightNodes:
                         continue
 
                 if exclude_smpl:
