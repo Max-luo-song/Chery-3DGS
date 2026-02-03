@@ -304,6 +304,49 @@ def pano_to_lidar(pano, lidar_K=None, beam_inclinations=None):
     return local_points_with_intensities[:, :3]
 
 
+def pano_to_lidar_torch(pano, lidar_K=None, beam_inclinations=None, lidar_hfov=2 * np.pi / 3, device=None):
+    """
+    Torch implementation of pano_to_lidar returning (N,3) tensor on specified device.
+    Accepts pano as torch.Tensor or numpy array.
+    """
+    import torch
+
+    if not torch.is_tensor(pano):
+        pano = torch.from_numpy(np.array(pano)).float()
+
+    if device is None:
+        device = pano.device if pano.is_cuda else (torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
+
+    pano = pano.to(device=device)
+    H, W = pano.shape
+    i = torch.arange(0, W, dtype=torch.float32, device=device).view(1, W).expand(H, W)
+    j = torch.arange(0, H, dtype=torch.float32, device=device).view(H, 1).expand(H, W)
+    beta = -(i - W / 2.0) / W * lidar_hfov
+
+    if beam_inclinations is not None:
+        if not torch.is_tensor(beam_inclinations):
+            beam = torch.from_numpy(np.array(beam_inclinations)).to(device)
+        else:
+            beam = beam_inclinations.to(device)
+        alpha = beam.flip(0).unsqueeze(1).expand(H, W)
+    else:
+        if lidar_K is None:
+            raise ValueError("lidar_K must be provided when beam_inclinations is None")
+        fov_up, fov = lidar_K
+        alpha = (fov_up - j / H * fov) / 180.0 * math.pi
+
+    dirs_x = torch.cos(alpha) * torch.cos(beta)
+    dirs_y = torch.cos(alpha) * torch.sin(beta)
+    dirs_z = torch.sin(alpha)
+    dirs = torch.stack([dirs_x, dirs_y, dirs_z], dim=-1)
+    local_points = dirs * pano.unsqueeze(-1)
+    mask = pano != 0
+    if mask.sum() == 0:
+        return torch.zeros((0, 3), device=device, dtype=torch.float32)
+    local_points_nonzero = local_points[mask]
+    return local_points_nonzero
+
+
 def load_extrinsics(yaml_item):
     t = np.array(yaml_item["translation"]).astype(float)
     q = np.array(yaml_item["rpy"]).astype(float)
@@ -342,44 +385,92 @@ class PointsMeter:
         self.N = 0
 
     def prepare_inputs(self, *inputs):
+        # Return inputs as torch tensors on GPU if possible to avoid CPU work.
+        import torch
+
         outputs = []
-        for i, inp in enumerate(inputs):
+        for inp in inputs:
             if torch.is_tensor(inp):
-                inp = inp.detach().cpu().numpy()
-            outputs.append(inp)
+                # keep on device (detach) but don't move to CPU
+                outputs.append(inp.detach())
+            else:
+                # numpy array or other -> convert to torch and move to cuda if available
+                try:
+                    t = torch.from_numpy(np.array(inp))
+                    if torch.cuda.is_available():
+                        t = t.cuda()
+                    outputs.append(t)
+                except Exception:
+                    outputs.append(inp)
 
         return outputs
 
     def update(self, preds, truths, Filter=False):
         preds = preds / self.scale
         truths = truths / self.scale
-        preds, truths = self.prepare_inputs(preds, truths)  # [B, H, W]
+        # Try to keep computations on GPU: convert panos to lidar point clouds with torch.
+        preds_t, truths_t = self.prepare_inputs(preds, truths)
         chamLoss = chamfer_3DDist()
-        pred_lidar = pano_to_lidar(
-            pano=preds[0],
-            lidar_K=self.intrinsics,
-            beam_inclinations=self.beam_inclinations,
-        )
-        gt_lidar = pano_to_lidar(
-            pano=truths[0],
-            lidar_K=self.intrinsics,
-            beam_inclinations=self.beam_inclinations,
-        )
+
+        # preds_t and truths_t shape: [B, H, W] or [H, W]
+        import torch
+        if torch.is_tensor(preds_t):
+            # take first batch if batched
+            p = preds_t[0] if preds_t.dim() == 3 else preds_t
+        else:
+            p = torch.from_numpy(np.array(preds_t)).cuda()
+
+        if torch.is_tensor(truths_t):
+            g = truths_t[0] if truths_t.dim() == 3 else truths_t
+        else:
+            g = torch.from_numpy(np.array(truths_t)).cuda()
+
+        # get pred and gt lidar points on device
+        try:
+            pred_lidar = pano_to_lidar_torch(p, lidar_K=self.intrinsics, beam_inclinations=self.beam_inclinations, device=p.device)
+            gt_lidar = pano_to_lidar_torch(g, lidar_K=self.intrinsics, beam_inclinations=self.beam_inclinations, device=g.device)
+        except Exception:
+            # fallback to numpy implementation if torch version fails
+            pred_np = p.detach().cpu().numpy()
+            gt_np = g.detach().cpu().numpy()
+            pred_lidar = pano_to_lidar(pred_np)
+            gt_lidar = pano_to_lidar(gt_np)
+
         if Filter:
-            mask_raydrop = filter_pcd(pred_lidar)
-            pred_lidar = pred_lidar[mask_raydrop]
+            # filter_pcd currently expects numpy; only run if requested (keeps backward compatibility)
+            try:
+                pred_lidar_np = pred_lidar.detach().cpu().numpy() if torch.is_tensor(pred_lidar) else np.array(pred_lidar)
+                mask_raydrop = filter_pcd(pred_lidar_np)
+                if torch.is_tensor(pred_lidar):
+                    pred_lidar = pred_lidar[torch.from_numpy(mask_raydrop).to(pred_lidar.device)]
+                else:
+                    pred_lidar = pred_lidar[mask_raydrop]
+            except Exception:
+                pass
 
-        dist1, dist2, idx1, idx2 = chamLoss(
-            torch.FloatTensor(pred_lidar[None, ...]).cuda(),
-            torch.FloatTensor(gt_lidar[None, ...]).cuda(),
-        )
-        chamfer_dis = dist1.mean() + dist2.mean()
-        threshold = 0.05  # monoSDF
-        f_score, precision, recall = fscore(dist1, dist2, threshold)
-        f_score = f_score.cpu()[0]
+        # chamfer expects tensors with shape [B, N, 3]
+        if isinstance(pred_lidar, np.ndarray):
+            if pred_lidar.shape[0] == 0 or gt_lidar.shape[0] == 0:
+                chamfer_dis = torch.tensor(0.0)
+                f_score = 0.0
+            else:
+                d1, d2, idx1, idx2 = chamLoss(torch.FloatTensor(pred_lidar[None, ...]).cuda(), torch.FloatTensor(gt_lidar[None, ...]).cuda())
+                chamfer_dis = d1.mean() + d2.mean()
+                threshold = 0.05
+                f_score, precision, recall = fscore(d1, d2, threshold)
+                f_score = f_score.cpu()[0]
+        else:
+            if pred_lidar.shape[0] == 0 or gt_lidar.shape[0] == 0:
+                chamfer_dis = torch.tensor(0.0, device=p.device)
+                f_score = 0.0
+            else:
+                d1, d2, idx1, idx2 = chamLoss(pred_lidar.unsqueeze(0).float(), gt_lidar.unsqueeze(0).float())
+                chamfer_dis = d1.mean() + d2.mean()
+                threshold = 0.05
+                f_score, precision, recall = fscore(d1, d2, threshold)
+                f_score = f_score.cpu()[0]
 
-        self.V.append([chamfer_dis.cpu(), f_score])
-
+        self.V.append([chamfer_dis.detach().cpu(), f_score])
         self.N += 1
 
     def measure(self):

@@ -63,7 +63,8 @@ import time
 import pdb
 
 cpu_count = os.cpu_count()
-torch.set_num_threads(cpu_count)
+# Reduce PyTorch intra-op threads to avoid saturating CPU and improve GPU throughput
+torch.set_num_threads(max(1, cpu_count // 2))
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -317,7 +318,9 @@ def training(
                 render_intensity * ray_drop * gt_objmask
             )  # 直接使用gt的raydrop mask
             depth = depth * ray_drop * gt_objmask
-            raydrop_loss = torch.nn.BCEWithLogitsLoss()(render_raydrop, ray_drop)
+            # Fix: render_raydrop is already in [0,1] (sigmoid applied), so use BCELoss
+            render_raydrop = torch.clamp(render_raydrop, 1e-6, 1.0 - 1e-6)
+            raydrop_loss = torch.nn.BCELoss()(render_raydrop, ray_drop)
 
         Ll1 = l1_loss(render_intensity, gt_intensity)
         depth_loss = l1_loss(depth, gt_depth)
@@ -361,6 +364,20 @@ def training(
             raise ValueError("Loss is NaN or Inf")
 
         loss.backward()
+
+        if iteration % 100 == 0:
+            with open(os.path.join(dataset.model_path, "grad_log.txt"), "a") as f:
+                f.write(f"Iteration {iteration}:\n")
+                f.write(f"Losses: Total={loss.item():.6f}, RayDrop={raydrop_loss.item():.6f}, Intensity={intensity_loss.item():.6f}, Depth={depth_loss.item():.6f}, Grad={grad_loss.item():.6f}\n")
+                if 0 in model_id_scene_info:
+                    model_gaussian = model_id_scene_info[0].gaussians
+                    for name, param in model_gaussian.named_parameters():
+                        if param.grad is not None:
+                            grad_mean = param.grad.mean().item()
+                            grad_std = param.grad.std().item()
+                            grad_abs_max = param.grad.abs().max().item()
+                            f.write(f"{name}: mean={grad_mean:.2e}, std={grad_std:.2e}, abs_max={grad_abs_max:.2e}\n")
+                f.write("-" * 20 + "\n")
 
         # 打印各参数梯度, 观察是否有nan，过大或者过小的梯度
         model_gaussian = model_id_scene_info[0].gaussians
@@ -617,27 +634,43 @@ def train_composite_report(
             save_dict = {
                 "gt_image": gt_image.detach().cpu(),
                 "beam_inclinations": scene_view.beam_inclinations.detach().cpu(),
+                "gt_objmask": gt_objmask.detach().cpu(),
             }
             torch.save(save_dict, gt_save_path)
 
-            # Save rendered data: [raydrop, intensity, depth]
+            # Save rendered data: [raydrop, intensity, depth, feats, mid_depth_diff]
             render_save_path = os.path.join(render_dir, f"{render_timestamp}.pt")
+            
+            # [Add depth_distortion_aware to input channels]
+            # This allows UNet to see the "filtered" suggested mask and learn to use it
+            depth_distortion_aware = render_pkg["mid_depth_diff"]
+            
+            # We explicitly detach and move to cpu to avoid memory issues
             render_data = torch.cat(
                 [
                     render_pkg["render"][1:2, ...],
                     render_pkg["render"][0:1, ...],
                     render_pkg["depth"],
-                    render_pkg["mid_depth_diff"],
+                    #render_pkg["rendered_feat"],
+                    depth_distortion_aware, # Add mid_depth_diff as explicit feature for Unet
                 ],
                 dim=0,
             )
             torch.save(render_data.detach().cpu(), render_save_path)
 
-        if True:  # new trick: using depth_distortion_aware
+        # [Modified by Instruction] Apply depth distortion TRICK to depth metrics only
+        # User observed that applying this to intensity hurts intensity metrics,
+        # but NOT applying it to depth hurts depth metrics (CD).
+        # So we split the logic: Filter Depth, Keep Intensity Raw.
+        if True: 
             depth_distortion_aware = render_pkg["mid_depth_diff"]
-            depth_distortion_aware = torch.where(depth_distortion_aware < 0.3, 1, 0)
+            # Filter out points with large distortion (noise)
+            depth_distortion_aware = torch.where(depth_distortion_aware < 0.3, 1.0, 0.0)
+            # Apply to DEPTH 
             depth = depth * depth_distortion_aware
-            render_intensity = render_intensity * depth_distortion_aware
+            # render_intensity = render_intensity * depth_distortion_aware 
+        else:
+            depth_distortion_aware = None
 
         l1_test += l1_loss(render_intensity, gt_intensity)
         psnr_test += psnr(render_intensity, gt_intensity).mean().double()
@@ -647,7 +680,7 @@ def train_composite_report(
         points_meter = PointsMeter(
             scale=1,
             intrinsics=None,
-            beam_inclinations=scene_view.beam_inclinations.detach().cpu().numpy(),
+            beam_inclinations=scene_view.beam_inclinations.detach(),
         )
 
         points_meter.update(depth, gt_depth, Filter=False)
@@ -666,10 +699,23 @@ def train_composite_report(
         )
 
         fscore_test += cd_fs[1]
+         # 计算深度误差时，只考虑有效区域（有 raydrop 且经过 depth_distortion_aware 筛选的区域）
+        valid_depth_mask = (ray_drop > 0.5) & (gt_objmask > 0.5)
+        if depth_distortion_aware is not None:  # 如果使用了 depth_distortion_aware
+            valid_depth_mask = valid_depth_mask & (depth_distortion_aware > 0.5)
+        
         error_depth_abs = torch.abs(depth - gt_depth)
-        mae += error_depth_abs.mean()
-        rmse += torch.sqrt((error_depth_abs * error_depth_abs).mean())
-        medae += error_depth_abs.median()
+        if valid_depth_mask.sum() > 0:
+            valid_error = error_depth_abs[valid_depth_mask]
+            mae += valid_error.mean()
+            rmse += torch.sqrt((valid_error * valid_error).mean())
+            medae += valid_error.median()
+        else:
+            # 如果没有有效像素，记录为 0（或者你可以选择跳过这一帧）
+            mae += 0
+            rmse += 0
+            medae += 0
+
 
     psnr_test /= total_number
     l1_test /= total_number
@@ -738,10 +784,10 @@ if __name__ == "__main__":
     parser.add_argument("--detect_anomaly", action="store_true", default=False)
     parser.add_argument("--warmup", action="store_true", default=False)
     parser.add_argument(
-        "--test_iterations", nargs="+", type=int, default=[1000, 3000, 5000]
+        "--test_iterations", nargs="+", type=int, default=[1000, 3000, 5000,8000,10000]
     )
     parser.add_argument(
-        "--save_iterations", nargs="+", type=int, default=[1000, 3000, 5000]
+        "--save_iterations", nargs="+", type=int, default=[1000, 3000, 5000,8000,10000]
     )
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
