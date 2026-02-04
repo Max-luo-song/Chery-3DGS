@@ -2,7 +2,7 @@
 ################################################################################
 gpu=-1
 
-scene_id="20251203_095105_QCOYSD968166_893_908"
+scene_id="20251105_152839_QCOYSD504206_1164_1179"
 
 segformer_path=/inspire/hdd/project/continuinglearningtheory/guoluosong-253108120129/project/scene_reconstruction/SegFormer
 ################################################################################
