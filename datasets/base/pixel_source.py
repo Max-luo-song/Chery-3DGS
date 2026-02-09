@@ -240,13 +240,16 @@ class CameraData(object):
         dynamic_mask_filepaths, sky_mask_filepaths = [], []
         human_mask_filepaths, vehicle_mask_filepaths = [], []
 
-        fine_mask_path = os.path.join(self.data_path, "fine_dynamic_masks")
-        if os.path.exists(fine_mask_path):
-            dynamic_mask_dir = "fine_dynamic_masks"
-            logger.info("Using fine dynamic masks")
-        else:
-            dynamic_mask_dir = "dynamic_masks"
-            logger.info("Using coarse dynamic masks")
+        dynamic_mask_dir = "dynamic_masks"
+        logger.info("Using coarse dynamic masks")
+
+        # fine_mask_path = os.path.join(self.data_path, "fine_dynamic_masks")
+        # if os.path.exists(fine_mask_path):
+        #     dynamic_mask_dir = "fine_dynamic_masks"
+        #     logger.info("Using fine dynamic masks")
+        # else:
+        #     dynamic_mask_dir = "dynamic_masks"
+        #     logger.info("Using coarse dynamic masks")
 
         # Note: we assume all the files in waymo dataset are synchronized
         for t in range(self.start_timestep, self.end_timestep):
@@ -1125,6 +1128,34 @@ class ScenePixelSource(abc.ABC):
                 image_mean_error = image_mean_error * error_weight
             idx = torch.multinomial(image_mean_error, 1, replacement=False).item()
             img_idx = candidate_indices[idx]
+        else:
+            # random sample one from candidate_indices
+            img_idx = random.choice(candidate_indices)
+
+        return img_idx
+
+    def propose_training_image_by_camera(
+        self,
+        candidate_indices: List[int],
+        camera_weight_map: Optional[Dict[int, float]] = None,
+    ) -> int:
+        if camera_weight_map is None:
+            camera_weight_map = {
+                0: 5,
+                1: 5,
+                2: 5,
+            }
+        if self.image_error_buffered:
+
+            num_cams = self.num_cams
+
+            weights = [
+                camera_weight_map.get(idx % num_cams, 1.0)
+                for idx in candidate_indices
+            ]
+
+            img_idx = random.choices(candidate_indices, weights=weights, k=1)[0]
+
         else:
             # random sample one from candidate_indices
             img_idx = random.choice(candidate_indices)

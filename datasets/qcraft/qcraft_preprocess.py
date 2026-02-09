@@ -491,8 +491,9 @@ class QcraftProcessor(object):
                 for lidar_name in os.listdir(sample_dir)
                 if lidar_name.endswith(".pcd")
                 and f"-{scene_data.main_lidar_name}-" in lidar_name
+                and "LEFT" not in lidar_name
+                and "RIGHT" not in lidar_name
             ]
-            # print("main lidar names: ", scene_data.main_lidar_name)
             lidar_paths = [
                 os.path.join(sample_dir, lidar_name) for lidar_name in lidar_names
             ]
