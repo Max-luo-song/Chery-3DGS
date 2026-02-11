@@ -110,8 +110,8 @@ model:
       ins_translation:
         lr: 0.0005
         lr_final: 0.0001
-  DynamicAppearanceNodes:
-    type: models.nodes.DynamicAppearanceNodes
+  TrafficLightNodes:
+    type: models.nodes.TrafficLightNodes
     init:
       instance_max_pts: 5000
       only_moving: true
