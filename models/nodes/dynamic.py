@@ -79,7 +79,7 @@ class TrafficLightNodes(RigidNodes):
         if delta_color is not None:
             # residual update，建议缩放 
             # TODO(yingjun): 0.01 is a hyperparameter that may need tuning
-            colors = colors + 0.01 * delta_color.view_as(colors)
+            colors = colors + 0.1 * delta_color.view_as(colors)
         
         if self.sh_degree > 0:
             viewdirs = world_means.detach() - cam.camtoworlds.data[..., :3, 3]  # (N, 3)
