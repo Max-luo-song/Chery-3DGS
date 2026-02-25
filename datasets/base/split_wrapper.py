@@ -35,10 +35,11 @@ class SplitWrapper(torch.utils.data.Dataset):
         self.datasource.reset_downscale_factor()
         return image_infos, cam_infos
 
-    def next(self, camera_downscale) -> Tuple[dict, dict]:
+    def next(self, camera_downscale, propose_by_camera=True) -> Tuple[dict, dict]:
         assert self.split == "train", "Only train split supports next()"
         
-        if any(ModelType.TrafficLightNodes in model_type for model_type in self.datasource.instances_model_types):
+        if (any(ModelType.TrafficLightNodes in model_type for model_type in self.datasource.instances_model_types)
+            and propose_by_camera):
             # Propose an image index based on camera weights
             img_idx = self.datasource.propose_training_image_by_camera(
                 candidate_indices=self.split_indices
