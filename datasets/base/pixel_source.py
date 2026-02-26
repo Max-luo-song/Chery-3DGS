@@ -240,16 +240,13 @@ class CameraData(object):
         dynamic_mask_filepaths, sky_mask_filepaths = [], []
         human_mask_filepaths, vehicle_mask_filepaths = [], []
 
-        dynamic_mask_dir = "dynamic_masks"
-        logger.info("Using coarse dynamic masks")
-
-        # fine_mask_path = os.path.join(self.data_path, "fine_dynamic_masks")
-        # if os.path.exists(fine_mask_path):
-        #     dynamic_mask_dir = "fine_dynamic_masks"
-        #     logger.info("Using fine dynamic masks")
-        # else:
-        #     dynamic_mask_dir = "dynamic_masks"
-        #     logger.info("Using coarse dynamic masks")
+        fine_mask_path = os.path.join(self.data_path, "fine_dynamic_masks")
+        if os.path.exists(fine_mask_path):
+            dynamic_mask_dir = "fine_dynamic_masks"
+            logger.info("Using fine dynamic masks")
+        else:
+            dynamic_mask_dir = "dynamic_masks"
+            logger.info("Using coarse dynamic masks")
 
         # Note: we assume all the files in waymo dataset are synchronized
         for t in range(self.start_timestep, self.end_timestep):
