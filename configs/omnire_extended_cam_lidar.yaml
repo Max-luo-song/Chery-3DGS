@@ -110,6 +110,61 @@ model:
       ins_translation:
         lr: 0.0005
         lr_final: 0.0001
+  TrafficLightNodes:
+    type: models.nodes.TrafficLightNodes
+    init:
+      instance_max_pts: 5000
+      only_moving: true
+      traj_length_thres: 0.5
+    networks:
+      D: 8
+      W: 256
+      embed_dim: 16
+      x_multires: 10                # default 10
+      t_multires: 10                # default 10
+      deform_quat: False
+      deform_scale: False
+      deform_shs: True
+    ctrl:
+      reset_alpha_value: 0.1
+      cull_scale_thresh: 0.1
+      stop_screen_size_at: 40000
+      stop_split_at: 30000
+      sh_degree: 3
+      cull_out_of_bound: false
+      use_deformgs_for_nonrigid: True # default True
+      use_deformgs_after: 4000        # default 3000
+      stop_optimizing_canonical_xyz: True
+    reg:
+      sharp_shape_reg:
+        w: 1.
+        step_interval: 10
+        max_gauss_ratio: 10.
+      out_of_bound_loss:
+        w: 1.
+        stop_after: 40000
+      temporal_smooth_reg:
+        trans:
+          w: 0.01 # optimal value may vary
+          smooth_range: 5 # optimal value may vary
+    optim:
+      xyz:
+        lr: 1.6e-04
+        lr_final: 1.6e-06
+        scale_factor: 2.
+      embedding:
+        lr: 0.001
+        lr_final: 0.0001
+      deform_network:
+        lr: 1.6e-03
+        lr_final: 1.6e-04
+        scale_factor: 5.
+      ins_rotation:
+        lr: 0.00001
+        lr_final: 0.000005
+      ins_translation:
+        lr: 0.0005
+        lr_final: 0.0001
   DeformableNodes:
     type: models.nodes.DeformableNodes
     init:
@@ -273,7 +328,7 @@ render:
 
 # ------------- logging ------------ #
 logging:
-  vis_freq: 2000 # how often to visualize training stats
-  print_freq: 500 # how often to print training stats
+  vis_freq: 5000 # how often to visualize training stats
+  print_freq: 1000 # how often to print training stats
   saveckpt_freq: 20000 # how often to save checkpoints
   save_seperate_video: True # whether to save seperate videos for each scene

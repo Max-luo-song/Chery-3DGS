@@ -297,7 +297,7 @@ class DrivingDataset(SceneDataset):
 
     def get_init_objects(
         self,
-        cur_node_type: Literal["RigidNodes", "DeformableNodes"],
+        cur_node_type: Literal["RigidNodes", "DeformableNodes", "TrafficLightNodes"],
         instance_max_pts: int = 5000,
         only_moving: bool = True,
         traj_length_thres: float = 0.5,
@@ -348,6 +348,9 @@ class DrivingDataset(SceneDataset):
                         continue
                 elif cur_node_type == "RigidNodes":
                     if not o_type == ModelType.RigidNodes:
+                        continue
+                elif cur_node_type == "TrafficLightNodes":
+                    if not o_type == ModelType.TrafficLightNodes:
                         continue
 
                 if exclude_smpl:
@@ -806,7 +809,7 @@ class DrivingDataset(SceneDataset):
                     
                 elif self.depth_mode == DepthMode.SINGLE_FRAME_STATIC:
                     static_mask = self._get_static_mask_for_frame(lidar_points_world, frame_idx)
-                    logger.info(f"Frame {frame_idx}: Removed {(~static_mask).sum().item()} points inside 3D bounding boxes.")
+                    # logger.info(f"Frame {frame_idx}: Removed {(~static_mask).sum().item()} points inside 3D bounding boxes.")
                     
                     final_cam_points = cam_points[static_mask & valid_mask]
                     final_depth = depth[static_mask & valid_mask]
@@ -818,7 +821,7 @@ class DrivingDataset(SceneDataset):
                 
                 elif self.depth_mode == DepthMode.MULTI_FRAME_STATIC:
                     static_mask = self._get_static_mask_for_frame(lidar_points_world, frame_idx)
-                    logger.info(f"Frame {frame_idx}: Removed {(~static_mask).sum().item()} points inside 3D bounding boxes.")
+                    # logger.info(f"Frame {frame_idx}: Removed {(~static_mask).sum().item()} points inside 3D bounding boxes.")
                  
                     # 暂存静态点，待所有帧处理完后聚合生成稠密深度图
                     static_points_world = lidar_points_world[static_mask]

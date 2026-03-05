@@ -456,6 +456,63 @@ class ConditionalDeformNetwork(nn.Module):
 
         return d_xyz, rotation, scaling
 
+
+class ColorConditionalDeformNetwork(nn.Module):
+    def __init__(self, D=8, W=256, input_ch=3, embed_dim=10,
+                 x_multires=10, t_multires=10, 
+                 deform_quat=True, deform_scale=True, 
+                 deform_shs=True, sh_dim=16*3):
+        super(ColorConditionalDeformNetwork, self).__init__()
+        self.D = D
+        self.W = W
+        self.input_ch = input_ch
+        self.embed_dim = embed_dim
+        self.deform_quat = deform_quat
+        self.deform_scale = deform_scale
+        self.deform_shs = deform_shs
+        self.skips = [D // 2]
+
+        self.embed_time_fn, time_input_ch = get_embedder(t_multires, 1)
+        self.embed_fn, xyz_input_ch = get_embedder(x_multires, 3)
+        self.input_ch = xyz_input_ch + time_input_ch + embed_dim
+
+        self.linear = nn.ModuleList(
+            [nn.Linear(self.input_ch, W)] + [
+                nn.Linear(W, W) if i not in self.skips else nn.Linear(W + self.input_ch, W)
+                for i in range(D - 1)]
+        )
+
+        self.gaussian_warp = nn.Linear(W, 3)
+        if self.deform_quat:
+            self.gaussian_rotation = nn.Linear(W, 4)
+        if self.deform_scale:
+            self.gaussian_scaling = nn.Linear(W, 3)
+        if self.deform_shs:
+            self.gaussian_color = nn.Linear(W, sh_dim)
+
+    def forward(self, x, t, condition):
+        t_emb = self.embed_time_fn(t)
+        x_emb = self.embed_fn(x)
+        h = torch.cat([x_emb, t_emb, condition], dim=-1)
+        for i, l in enumerate(self.linear):
+            h = self.linear[i](h.float())
+            h = F.relu(h)
+            if i in self.skips:
+                h = torch.cat([x_emb, t_emb, condition, h], -1)
+
+        d_xyz = self.gaussian_warp(h)
+        scaling, rotation = None, None
+        if self.deform_scale: 
+            scaling = self.gaussian_scaling(h)
+        if self.deform_quat:
+            rotation = self.gaussian_rotation(h)
+        delta_color = None
+        if self.deform_shs:
+            delta_color = self.gaussian_color(h)
+
+        return d_xyz, rotation, scaling, delta_color
+    
+
 class VoxelDeformer(nn.Module):
     def __init__(
         self,

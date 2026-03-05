@@ -28,9 +28,10 @@ from .qcraft_helpers import (
     convert_raw_object_type_to_class_name,
 )
 
-QCRAFT_CLASSES = ["unknown", "Vehicle", "Pedestrian", "Sign", "Cyclist"]
+QCRAFT_CLASSES = ["unknown", "Vehicle", "Pedestrian", "Sign", "Cyclist", "TrafficBarrier", "TrafficLight"]
 # TODO(ziyu): consider all dynamic classes
-QCRAFT_DYNAMIC_CLASSES = ["Vehicle", "Pedestrian", "Cyclist"]
+QCRAFT_DYNAMIC_CLASSES = ["Vehicle", "Pedestrian", "Cyclist", "TrafficBarrier", "TrafficLight"]
+QCRAFT_TRAFFIC_LIGHT_CLASSES = ["TrafficBarrier", "TrafficLight"]
 QCRAFT_HUMAN_CLASSES = ["Pedestrian", "Cyclist"]
 QCRAFT_VEHICLE_CLASSES = ["Vehicle"]
 
@@ -490,6 +491,8 @@ class QcraftProcessor(object):
                 for lidar_name in os.listdir(sample_dir)
                 if lidar_name.endswith(".pcd")
                 and f"-{scene_data.main_lidar_name}-" in lidar_name
+                and "LEFT" not in lidar_name
+                and "RIGHT" not in lidar_name
             ]
             lidar_paths = [
                 os.path.join(sample_dir, lidar_name) for lidar_name in lidar_names
@@ -528,7 +531,7 @@ class QcraftProcessor(object):
 
                 pc_ego = pc_ego[pointcloud_mask]
                 pc_ego_list.append(pc_ego)
-                print(f"Filtered {egocar_mask.sum()} ego car points and {below_ground_mask.sum()} below ground points.")
+                # print(f"Filtered {egocar_mask.sum()} ego car points and {below_ground_mask.sum()} below ground points.")
 
             # 保存 LiDAR 二进制文件
             pc_lidar = np.concatenate(pc_lidar_list, axis=0)  # x y z intensity lidar_id

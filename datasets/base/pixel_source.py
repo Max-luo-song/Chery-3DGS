@@ -1131,6 +1131,34 @@ class ScenePixelSource(abc.ABC):
 
         return img_idx
 
+    def propose_training_image_by_camera(
+        self,
+        candidate_indices: List[int],
+        camera_weight_map: Optional[Dict[int, float]] = None,
+    ) -> int:
+        if camera_weight_map is None:
+            camera_weight_map = {
+                0: 5,
+                1: 5,
+                2: 5,
+            }
+        if self.image_error_buffered:
+
+            num_cams = self.num_cams
+
+            weights = [
+                camera_weight_map.get(idx % num_cams, 1.0)
+                for idx in candidate_indices
+            ]
+
+            img_idx = random.choices(candidate_indices, weights=weights, k=1)[0]
+
+        else:
+            # random sample one from candidate_indices
+            img_idx = random.choice(candidate_indices)
+
+        return img_idx
+
     def build_image_error_buffer(self) -> None:
         """
         Build the image error buffer.
