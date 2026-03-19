@@ -16,7 +16,12 @@ OPENCV2DATASET = np.array(
     ]
 )
 
-def euler_to_rotation_matrix(yaw, pitch, roll):
+def euler_to_rotation_matrix(yaw, pitch, roll, degrees=False):
+    if degrees:
+        yaw = np.radians(yaw)
+        pitch = np.radians(pitch)
+        roll = np.radians(roll)
+
     # Z 轴旋转（yaw）
     R_z = np.array(
         [[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]]
@@ -39,8 +44,8 @@ def euler_to_rotation_matrix(yaw, pitch, roll):
 
 
 # 将欧拉角和位置转换为4x4变换矩阵
-def euler_to_transform_matrix(x, y, z, yaw, pitch, roll):
-    R = euler_to_rotation_matrix(yaw, pitch, roll)
+def euler_to_transform_matrix(x, y, z, yaw, pitch, roll, degrees=False):
+    R = euler_to_rotation_matrix(yaw, pitch, roll, degrees)
     T = np.array([x, y, z])
     T_matrix = np.eye(4)
     T_matrix[:3, :3] = R
@@ -161,8 +166,8 @@ def load_calibration(datadir, cam_ids: List[int]):
         intrinsic = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
         intrinsics[cam_id] = intrinsic
 
-        cam_to_ego = np.loadtxt(os.path.join(extrinsics_dir, f"{cam_id}.txt"))
-        extrinsics[cam_id] = cam_to_ego
+        cam_to_lidar = np.loadtxt(os.path.join(extrinsics_dir, f"{cam_id}.txt"))
+        extrinsics[cam_id] = cam_to_lidar
 
     return extrinsics, intrinsics
 

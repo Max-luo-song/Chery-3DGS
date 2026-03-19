@@ -122,37 +122,31 @@ def _shift_trajectory_fn(
     ref_cam_id: int,
     per_cam_poses: Dict[int, torch.Tensor],
 ):
-    """
-    Adjust the camera pose:
-    1. Increase the camera height by 5 meters.
-
-    Args:
-        per_cam_poses (Dict[int, torch.Tensor]): Dictionary of camera poses.
-
-    Returns:
-        torch.Tensor: Adjusted camera pose of shape (N, 4, 4).
-    """
     assert (
         0 in per_cam_poses.keys() or 1 in per_cam_poses.keys()
     ), "Camera ID 0 or 1 is required for shift_trajectory_fn"
 
-    # NOTE(syc): 这里取第一个相机
-    current_pose = per_cam_poses[ref_cam_id]
+    current_poses = per_cam_poses[ref_cam_id]
+    device = current_poses.device
 
-    device = current_pose.device
+    # 1. 根据 OpenCV 坐标系定义局部位移向量 (x, y, z)
+    # OpenCV: x-right, y-down, z-forward
+    # 所以: 
+    #   x_offset = -left
+    #   y_offset = -up
+    #   z_offset = front
+    local_move = torch.tensor([-left, -up, front], device=device, dtype=torch.float32)
 
-    translation_matrix = torch.eye(4, dtype=torch.float32, device=device)
-    translation_matrix[:3, 3] = torch.tensor(
-        [front, left, up], dtype=torch.float32, device=device
-    )
+    # 2. 提取旋转矩阵 R [N, 3, 3] 和 当前位置 t [N, 3]
+    R = current_poses[:, :3, :3]
+    t = current_poses[:, :3, 3]
 
-    rotation_matrix = torch.eye(4, dtype=torch.float32, device=device)
+    # 3. 将局部平移向量变换到世界坐标系
+    world_offset = torch.matmul(R, local_move.view(1, 3, 1)).squeeze(-1)
 
-    transform_matrix = torch.mm(translation_matrix, rotation_matrix)
-    adjusted_poses = torch.bmm(
-        transform_matrix.unsqueeze(0).expand(current_pose.shape[0], -1, -1),
-        current_pose,
-    )
+    # 4. 更新位姿
+    adjusted_poses = current_poses.clone()
+    adjusted_poses[:, :3, 3] = t + world_offset
 
     return adjusted_poses
 

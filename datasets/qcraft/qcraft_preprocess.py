@@ -35,6 +35,14 @@ QCRAFT_TRAFFIC_LIGHT_CLASSES = ["TrafficBarrier", "TrafficLight"]
 QCRAFT_HUMAN_CLASSES = ["Pedestrian", "Cyclist"]
 QCRAFT_VEHICLE_CLASSES = ["Vehicle"]
 
+VTD = True
+VTD_TO_QCRAFT = np.array([
+    [0, 1, 0],
+    [-1, 0, 0],
+    [0, 0, 1]
+])
+VTD_LIDAR_POINT_TRANSFORM = None
+        
 
 @dataclass(frozen=True)
 class SceneData:
@@ -474,7 +482,7 @@ class QcraftProcessor(object):
         #         pointcloud_actor[track_id]["xyz"] = []
         #         pointcloud_actor[track_id]["rgb"] = []
         #         pointcloud_actor[track_id]["mask"] = []
-    
+
         # 自车区域
         half_l = 2.9
         half_w = 1.5
@@ -501,23 +509,44 @@ class QcraftProcessor(object):
             pc_ego_list = []
             pc_lidar_list = []
             for lidar_id, lidar_path in enumerate(lidar_paths):
-                pc_ego = parse_lidar_pcd_file(lidar_path)  # x y z intensity
-                pc_ego = np.stack(
-                    [pc_ego[field].astype(np.float32) for field in pc_ego.dtype.names],
-                    axis=1,
-                )  # x y z intensity
+                if VTD:
+                    # 以 LiDAR 坐标系为参考系
+                    pc_lidar = parse_lidar_pcd_file(lidar_path)  # x y z intensity
+                    pc_lidar = np.stack(
+                        [pc_lidar[field].astype(np.float32) for field in pc_lidar.dtype.names],
+                        axis=1,
+                    )  # x y z intensity
 
-                # 增加 lidar_id 列
-                lidar_id_col = np.full((pc_ego.shape[0], 1), lidar_id, dtype=np.float32)  # [N, 1]
-                pc_ego = np.hstack([pc_ego, lidar_id_col])  # x y z intensity lidar_id
+                    intensity = pc_lidar[:, 3:4]
+                    # 增加 lidar_id 列
+                    lidar_id_col = np.full((pc_lidar.shape[0], 1), lidar_id, dtype=np.float32)  # [N, 1]
 
-                # 转换到 LiDAR 坐标系
-                xyz_ego = pc_ego[:, :3]  # [N, 3]
-                xyz_ego_homo = np.hstack([xyz_ego, np.ones((xyz_ego.shape[0], 1))])  # [N, 4]
-                xyz_lidar_homo = (np.linalg.inv(scene_data.lidar2ego) @ xyz_ego_homo.T).T  # [N, 4]
-                xyz_lidar = xyz_lidar_homo[:, :3]  # [N, 3]
+                    # 转换到 ego 坐标系
+                    xyz_lidar = pc_lidar[:, :3]  # [N, 3]
+                    xyz_lidar = (VTD_TO_QCRAFT @ xyz_lidar.T).T  # VTD坐标系转换到Qcraft坐标系
+                    xyz_lidar_homo = np.hstack([xyz_lidar, np.ones((xyz_lidar.shape[0], 1))])  # [N, 4]
+                    xyz_ego_homo = (scene_data.lidar2ego @ xyz_lidar_homo.T).T  # [N, 4]
+                    xyz_ego = xyz_ego_homo[:, :3]  # [N, 3]
 
-                intensity = pc_ego[:, 3:4]
+                else:
+                    # 以 ego 坐标系为参考系
+                    pc_ego = parse_lidar_pcd_file(lidar_path)  # x y z intensity
+                    pc_ego = np.stack(
+                        [pc_ego[field].astype(np.float32) for field in pc_ego.dtype.names],
+                        axis=1,
+                    )  # x y z intensity
+
+                    intensity = pc_ego[:, 3:4]
+                    # 增加 lidar_id 列
+                    lidar_id_col = np.full((pc_ego.shape[0], 1), lidar_id, dtype=np.float32)  # [N, 1]
+
+                    # 转换到 LiDAR 坐标系
+                    xyz_ego = pc_ego[:, :3]  # [N, 3]
+                    xyz_ego_homo = np.hstack([xyz_ego, np.ones((xyz_ego.shape[0], 1))])  # [N, 4]
+                    xyz_lidar_homo = (np.linalg.inv(scene_data.lidar2ego) @ xyz_ego_homo.T).T  # [N, 4]
+                    xyz_lidar = xyz_lidar_homo[:, :3]  # [N, 3]
+
+                pc_ego = np.hstack([xyz_ego, intensity, lidar_id_col])  # [N, 5]
                 pc_lidar = np.hstack([xyz_lidar, intensity, lidar_id_col])  # [N, 5]
 
                 # 车身点
@@ -531,7 +560,7 @@ class QcraftProcessor(object):
 
                 pc_ego = pc_ego[pointcloud_mask]
                 pc_ego_list.append(pc_ego)
-                # print(f"Filtered {egocar_mask.sum()} ego car points and {below_ground_mask.sum()} below ground points.")
+                print(f"Filtered {egocar_mask.sum()} ego car points and {below_ground_mask.sum()} below ground points.")
 
             # 保存 LiDAR 二进制文件
             pc_lidar = np.concatenate(pc_lidar_list, axis=0)  # x y z intensity lidar_id
@@ -705,6 +734,9 @@ class QcraftProcessor(object):
 
         frame_timestamps = self._read_frame_timestamps(clip_dir)
 
+        # TEMP: 取前200帧
+        frame_timestamps = frame_timestamps[:200]
+
         # Get camera specifications
         camera_specs = dict()
         for cam_id, cam in enumerate(ALL_CAM_SPECS):
@@ -798,25 +830,42 @@ class QcraftProcessor(object):
         return images
 
     def _read_lidar2ego(self, clip_dir, main_lidar_name):
-        data_frame_car_info_path = os.path.join(clip_dir, "data_frame_car_info.json")
-        with open(data_frame_car_info_path, "r") as f:
-            data_frame_car_info = json.load(f)
+        if VTD:
+            lidar_params_path = os.path.join(clip_dir, "lidar_params.json")
+            with open(lidar_params_path, "r") as f:
+                lidar_params = json.load(f)
+    
+            lidar2ego_raw = lidar_params["installation"]["extrinsics"]
 
-        lidar_params = data_frame_car_info["lidar_params"]
-        lidar2ego_raw = None
-        for param in lidar_params:
-            if param["installation"]["lidar_id"] == main_lidar_name:
-                lidar2ego_raw = param["installation"]["extrinsics"]
-                break
+            lidar2ego = euler_to_transform_matrix(
+                lidar2ego_raw["y"],
+                -lidar2ego_raw["x"],
+                lidar2ego_raw["z"],
+                lidar2ego_raw["yaw"],
+                -lidar2ego_raw["pitch"],
+                lidar2ego_raw["roll"],
+                degrees=True,
+            )
+        else:
+            data_frame_car_info_path = os.path.join(clip_dir, "data_frame_car_info.json")
+            with open(data_frame_car_info_path, "r") as f:
+                data_frame_car_info = json.load(f)
 
-        lidar2ego = euler_to_transform_matrix(
-            lidar2ego_raw["x"],
-            lidar2ego_raw["y"],
-            lidar2ego_raw["z"],
-            lidar2ego_raw["yaw"],
-            lidar2ego_raw["pitch"],
-            lidar2ego_raw["roll"],
-        )
+            lidar_params = data_frame_car_info["lidar_params"]
+            lidar2ego_raw = None
+            for param in lidar_params:
+                if param["installation"]["lidar_id"] == main_lidar_name:
+                    lidar2ego_raw = param["installation"]["extrinsics"]
+                    break
+
+            lidar2ego = euler_to_transform_matrix(
+                lidar2ego_raw["x"],
+                lidar2ego_raw["y"],
+                lidar2ego_raw["z"],
+                lidar2ego_raw["yaw"],
+                lidar2ego_raw["pitch"],
+                lidar2ego_raw["roll"],
+            )
         return lidar2ego
 
     def _read_ego_pose_data_from_pbtxt(
@@ -859,8 +908,8 @@ class QcraftProcessor(object):
                     current_image_info["vehicle_pose"] = {}  # type: ignore
                 elif current_image_info["vehicle_pose"] is not None:
                     if line.startswith("}"):
-                        if current_image_info["camera_id"] in cam_keys:
-                            image_infos.append(current_image_info)
+                        # if current_image_info["camera_id"] in cam_keys:
+                        image_infos.append(current_image_info)
                         current_image_info = None
                     else:
                         key, value = line.split(":")
@@ -871,7 +920,8 @@ class QcraftProcessor(object):
         ego_pose_data = dict()
         for info in image_infos:
             timestamp = info["timestamp"]
-            if timestamp == main_timestamp:
+            # if timestamp == main_timestamp:
+            if True:
                 pose = info["vehicle_pose"]
                 pose_matrix = euler_to_transform_matrix(
                     pose["x"],
@@ -892,14 +942,25 @@ class QcraftProcessor(object):
             camera_name = camera_specs[cam_id].name
             timestamp = info["timestamp"]
             pose = info["vehicle_pose"]
-            pose_matrix = euler_to_transform_matrix(
-                pose["x"],
-                pose["y"],
-                pose["z"],
-                pose["yaw"],
-                pose["pitch"],
-                pose["roll"],
-            )
+            if VTD:
+                pose_matrix = euler_to_transform_matrix(
+                    pose["y"],
+                    -pose["x"],
+                    pose["z"],
+                    pose["yaw"],
+                    -pose["pitch"],
+                    pose["roll"],
+                    degrees=True,
+                )
+            else:
+                pose_matrix = euler_to_transform_matrix(
+                    pose["x"],
+                    pose["y"],
+                    pose["z"],
+                    pose["yaw"],
+                    pose["pitch"],
+                    pose["roll"],
+                )
             ego_pose_data[camera_name] = {
                 "timestamp": timestamp,
                 "pose": pose_matrix,
@@ -930,7 +991,9 @@ class QcraftProcessor(object):
         frame_timestamps = [
             item["data_frame_path"] for item in data_frame_seq["data_frame_seq_items"]
         ]
-        return frame_timestamps
+        unique_frame_timestamps = list(dict.fromkeys(frame_timestamps))
+        print(f"Scene has {len(unique_frame_timestamps)} unique frames.")
+        return unique_frame_timestamps
 
     def _read_camera_params(self, clip_dir):
         camera_params_path = os.path.join(clip_dir, "camera_params.json")
@@ -942,14 +1005,25 @@ class QcraftProcessor(object):
         extrinsics = dict()
         for cam_id, cam in camera_specs.items():
             cam2ego = camera_params[cam.key]["camera_to_vehicle_extrinsics"]
-            cam2ego = euler_to_transform_matrix(
-                cam2ego["x"],
-                cam2ego["y"],
-                cam2ego["z"],
-                cam2ego["yaw"],
-                cam2ego["pitch"],
-                cam2ego["roll"],
-            )
+            if VTD:
+                cam2ego = euler_to_transform_matrix(
+                    cam2ego["y"],
+                    -cam2ego["x"],
+                    cam2ego["z"],
+                    cam2ego["yaw"],
+                    -cam2ego["pitch"],
+                    cam2ego["roll"],
+                    degrees=True
+                )
+            else:
+                cam2ego = euler_to_transform_matrix(
+                    cam2ego["x"],
+                    cam2ego["y"],
+                    cam2ego["z"],
+                    cam2ego["yaw"],
+                    cam2ego["pitch"],
+                    cam2ego["roll"],
+                )
             cam2ego = cam2ego @ OPENCV2DATASET
             extrinsics[cam_id] = cam2ego
 
@@ -968,14 +1042,14 @@ class QcraftProcessor(object):
             cy = intrinsic_raw["cy"]
 
             # 8 个畸变参数
-            k1 = intrinsic_raw["k1"]
-            k2 = intrinsic_raw["k2"]
-            p1 = intrinsic_raw["p1"]
-            p2 = intrinsic_raw["p2"]
-            k3 = intrinsic_raw["k3"]
-            k4 = intrinsic_raw["k4"]
-            k5 = intrinsic_raw["k5"]
-            k6 = intrinsic_raw["k6"]
+            k1 = intrinsic_raw.get("k1", 0.0)
+            k2 = intrinsic_raw.get("k2", 0.0)
+            p1 = intrinsic_raw.get("p1", 0.0)
+            p2 = intrinsic_raw.get("p2", 0.0)
+            k3 = intrinsic_raw.get("k3", 0.0)
+            k4 = intrinsic_raw.get("k4", 0.0)
+            k5 = intrinsic_raw.get("k5", 0.0)
+            k6 = intrinsic_raw.get("k6", 0.0)
 
             matrix = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
             params = [fx, fy, cx, cy, k1, k2, p1, p2, k3, k4, k5, k6]
