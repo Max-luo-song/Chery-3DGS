@@ -513,6 +513,13 @@ if __name__ == "__main__":
         block_info_with_extend, _ = dataPartitionChery(
             model_args, args.block_size, single_block_test=True
         )
+    elif args.dataset == "vtd":
+        from scene.vtd_dataloader import Vtd_Dataloader as GT_Dataloader
+        from utils.data_partition_utils import dataPartitionChery
+
+        block_info_with_extend, _ = dataPartitionChery(
+            model_args, args.block_size, single_block_test=True
+        )   
     else:
         logger.error("不支持的数据集类型")
         sys.exit(1)

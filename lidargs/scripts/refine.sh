@@ -1,4 +1,4 @@
-iterations=3000
+iterations=10000
 gpu=0
 # 预处理之后的文件夹
 #data="/home/not0513/data/qcraft/processed/training/20251025_163358_QCOYSD504206_1595_1610"
@@ -15,15 +15,15 @@ gpu=0
 data="/nas_thoru/oldbak/yx/datavtd/lijiaoqiao_20260205_02_offset_0.0m"
 caseid="lijiaoqiao_20260205_02_offset_0.0m"
 # 模型文件路径，参考data目录，training改为test，再按照caseid/日期+时间自动生成output_dir
-test_str="/nas_thoru/oldbak/yx/M3/vtdoutput/yxoutput318"
-date_str="2026-03-18-2"
+test_str="/nas_thoru/oldbak/yx/M3/vtdoutput/yxoutput312"
+date_str="2026-03-12"
 output_dir="${test_str}/${caseid}/${date_str}"
 
 # 将项目根目录加入 PYTHONPATH(上两级)
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH}"
 
-enable_raydrop_unet=false
+enable_raydrop_unet=true
 
 if ${enable_raydrop_unet}; then
     ENABLE_RAYDROP_UNET="--enable_raydrop_unet"
@@ -32,11 +32,6 @@ else
     ENABLE_RAYDROP_UNET=""
     echo "Raydrop UNet disabled."
 fi
-
-python3 $PROJECT_ROOT/lidargs/train.py -s ${data} -m ${output_dir} --caseid ${caseid} \
-                 --gpu ${gpu} --iterations ${iterations} --max_depth 100 \
-                 --dataset vtd --block_size 50 \
-                 ${ENABLE_RAYDROP_UNET}
 
 if ${enable_raydrop_unet}; then
     python3 $PROJECT_ROOT/lidargs/refine_ray_drop.py -s ${data} -m ${output_dir} \

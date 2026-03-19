@@ -9,21 +9,22 @@ gpu=0
 #output_dir="${test_str}/${caseid}/${date_str}"
 # 预处理之后的文件夹
 #/nas_thoru/oldbak/yx/datavtd/lijiaoqiao_20260205_02_offset_0.0m
+#/nas_thoru/oldbak/yx/1210new/scene_reconstruction-users-yangtao-fix_block_id/data/qcraft/processed/training/20251105_152839_QCOYSD504206_1240_1255
 #20251121_095534_QCOYPDA27344_1538_1553
 #20251025_163358_QCOYSD504206_1595_1610
-#data="/nas_thoru/oldbak/yx/1210new/scene_reconstruction-users-yangtao-fix_block_id/data/qcraft/processed/training/20251025_163358_QCOYSD504206_1595_1610"
-data="/nas_thoru/oldbak/yx/datavtd/lijiaoqiao_20260205_02_offset_0.0m"
-caseid="lijiaoqiao_20260205_02_offset_0.0m"
+data="/nas_thoru/oldbak/yx/1210new/scene_reconstruction-users-yangtao-fix_block_id/data/qcraft/processed/training/20251105_152839_QCOYSD504206_1240_1255"
+#data="/nas_thoru/oldbak/yx/datavtd/lijiaoqiao_20260205_02_offset_0.0m"
+caseid="20251105_152839_QCOYSD504206_1240_1255"
 # 模型文件路径，参考data目录，training改为test，再按照caseid/日期+时间自动生成output_dir
-test_str="/nas_thoru/oldbak/yx/M3/vtdoutput/yxoutput318"
-date_str="2026-03-18-2"
+test_str="/nas_thoru/oldbak/yx/M3/cheryoutput/yxoutput315"
+date_str="2026-03-16"
 output_dir="${test_str}/${caseid}/${date_str}"
 
 # 将项目根目录加入 PYTHONPATH(上两级)
 PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH}"
 
-enable_raydrop_unet=false
+enable_raydrop_unet=true
 
 if ${enable_raydrop_unet}; then
     ENABLE_RAYDROP_UNET="--enable_raydrop_unet"
@@ -34,11 +35,11 @@ else
 fi
 
 python3 $PROJECT_ROOT/lidargs/train.py -s ${data} -m ${output_dir} --caseid ${caseid} \
-                 --gpu ${gpu} --iterations ${iterations} --max_depth 100 \
-                 --dataset vtd --block_size 50 \
+                 --gpu ${gpu} --iterations ${iterations} --max_depth 150 \
+                 --dataset chery --block_size 50 \
                  ${ENABLE_RAYDROP_UNET}
 
 if ${enable_raydrop_unet}; then
     python3 $PROJECT_ROOT/lidargs/refine_ray_drop.py -s ${data} -m ${output_dir} \
-                --gpu ${gpu} --dataset vtd --block_size 50
+                --gpu ${gpu} --dataset chery --block_size 50
 fi

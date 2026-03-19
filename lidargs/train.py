@@ -827,6 +827,8 @@ if __name__ == "__main__":
         from scene.chery_dataloader import Chery_Dataloader as GT_Dataloader
     elif args.dataset == "zdrive":
         from scene.zdrive_dataloader import ZDrive_Dataloader as GT_Dataloader
+    elif args.dataset == "vtd":
+        from scene.vtd_dataloader import Vtd_Dataloader as GT_Dataloader
     else:
         print("ERROR: Unsupported data format.")
         logger.info("\nUnsupported data format.")
@@ -834,7 +836,7 @@ if __name__ == "__main__":
 
     # **dataPartitionSimple**: Divide into a block every 50 frames (simple implementation)
     # **dataPartition** : Divide blocks according to scene scale （You need to adjust the parameters according to the data set）
-    if args.dataset == "chery" or args.dataset == "zdrive":
+    if args.dataset == "chery" or args.dataset == "zdrive" or args.dataset == "vtd":
         block_info_with_extend, block_info_without_extend = dataPartitionChery(
             model_args, args.block_size, single_block_test=True
         )

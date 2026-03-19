@@ -561,10 +561,11 @@ class GaussianModel(torch.nn.Module):  #
                 param_group["lr"] = lr
             if param_group["name"] == "mlp_raydrop":
                 lr = (
-                    self.mlp_raydrop_scheduler_args(0)
-                    if iteration < 3000
-                    else self.mlp_raydrop_scheduler_args(iteration)
-                )
+                    self.mlp_raydrop_scheduler_args(iteration)
+                    #self.mlp_raydrop_scheduler_args(0)
+                    #if iteration < 3000
+                    #else self.mlp_raydrop_scheduler_args(iteration)
+                )#bug?意思是3000以下不增加学习率？等待测试
                 param_group["lr"] = lr
             if self.use_feat_bank and param_group["name"] == "mlp_featurebank":
                 lr = self.mlp_featurebank_scheduler_args(iteration)
