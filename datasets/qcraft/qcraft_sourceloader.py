@@ -90,19 +90,24 @@ class QcraftCameraData(CameraData):
 
         # we tranform the camera poses w.r.t. the first timestep to make the translation vector of
         # the first lidar pose as the origin of the world coordinate system.
-        cam_first_pose = np.loadtxt(
-            os.path.join(
-                f"{self.data_path}/novel_views/{self.mix_novel_alias}",
-                f"cam_pose/{self.start_timestep:06d}.txt",
+        cam_pose_dir = os.path.join(
+            f"{self.data_path}/novel_views/{self.mix_novel_dir_alias}",
+            "cam_pose",
+            f"cam{self.from_cam_id}",
+        )
+        if not os.path.isdir(cam_pose_dir):
+            cam_pose_dir = os.path.join(
+                f"{self.data_path}/novel_views/{self.mix_novel_dir_alias}",
+                "cam_pose",
             )
+
+        cam_first_pose = np.loadtxt(
+            os.path.join(cam_pose_dir, f"{self.start_timestep:06d}.txt")
         )
 
         for t in range(self.start_timestep, self.end_timestep):
             cam2world = np.loadtxt(
-                os.path.join(
-                    f"{self.data_path}/novel_views/{self.mix_novel_alias}",
-                    f"cam_pose/{t:06d}.txt",
-                )
+                os.path.join(cam_pose_dir, f"{t:06d}.txt")
             )
             # compute lidar_to_world transformation
             cam2world = np.linalg.inv(cam_first_pose) @ cam2world
@@ -279,7 +284,6 @@ class QcraftPixelSource(ScenePixelSource):
                 # increase id from last normal cam_id
                 this_cam_id = self.camera_list[-1] + idx + 1
                 logger.info(f"Loading mixed novel camera {cam_alias}")
-                same_ds_idx = int(cam_alias.split("_")[-1])
                 camera = QcraftCameraData(
                     dataset_name=self.dataset_name,
                     data_path=self.data_path,

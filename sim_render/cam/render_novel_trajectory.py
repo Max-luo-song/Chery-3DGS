@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Dict, List, Optional
 from omegaconf import OmegaConf
 import os
 import re
@@ -8,6 +8,7 @@ import argparse
 import numpy as np
 import imageio
 import sys
+import glob
 
 import torch
 import torch.nn.functional as F
@@ -145,6 +146,22 @@ def _frame_data_to_device(frame_data: dict, device: str = "cuda") -> dict:
     for key, value in frame_data["image_infos"].items():
         if isinstance(value, torch.Tensor):
             image_infos[key] = value.to(device, non_blocking=True)
+        else:
+            image_infos[key] = value
+    return {"cam_infos": cam_infos, "image_infos": image_infos}
+
+
+def _frame_data_to_cpu(frame_data: dict) -> dict:
+    cam_infos = {}
+    image_infos = {}
+    for key, value in frame_data["cam_infos"].items():
+        if isinstance(value, torch.Tensor):
+            cam_infos[key] = value.detach().cpu()
+        else:
+            cam_infos[key] = value
+    for key, value in frame_data["image_infos"].items():
+        if isinstance(value, torch.Tensor):
+            image_infos[key] = value.detach().cpu()
         else:
             image_infos[key] = value
     return {"cam_infos": cam_infos, "image_infos": image_infos}
@@ -291,6 +308,100 @@ def _load_ref_video_frames(video_path: str) -> List[np.ndarray]:
     return frames
 
 
+def _resolve_per_cam_ref_video_path(ref_dir: str, cam_id: int) -> str:
+    exact_path = os.path.join(ref_dir, f"cam{cam_id}.mp4")
+    if os.path.isfile(exact_path):
+        return exact_path
+
+    matches = sorted(glob.glob(os.path.join(ref_dir, f"cam{cam_id}_*.mp4")))
+    if len(matches) > 0:
+        return matches[0]
+
+    raise FileNotFoundError(
+        f"reference video for cam{cam_id} not found under {ref_dir}. "
+        f"Expected cam{cam_id}.mp4 or cam{cam_id}_*.mp4"
+    )
+
+
+def _load_per_cam_ref_video_frames(
+    ref_dir: str,
+    cam_ids: List[int],
+) -> Dict[int, List[np.ndarray]]:
+    ref_frames_by_cam = {}
+    for cam_id in cam_ids:
+        video_path = _resolve_per_cam_ref_video_path(ref_dir, cam_id)
+        ref_frames_by_cam[cam_id] = _load_ref_video_frames(video_path)
+        logger.info(
+            "Using GT ref video for cam%s: %s (%d frames)",
+            cam_id,
+            video_path,
+            len(ref_frames_by_cam[cam_id]),
+        )
+    return ref_frames_by_cam
+
+
+def _copy_mask_or_zero(src_path: str, dst_path: str, shape_hw: tuple) -> None:
+    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+    if os.path.isfile(src_path):
+        mask = Image.open(src_path).convert("L")
+    else:
+        mask = Image.fromarray(np.zeros(shape_hw, dtype=np.uint8))
+    mask.save(dst_path)
+
+
+def _export_difix_pseudo_gt_sample(
+    dataset: DrivingDatasetNovelView,
+    traj_type: str,
+    cam_id: int,
+    frame_idx: int,
+    fixed_u8: np.ndarray,
+    frame_data: dict,
+) -> None:
+    """Export a DiFix-refined frame in the mixed-novel-view dataset layout."""
+    frame_t = dataset.start_timestep + int(frame_idx)
+    traj_dir = os.path.join(dataset.data_path, "novel_views", traj_type)
+    image_dir = os.path.join(traj_dir, "images")
+    cam_pose_dir = os.path.join(traj_dir, "cam_pose", f"cam{cam_id}")
+    os.makedirs(image_dir, exist_ok=True)
+    os.makedirs(cam_pose_dir, exist_ok=True)
+
+    imageio.imwrite(
+        os.path.join(
+            image_dir,
+            f"{frame_t:06d}_{cam_id}_{traj_type}.00_scale0.3.png",
+        ),
+        fixed_u8,
+    )
+
+    c2w = frame_data["cam_infos"]["camera_to_world"]
+    if isinstance(c2w, torch.Tensor):
+        c2w = c2w.detach().cpu().numpy()
+    np.savetxt(os.path.join(cam_pose_dir, f"{frame_t:06d}.txt"), c2w)
+
+    h, w = fixed_u8.shape[:2]
+    src_mask_root = dataset.data_path
+    mask_specs = [
+        (
+            os.path.join(src_mask_root, "sky_masks", f"{frame_t:06d}_{cam_id}.png"),
+            os.path.join(traj_dir, "sky_masks", f"{frame_t:06d}_{cam_id}_{traj_type}.00_scale0.3.png"),
+        ),
+        (
+            os.path.join(src_mask_root, "dynamic_masks", "all", f"{frame_t:06d}_{cam_id}.png"),
+            os.path.join(traj_dir, "dynamic_masks", "all", f"{frame_t:06d}_{cam_id}_{traj_type}.png"),
+        ),
+        (
+            os.path.join(src_mask_root, "dynamic_masks", "human", f"{frame_t:06d}_{cam_id}.png"),
+            os.path.join(traj_dir, "dynamic_masks", "human", f"{frame_t:06d}_{cam_id}_{traj_type}.png"),
+        ),
+        (
+            os.path.join(src_mask_root, "dynamic_masks", "vehicle", f"{frame_t:06d}_{cam_id}.png"),
+            os.path.join(traj_dir, "dynamic_masks", "vehicle", f"{frame_t:06d}_{cam_id}_{traj_type}.png"),
+        ),
+    ]
+    for src_path, dst_path in mask_specs:
+        _copy_mask_or_zero(src_path, dst_path, (h, w))
+
+
 def run_difix_distill_one_traj(
     cfg: OmegaConf,
     trainer: BasicTrainer,
@@ -300,7 +411,8 @@ def run_difix_distill_one_traj(
     traj_type: str,
     save_dir: str,
     difix_refiner: Difix3DRefiner,
-    optimizer: torch.optim.Optimizer,
+    optimizer: Optional[torch.optim.Optimizer],
+    stage_repeat: Optional[int] = None,
 ) -> None:
     """
     单个 traj_type：DiFix 全量帧 + 蒸馏；结果写入 save_dir。
@@ -310,120 +422,301 @@ def run_difix_distill_one_traj(
     ref_cam_data = camera_data_dict[ref_cam_id]
     os.makedirs(save_dir, exist_ok=True)
 
-    render_traj = dataset.get_novel_render_traj(
-        traj_type=traj_type,
-        ref_cam_id=ref_cam_id,
-        camera_data_dict=camera_data_dict,
-        target_frames=dataset.frame_num,
-        traj_path=args.traj_path,
-    )
-    if render_traj is None:
-        logger.warning("Skip distill stage '%s': get_novel_render_traj returned None", traj_type)
-        return
+    stage_mode = "novel"
+    if getattr(args, "distill_ref_traj_as_original_stage", False):
+        ref_traj_type = str(getattr(args, "difix_ref_traj_type", "original_traj"))
+        if traj_type == ref_traj_type:
+            stage_mode = "original"
+
+    render_traj = None
+    if stage_mode == "novel":
+        render_traj = dataset.get_novel_render_traj(
+            traj_type=traj_type,
+            ref_cam_id=ref_cam_id,
+            camera_data_dict=camera_data_dict,
+            target_frames=dataset.frame_num,
+            traj_path=args.traj_path,
+        )
+        if render_traj is None:
+            logger.warning("Skip distill stage '%s': get_novel_render_traj returned None", traj_type)
+            return
 
     use_original_ref = getattr(args, "difix_use_original_traj_ref", False)
     ref_video_path = str(getattr(args, "difix_ref_video_path", "") or "").strip()
+    ref_video_dir = str(getattr(args, "difix_ref_video_dir", "") or "").strip()
     ref_video_frames = None
+    ref_video_frames_by_cam = None
     if use_original_ref:
-        if not ref_video_path:
-            raise ValueError(
-                "--difix_use_original_traj_ref is true, but --difix_ref_video_path is empty"
+        if ref_video_dir:
+            ref_video_frames_by_cam = _load_per_cam_ref_video_frames(
+                ref_video_dir, target_cam_ids
             )
-        ref_video_frames = _load_ref_video_frames(ref_video_path)
-        logger.info(
-            "Using GT ref video for DiFix ref_image: %s (%d frames)",
-            ref_video_path,
-            len(ref_video_frames),
+        elif ref_video_path:
+            ref_video_frames = _load_ref_video_frames(ref_video_path)
+            logger.info(
+                "Using single GT ref video for all cams: %s (%d frames)",
+                ref_video_path,
+                len(ref_video_frames),
+            )
+        else:
+            raise ValueError(
+                "--difix_use_original_traj_ref is true, but neither "
+                "--difix_ref_video_dir nor --difix_ref_video_path is set"
+            )
+
+    original_replay_samples = []
+    if getattr(args, "distill_mix_original", False) or stage_mode == "original":
+        if ref_video_frames_by_cam is None and ref_video_frames is None:
+            raise ValueError(
+                "--distill_mix_original requires original GT refs. Set "
+                "--difix_use_original_traj_ref with --difix_ref_video_dir or --difix_ref_video_path."
+            )
+        original_traj = dataset.get_novel_render_traj(
+            traj_type=getattr(args, "difix_ref_traj_type", "original_traj"),
+            ref_cam_id=ref_cam_id,
+            camera_data_dict=camera_data_dict,
+            target_frames=dataset.frame_num,
+            traj_path=args.traj_path,
         )
+        if original_traj is None:
+            raise RuntimeError("Could not build original trajectory replay data.")
 
-    logger.info("Distill stage traj_type=%s -> save under %s", traj_type, save_dir)
-    cached_samples = []
+        for replay_cam_id in target_cam_ids:
+            target_cam_data = camera_data_dict[replay_cam_id]
+            original_render_data = dataset.prepare_novel_view_render_data(
+                original_traj, ref_cam_data, target_cam_data
+            )
+            replay_frame_indices = (
+                list(range(len(original_render_data)))
+                if args.distill_use_all_frames
+                else [args.distill_frame_idx]
+            )
+            if args.distill_max_frames > 0:
+                replay_frame_indices = replay_frame_indices[:args.distill_max_frames]
 
-    for distill_cam_id in target_cam_ids:
-        target_cam_data = camera_data_dict[distill_cam_id]
-        render_data = dataset.prepare_novel_view_render_data(
-            render_traj, ref_cam_data, target_cam_data
-        )
-
-        frame_indices = list(range(len(render_data))) if args.distill_use_all_frames else [args.distill_frame_idx]
-        if args.distill_max_frames > 0:
-            frame_indices = frame_indices[:args.distill_max_frames]
-
-        logger.info(
-            "Processing DiFix for Cam %s (traj=%s), total %s frames...",
-            distill_cam_id,
-            traj_type,
-            len(frame_indices),
-        )
-
-        for idx in frame_indices:
-            frame_data = render_data[idx]
-            frame_data_device = _frame_data_to_device(frame_data, device=args.difix_device)
-
-            with torch.no_grad():
-                before_rgb = _render_single_novel_frame(trainer, frame_data_device)
-
-            before_np = before_rgb.detach().cpu().numpy()
-            ref_np = None
-            if ref_video_frames is not None:
-                if idx >= len(ref_video_frames):
+            cam_ref_video_frames = (
+                ref_video_frames_by_cam[replay_cam_id]
+                if ref_video_frames_by_cam is not None
+                else ref_video_frames
+            )
+            for idx in replay_frame_indices:
+                if idx >= len(cam_ref_video_frames):
                     logger.warning(
-                        "ref video shorter than trajectory for traj=%s: idx=%s out of %s, skip ref_image for this frame.",
-                        traj_type,
+                        "Skip original replay frame: cam=%s idx=%s out of %s",
+                        replay_cam_id,
                         idx,
-                        len(ref_video_frames),
+                        len(cam_ref_video_frames),
                     )
-                else:
-                    ref_np = ref_video_frames[idx]
-
-            fixed_np = difix_refiner.refine(before_np, ref_image=ref_np)
-            fixed_u8 = (np.clip(fixed_np, 0.0, 1.0) * 255).astype(np.uint8)
-
-            cached_samples.append({
-                "frame_data": frame_data,
-                "target_rgb_u8": fixed_u8,
-                "frame_idx": idx,
-                "cam_id": distill_cam_id,
-            })
-
-            prefix = f"cam{distill_cam_id}_frame{idx:06d}"
-            imageio.imwrite(os.path.join(save_dir, f"{prefix}_before.png"), (before_np * 255).astype(np.uint8))
-            imageio.imwrite(os.path.join(save_dir, f"{prefix}_fixed.png"), fixed_u8)
-            if ref_np is not None:
-                imageio.imwrite(os.path.join(save_dir, f"{prefix}_ref.png"), (ref_np * 255).astype(np.uint8))
-
-    num_samples = len(cached_samples)
-    if num_samples == 0:
-        logger.warning("No cached samples for traj=%s, skip distillation steps.", traj_type)
-        return
-
-    min_required_steps = num_samples * 100
-    actual_steps = max(args.distill_steps, min_required_steps)
+                    continue
+                original_replay_samples.append({
+                    "frame_data": _frame_data_to_cpu(original_render_data[idx]),
+                    "target_rgb_u8": (np.clip(cam_ref_video_frames[idx], 0.0, 1.0) * 255).astype(np.uint8),
+                    "frame_idx": idx,
+                    "cam_id": replay_cam_id,
+                    "sample_type": "original",
+                })
+            del original_render_data
+            torch.cuda.empty_cache()
+        logger.info(
+            "Prepared %d original trajectory replay samples for mixed distillation.",
+            len(original_replay_samples),
+        )
 
     logger.info(
-        "Starting distillation for traj=%s: total_steps=%s (approx %.1f steps per frame)",
+        "Distill stage traj_type=%s mode=%s -> save under %s",
         traj_type,
-        actual_steps,
-        actual_steps / max(num_samples, 1),
+        stage_mode,
+        save_dir,
     )
+    novel_samples = []
 
-    sample_order = np.arange(num_samples)
-    np.random.shuffle(sample_order)
+    if stage_mode == "novel":
+        for distill_cam_id in target_cam_ids:
+            target_cam_data = camera_data_dict[distill_cam_id]
+            render_data = dataset.prepare_novel_view_render_data(
+                render_traj, ref_cam_data, target_cam_data
+            )
 
-    for step in range(actual_steps):
-        if step > 0 and step % num_samples == 0:
-            np.random.shuffle(sample_order)
+            frame_indices = list(range(len(render_data))) if args.distill_use_all_frames else [args.distill_frame_idx]
+            if args.distill_max_frames > 0:
+                frame_indices = frame_indices[:args.distill_max_frames]
 
-        sample = cached_samples[sample_order[step % num_samples]]
-        frame_data_device = _frame_data_to_device(sample["frame_data"], device=args.difix_device)
-        target_rgb = torch.from_numpy(sample["target_rgb_u8"]).to(args.difix_device, dtype=torch.float32) / 255.0
+            logger.info(
+                "Processing DiFix for Cam %s (traj=%s), total %s frames...",
+                distill_cam_id,
+                traj_type,
+                len(frame_indices),
+            )
 
-        loss_val = _distill_one_step(trainer, frame_data_device, target_rgb, optimizer)
+            for idx in frame_indices:
+                frame_data = render_data[idx]
+                frame_data_device = _frame_data_to_device(frame_data, device=args.difix_device)
 
-        if step % 500 == 0 or step == actual_steps - 1:
-            logger.info("[%s] [Step %s/%s] Loss: %.6f", traj_type, step, actual_steps, loss_val)
+                with torch.no_grad():
+                    before_rgb = _render_single_novel_frame(trainer, frame_data_device)
 
-    for item in cached_samples:
+                before_np = before_rgb.detach().cpu().numpy()
+                del before_rgb
+                del frame_data_device
+                torch.cuda.empty_cache()
+
+                ref_np = None
+                cam_ref_video_frames = None
+                if ref_video_frames_by_cam is not None:
+                    cam_ref_video_frames = ref_video_frames_by_cam[distill_cam_id]
+                elif ref_video_frames is not None:
+                    cam_ref_video_frames = ref_video_frames
+
+                if cam_ref_video_frames is not None:
+                    if idx >= len(cam_ref_video_frames):
+                        logger.warning(
+                            "ref video shorter than trajectory for traj=%s cam=%s: idx=%s out of %s, skip ref_image for this frame.",
+                            traj_type,
+                            distill_cam_id,
+                            idx,
+                            len(cam_ref_video_frames),
+                        )
+                    else:
+                        ref_np = cam_ref_video_frames[idx]
+
+                fixed_np = difix_refiner.refine(before_np, ref_image=ref_np)
+                fixed_u8 = (np.clip(fixed_np, 0.0, 1.0) * 255).astype(np.uint8)
+                del fixed_np
+                torch.cuda.empty_cache()
+
+                if getattr(args, "difix_export_pseudo_gt", False):
+                    _export_difix_pseudo_gt_sample(
+                        dataset=dataset,
+                        traj_type=traj_type,
+                        cam_id=distill_cam_id,
+                        frame_idx=idx,
+                        fixed_u8=fixed_u8,
+                        frame_data=frame_data,
+                    )
+
+                if not getattr(args, "skip_difix_distill_steps", False):
+                    novel_samples.append({
+                        "frame_data": _frame_data_to_cpu(frame_data),
+                        "target_rgb_u8": fixed_u8,
+                        "frame_idx": idx,
+                        "cam_id": distill_cam_id,
+                        "sample_type": "novel",
+                    })
+
+                prefix = f"cam{distill_cam_id}_frame{idx:06d}"
+                imageio.imwrite(os.path.join(save_dir, f"{prefix}_before.png"), (before_np * 255).astype(np.uint8))
+                imageio.imwrite(os.path.join(save_dir, f"{prefix}_fixed.png"), fixed_u8)
+                if ref_np is not None:
+                    imageio.imwrite(os.path.join(save_dir, f"{prefix}_ref.png"), (ref_np * 255).astype(np.uint8))
+
+            del render_data
+            torch.cuda.empty_cache()
+    else:
+        logger.info("Stage '%s' uses original trajectory GT replay only.", traj_type)
+
+    if getattr(args, "skip_difix_distill_steps", False):
+        logger.info(
+            "DiFix pseudo-GT exported for traj=%s; skip_difix_distill_steps=true, so no model distillation is run.",
+            traj_type,
+        )
+        return
+
+    num_novel_samples = len(novel_samples)
+    if num_novel_samples == 0:
+        logger.warning("No cached samples for traj=%s, skip distillation steps.", traj_type)
+        return
+    if optimizer is None:
+        raise RuntimeError("optimizer is required when skip_difix_distill_steps is false")
+
+    if stage_repeat is not None:
+        if stage_repeat <= 0:
+            raise ValueError(f"Invalid stage_repeat={stage_repeat} for traj={traj_type}")
+        stage_samples = original_replay_samples if stage_mode == "original" else novel_samples
+        if len(stage_samples) == 0:
+            logger.warning("No cached samples for traj=%s stage_mode=%s, skip distillation.", traj_type, stage_mode)
+            return
+        actual_steps = len(stage_samples) * stage_repeat
+        logger.info(
+            "Starting progressive distillation for traj=%s mode=%s: samples=%d repeat=%d total_steps=%d",
+            traj_type,
+            stage_mode,
+            len(stage_samples),
+            stage_repeat,
+            actual_steps,
+        )
+        step = 0
+        for repeat_idx in range(stage_repeat):
+            order = np.arange(len(stage_samples))
+            np.random.shuffle(order)
+            for sample_idx in order:
+                sample = stage_samples[int(sample_idx)]
+                frame_data_device = _frame_data_to_device(sample["frame_data"], device=args.difix_device)
+                target_rgb = torch.from_numpy(sample["target_rgb_u8"]).to(args.difix_device, dtype=torch.float32) / 255.0
+                loss_val = _distill_one_step(trainer, frame_data_device, target_rgb, optimizer)
+                del frame_data_device
+                del target_rgb
+                step += 1
+                if step % 500 == 0 or step == actual_steps:
+                    logger.info(
+                        "[%s] [Step %s/%s] repeat=%s/%s type=%s Loss: %.6f",
+                        traj_type,
+                        step,
+                        actual_steps,
+                        repeat_idx + 1,
+                        stage_repeat,
+                        sample.get("sample_type", stage_mode),
+                        loss_val,
+                    )
+    else:
+        min_required_steps = num_novel_samples * 100
+        actual_steps = max(args.distill_steps, min_required_steps)
+
+        logger.info(
+            "Starting mixed distillation for traj=%s: total_steps=%s (approx %.1f novel steps per frame), original_replay_ratio=%.2f",
+            traj_type,
+            actual_steps,
+            actual_steps / max(num_novel_samples, 1),
+            args.distill_original_sample_ratio if original_replay_samples else 0.0,
+        )
+
+        novel_order = np.arange(num_novel_samples)
+        np.random.shuffle(novel_order)
+        original_order = np.arange(len(original_replay_samples))
+        if len(original_order) > 0:
+            np.random.shuffle(original_order)
+
+        for step in range(actual_steps):
+            use_original = (
+                len(original_replay_samples) > 0
+                and np.random.rand() < args.distill_original_sample_ratio
+            )
+            if use_original:
+                if step > 0 and step % len(original_replay_samples) == 0:
+                    np.random.shuffle(original_order)
+                sample = original_replay_samples[original_order[step % len(original_replay_samples)]]
+            else:
+                if step > 0 and step % num_novel_samples == 0:
+                    np.random.shuffle(novel_order)
+                sample = novel_samples[novel_order[step % num_novel_samples]]
+
+            frame_data_device = _frame_data_to_device(sample["frame_data"], device=args.difix_device)
+            target_rgb = torch.from_numpy(sample["target_rgb_u8"]).to(args.difix_device, dtype=torch.float32) / 255.0
+
+            loss_val = _distill_one_step(trainer, frame_data_device, target_rgb, optimizer)
+            del frame_data_device
+            del target_rgb
+
+            if step % 500 == 0 or step == actual_steps - 1:
+                logger.info(
+                    "[%s] [Step %s/%s] type=%s Loss: %.6f",
+                    traj_type,
+                    step,
+                    actual_steps,
+                    sample.get("sample_type", "novel"),
+                    loss_val,
+                )
+
+    for item in novel_samples:
         frame_data_device = _frame_data_to_device(item["frame_data"], device=args.difix_device)
         after_rgb = _render_single_novel_frame(trainer, frame_data_device)
         imageio.imwrite(
@@ -433,6 +726,9 @@ def run_difix_distill_one_traj(
             ),
             (after_rgb.detach().cpu().numpy() * 255).astype(np.uint8),
         )
+        del frame_data_device
+        del after_rgb
+        torch.cuda.empty_cache()
 
 @torch.no_grad()
 def render_trajectory(
@@ -645,6 +941,16 @@ def main(args):
             len(traj_stages),
             ", ".join(traj_stages),
         )
+        stage_repeats = list(args.distill_stage_repeats or [])
+        if len(stage_repeats) == 1 and len(traj_stages) > 1:
+            stage_repeats = stage_repeats * len(traj_stages)
+        if len(stage_repeats) not in (0, len(traj_stages)):
+            raise ValueError(
+                f"--distill_stage_repeats must be empty, single value, or match --traj_types count "
+                f"({len(traj_stages)}), but got {len(stage_repeats)}"
+            )
+        if any(int(v) <= 0 for v in stage_repeats):
+            raise ValueError("--distill_stage_repeats values must all be > 0")
 
         difix_model = _load_difix_pipeline(args)
         difix_refiner = Difix3DRefiner(
@@ -654,13 +960,16 @@ def main(args):
             timesteps=args.difix_timesteps,
             guidance_scale=args.difix_guidance_scale,
         )
-        optimizer = _build_distill_optimizer(
-            trainer, lr=args.distill_lr, lr_scale=args.distill_lr_scale
-        )
+        optimizer = None
+        if not args.skip_difix_distill_steps:
+            optimizer = _build_distill_optimizer(
+                trainer, lr=args.distill_lr, lr_scale=args.distill_lr_scale
+            )
 
-        for traj_type in traj_stages:
+        for stage_idx, traj_type in enumerate(traj_stages):
             suffix = _difix_distill_dir_suffix(traj_type)
             save_dir = os.path.join(cfg.log_dir, f"difix_distill_all_frames_{suffix}")
+            stage_repeat = int(stage_repeats[stage_idx]) if len(stage_repeats) > 0 else None
             run_difix_distill_one_traj(
                 cfg=cfg,
                 trainer=trainer,
@@ -671,24 +980,26 @@ def main(args):
                 save_dir=save_dir,
                 difix_refiner=difix_refiner,
                 optimizer=optimizer,
+                stage_repeat=stage_repeat,
             )
-            render_trajectory(
-                step=trainer.step,
-                cfg=cfg,
-                trainer=trainer,
-                dataset=dataset,
-                cam_ids=camera_ids,
-                downscales=downscales,
-                traj_types=[traj_type],
-                fps=args.fps,
-                render_rgb=args.render_rgb,
-                render_depth=args.render_depth,
-                save_images=args.save_images,
-                generate_lidar_pc=args.generate_lidar_pc,
-                args=args,
-            )
+            if not args.skip_difix_distill_steps:
+                render_trajectory(
+                    step=trainer.step,
+                    cfg=cfg,
+                    trainer=trainer,
+                    dataset=dataset,
+                    cam_ids=camera_ids,
+                    downscales=downscales,
+                    traj_types=[traj_type],
+                    fps=args.fps,
+                    render_rgb=args.render_rgb,
+                    render_depth=args.render_depth,
+                    save_images=args.save_images,
+                    generate_lidar_pc=args.generate_lidar_pc,
+                    args=args,
+                )
 
-        if not args.skip_final_fix_ckpt:
+        if not args.skip_final_fix_ckpt and not args.skip_difix_distill_steps:
             final_path = os.path.join(cfg.log_dir, args.final_fix_ckpt)
             torch.save(_safe_trainer_state_dict_only_model(trainer), final_path)
             logger.info(f"Distilled model saved to {final_path}")
@@ -839,6 +1150,36 @@ if __name__ == "__main__":
         help="base learning rate for DiFix distillation",
     )
     parser.add_argument(
+        "--distill_mix_original",
+        action="store_true",
+        help="mix original-trajectory GT replay with DiFix-refined novel trajectory samples during distillation",
+    )
+    parser.add_argument(
+        "--distill_original_sample_ratio",
+        type=float,
+        default=0.65,
+        help="probability of sampling original-trajectory GT replay when --distill_mix_original is enabled",
+    )
+    parser.add_argument(
+        "--distill_stage_repeats",
+        nargs="+",
+        type=int,
+        default=None,
+        help=(
+            "Optional per-stage repeat count for deterministic progressive training. "
+            "If set, each stage uses (num_samples_of_stage * repeat) optimization steps. "
+            "Provide one value to broadcast to all stages, or one value per --traj_types entry."
+        ),
+    )
+    parser.add_argument(
+        "--distill_ref_traj_as_original_stage",
+        action="store_true",
+        help=(
+            "When enabled, any stage whose traj_type == --difix_ref_traj_type is trained as "
+            "original-trajectory GT replay only (no DiFix refinement)."
+        ),
+    )
+    parser.add_argument(
         "--final_fix_ckpt",
         type=str,
         default="final-fix.ckpt",
@@ -848,6 +1189,16 @@ if __name__ == "__main__":
         "--skip_final_fix_ckpt",
         action="store_true",
         help="skip saving final-fix checkpoint and only render with in-memory distilled model",
+    )
+    parser.add_argument(
+        "--difix_export_pseudo_gt",
+        action="store_true",
+        help="export DiFix-refined frames into data_root/scene/novel_views/<traj_type> for mixed training",
+    )
+    parser.add_argument(
+        "--skip_difix_distill_steps",
+        action="store_true",
+        help="run DiFix refinement/export only and skip optimizing the loaded 3DGS checkpoint",
     )
     parser.add_argument(
         "--difix_src_dir",
@@ -905,6 +1256,16 @@ if __name__ == "__main__":
         type=str,
         default="original_traj",
         help="Trajectory name for ref_image when --difix_use_original_traj_ref is set",
+    )
+    parser.add_argument(
+        "--difix_ref_video_dir",
+        type=str,
+        default="",
+        help=(
+            "Directory containing per-camera GT reference videos for DiFix, "
+            "for example cam0.mp4 ... cam12.mp4. "
+            "When set, this takes priority over --difix_ref_video_path."
+        ),
     )
     parser.add_argument(
         "--difix_ref_video_path",

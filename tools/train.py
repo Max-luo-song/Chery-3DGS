@@ -420,7 +420,7 @@ def main(args):
         #----------------------------     Saving     --------------------------------
         do_save = step > 0 and (
             (step % cfg.logging.saveckpt_freq == 0) or (step == trainer.num_iters)
-        ) and (args.resume_from is None)
+        ) and (args.resume_from is None or args.save_ckpt_on_resume)
         if do_save:  # 保存之前再做一遍筛选
             # if 'RoadNodes' in trainer.gaussian_classes and 'Background' in trainer.gaussian_classes:
             #     clean_road_overhead_during_training(
@@ -494,6 +494,7 @@ if __name__ == "__main__":
     
     # eval
     parser.add_argument("--resume_from", default=None, help="path to checkpoint to resume from", type=str)
+    parser.add_argument("--save_ckpt_on_resume", action="store_true", help="save checkpoints when fine-tuning from --resume_from")
     parser.add_argument("--render_video_postfix", type=str, default=None, help="an optional postfix for video")    
     
     # wandb logging part

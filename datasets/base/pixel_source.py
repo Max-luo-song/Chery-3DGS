@@ -142,12 +142,23 @@ class CameraData(object):
         self.novel_view_mode = novel_view_mode  # syc
 
         self.mix_novel_alias = mix_novel_alias
+        self.mix_novel_dir_alias = mix_novel_alias
         self.mix_novel_views = mix_novel_views
         self.from_cam_id = None
 
         if self.dataset_name == "qcraft":
             if mix_novel_views and mix_novel_alias is not None:
-                self.from_cam_id = cam_id = 0  # hard replaced here
+                # Mixed novel views can be configured as:
+                #   left_shift_0.5m        -> legacy cam0-only stream
+                #   left_shift_0.5m__cam3  -> cam3 pseudo-GT under novel_views/left_shift_0.5m
+                source_cam_id = 0
+                if "__cam" in mix_novel_alias:
+                    dir_alias, cam_suffix = mix_novel_alias.rsplit("__cam", 1)
+                    if cam_suffix.isdigit():
+                        self.mix_novel_dir_alias = dir_alias
+                        source_cam_id = int(cam_suffix)
+                self.from_cam_id = source_cam_id
+                cam_id = source_cam_id
                 self.cam_name = f"Mixed Novel Camera - {mix_novel_alias}"
             else:
                 self.cam_name = ALL_CAM_SPECS[cam_id].name
@@ -548,42 +559,67 @@ class CameraData(object):
 
         # Note: we assume all the files in waymo dataset are synchronized
         for t in range(self.start_timestep, self.end_timestep):
+            dynamic_mask_path = os.path.join(
+                f"{self.data_path}/novel_views",
+                f"{self.mix_novel_dir_alias}/dynamic_masks",
+                "all",
+                f"{t:06d}_{self.from_cam_id}_{self.mix_novel_dir_alias}.png",
+            )
+            human_mask_path = os.path.join(
+                f"{self.data_path}/novel_views",
+                f"{self.mix_novel_dir_alias}/dynamic_masks",
+                "human",
+                f"{t:06d}_{self.from_cam_id}_{self.mix_novel_dir_alias}.png",
+            )
+            vehicle_mask_path = os.path.join(
+                f"{self.data_path}/novel_views",
+                f"{self.mix_novel_dir_alias}/dynamic_masks",
+                "vehicle",
+                f"{t:06d}_{self.from_cam_id}_{self.mix_novel_dir_alias}.png",
+            )
+            if not os.path.exists(dynamic_mask_path):
+                dynamic_mask_path = os.path.join(
+                    f"{self.data_path}/novel_views",
+                    f"{self.mix_novel_dir_alias}/dynamic_masks",
+                    "all",
+                    f"{t:06d}_{self.mix_novel_dir_alias}.png",
+                )
+            if not os.path.exists(human_mask_path):
+                human_mask_path = os.path.join(
+                    f"{self.data_path}/novel_views",
+                    f"{self.mix_novel_dir_alias}/dynamic_masks",
+                    "human",
+                    f"{t:06d}_{self.mix_novel_dir_alias}.png",
+                )
+            if not os.path.exists(vehicle_mask_path):
+                vehicle_mask_path = os.path.join(
+                    f"{self.data_path}/novel_views",
+                    f"{self.mix_novel_dir_alias}/dynamic_masks",
+                    "vehicle",
+                    f"{t:06d}_{self.mix_novel_dir_alias}.png",
+                )
+
             img_filepaths.append(
                 os.path.join(
                     f"{self.data_path}/novel_views",
-                    f"{self.mix_novel_alias}/images",
-                    f"{t:06d}_{self.from_cam_id}_{self.mix_novel_alias}.00_scale0.3.png",
+                    f"{self.mix_novel_dir_alias}/images",
+                    f"{t:06d}_{self.from_cam_id}_{self.mix_novel_dir_alias}.00_scale0.3.png",
                 )
             )
             dynamic_mask_filepaths.append(
-                os.path.join(
-                    f"{self.data_path}/novel_views",
-                    f"{self.mix_novel_alias}/dynamic_masks",
-                    "all",
-                    f"{t:06d}_{self.mix_novel_alias}.png",
-                )
+                dynamic_mask_path
             )
             human_mask_filepaths.append(
-                os.path.join(
-                    f"{self.data_path}/novel_views",
-                    f"{self.mix_novel_alias}/dynamic_masks",
-                    "human",
-                    f"{t:06d}_{self.mix_novel_alias}.png",
-                )
+                human_mask_path
             )
             vehicle_mask_filepaths.append(
-                os.path.join(
-                    f"{self.data_path}/novel_views",
-                    f"{self.mix_novel_alias}/dynamic_masks",
-                    "vehicle",
-                    f"{t:06d}_{self.mix_novel_alias}.png",
-                )
+                vehicle_mask_path
             )
             sky_mask_filepaths.append(
                 os.path.join(
                     f"{self.data_path}/novel_views",
-                    f"{self.mix_novel_alias}/sky_masks",
-                    f"{t:06d}_{self.from_cam_id}_{self.mix_novel_alias}.00_scale0.3.png",
+                    f"{self.mix_novel_dir_alias}/sky_masks",
+                    f"{t:06d}_{self.from_cam_id}_{self.mix_novel_dir_alias}.00_scale0.3.png",
                 )
             )
         self.img_filepaths = np.array(img_filepaths)
@@ -1217,6 +1253,8 @@ class ScenePixelSource(abc.ABC):
         self,
         candidate_indices: Tensor = None,
     ) -> Dict[str, Tensor]:
+        candidate_indices = self._apply_original_sample_ratio(candidate_indices)
+
         if random.random() < self.buffer_ratio and self.image_error_buffered:
             # sample according to the image error buffer
             image_mean_error = self.image_error_buffer[candidate_indices]
@@ -1244,11 +1282,37 @@ class ScenePixelSource(abc.ABC):
 
         return img_idx
 
+    def _apply_original_sample_ratio(self, candidate_indices):
+        original_sample_ratio = self.data_cfg.get("original_sample_ratio", None)
+        if (
+            original_sample_ratio is not None
+            and self.data_cfg.get("mix_novel_views", False)
+            and self.data_cfg.mix_novel_views
+        ):
+            original_sample_ratio = float(original_sample_ratio)
+            original_cam_count = len(self.camera_list)
+            original_candidates = [
+                idx for idx in candidate_indices if int(idx) % self.num_cams < original_cam_count
+            ]
+            novel_candidates = [
+                idx for idx in candidate_indices if int(idx) % self.num_cams >= original_cam_count
+            ]
+            if original_candidates and novel_candidates:
+                candidate_indices = (
+                    original_candidates
+                    if random.random() < original_sample_ratio
+                    else novel_candidates
+                )
+
+        return candidate_indices
+
     def propose_training_image_by_camera(
         self,
         candidate_indices: List[int],
         camera_weight_map: Optional[Dict[int, float]] = None,
     ) -> int:
+        candidate_indices = self._apply_original_sample_ratio(candidate_indices)
+
         if camera_weight_map is None:
             camera_weight_map = {
                 0: 5,

@@ -1,36 +1,21 @@
 #!/bin/bash
 
-# 参数设置
+# DiFix3D online repair + progressive mixed distillation.
+# Default curriculum (11 cams): left 1.5m -> original -> left 3m -> original.
+
 ################################################################################
-ckpt_path="/inspire/hdd/global_user/guoluosong-253108120129/chery/new_traj/scene_reconstruction-main/output/qcraft_20250818_152739_Q3720_100_130_part01/20260506_lidar+cam0_1_2_3_5_6_7_9_10_11_12baseline/checkpoint_final.pth"
-final_fix_ckpt_suffix="difix_all_left_offset15"
+ckpt_path=${ckpt_path:-"/inspire/hdd/global_user/guoluosong-253108120129/chery/new_traj/scene_reconstruction-main/output/qcraft_20250818_152739_Q3720_100_130_part01/20260506_lidar+cam0_1_2_3_5_6_7_9_10_11_12baseline/checkpoint_final.pth"}
+final_fix_ckpt_suffix=${final_fix_ckpt_suffix:-"difix_prog_left1p5_ori_left3_ori"}
+difix_output_suffix=${difix_output_suffix:-"difix_left1p5_ori_left3_ori"}
 
 traj_types=(
-    # original_traj
-    # left_shift_0.2m
-    # left_shift_0.4m
-    # left_shift_0.6m
-    # left_shift_0.8m
-    # left_shift_0.5m
-    # left_shift_1m
     left_shift_1.5m
-    # left_shift_2m
-    # left_shift_2.5m
+    original_traj
     left_shift_3m
-    # left_shift_5m
-    # right_shift_1m
-    # right_shift_3m
-    # right_shift_5m
-    # front_shift_1m
-    # front_shift_3m
-    # front_shift_5m
-    # back_shift_1m
-    # back_shift_3m
-    # back_shift_5m
-    # change_lane_1m
-    # change_lane_2m
-    # change_lane_3.5m
+    original_traj
 )
+distill_stage_repeats=(30 10 30 10)  # 可调超参数：每个阶段“每视角重复次数”
+distill_ref_traj_as_original_stage=true
 
 cam_ids=(0 1 2 3 5 6 7 9 10 11 12)
 downscales=(1 1 1 1 1 1 1 1 1 1 1)
@@ -41,33 +26,39 @@ render_depth=false
 save_images=true
 generate_lidar_pc=false
 
-# --- DiFix3D 蒸馏修复核心配置 ---
 enable_difix_distill=true
 distill_ref_cam_id=0
 distill_cam_ids=(0 1 2 3 5 6 7 9 10 11 12)
-distill_use_all_frames=true     # 开启全量帧优化
-distill_max_frames=-1           # 不限制帧数（处理全部 148 帧）
+distill_use_all_frames=true
+distill_max_frames=-1
 
-# 计算总步数：148 帧 * 100 步 = 14800
+# Keep the existing distillation setting unchanged.
 distill_steps=14800
 distill_lr=1e-4
 distill_lr_scale=1.0
 
-# DiFix3D 路径与设备配置
-difix_src_dir="/inspire/hdd/global_user/guoluosong-253108120129/chery/new_traj/Difix3D/src"
-difix_pretrained_dir="/inspire/hdd/global_user/guoluosong-253108120129/chery/new_traj/Difix3D/difix_ref"
+# Ratio mode is kept for backward compatibility; progressive stage repeats are preferred.
+distill_mix_original=false
+distill_original_sample_ratio=0.65
+
+difix_src_dir=${difix_src_dir:-"/inspire/hdd/global_user/guoluosong-253108120129/chery/new_traj/Difix3D/src"}
+difix_pretrained_dir=${difix_pretrained_dir:-"/inspire/hdd/global_user/guoluosong-253108120129/chery/new_traj/Difix3D/difix_ref"}
 difix_device="cuda"
 difix_prompt="remove_degradation"
-difix_num_inference_steps=1     # 快速修复
+difix_num_inference_steps=1
 difix_timesteps=(199)
 difix_guidance_scale=0.0
 difix_use_original_traj_ref=true
 difix_ref_traj_type=original_traj
 generate_ref_videos=true
 overwrite_ref_videos=false
-difix_ref_video_dir="/inspire/hdd/global_user/guoluosong-253108120129/chery/new_traj/scene_reconstruction-ga/data/refer_gt_video"
+difix_ref_video_dir=${difix_ref_video_dir:-"/inspire/hdd/global_user/guoluosong-253108120129/chery/new_traj/scene_reconstruction-ga/data/refer_gt_video"}
 difix_trust_remote_code=false
-difix_output_suffix="difix"
+
+eval_original_traj_after_distill=true
+eval_postfix=${eval_postfix:-"prog_mix_original_traj"}
+eval_render_full=true
+eval_render_test=false
 
 final_fix_ckpt="checkpoint_final_${final_fix_ckpt_suffix}.pth"
 skip_final_fix_ckpt=false
@@ -76,7 +67,6 @@ skip_final_fix_ckpt=false
 source scripts/utils.sh
 export PYTHONPATH=$(pwd)
 
-# 自动选择 GPU
 gpu=$(pick_gpu)
 if [ -z "${gpu}" ]; then
     echo "no gpu found"
@@ -112,6 +102,7 @@ if [ "$enable_difix_distill" = true ]; then
 fi
 
 echo "Using checkpoint: $ckpt_path"
+echo "Mixed distillation original replay ratio: ${distill_original_sample_ratio}"
 
 cmd=(
     python sim_render/cam/render_novel_trajectory.py
@@ -122,13 +113,11 @@ cmd=(
     --fps "$fps"
 )
 
-# 添加渲染与保存标志
 [ "$render_rgb" = true ] && cmd+=(--render_rgb)
 [ "$render_depth" = true ] && cmd+=(--render_depth)
 [ "$save_images" = true ] && cmd+=(--save_images)
 [ "$generate_lidar_pc" = true ] && cmd+=(--generate_lidar_pc)
 
-# 添加蒸馏参数
 if [ "$enable_difix_distill" = true ]; then
     cmd+=(
         --enable_difix_distill
@@ -151,9 +140,32 @@ if [ "$enable_difix_distill" = true ]; then
         --difix_ref_traj_type "$difix_ref_traj_type"
         --difix_ref_video_dir "$difix_ref_video_dir"
     )
+    if [ ${#distill_stage_repeats[@]} -gt 0 ]; then
+        cmd+=(--distill_stage_repeats "${distill_stage_repeats[@]}")
+    fi
+    [ "$distill_ref_traj_as_original_stage" = true ] && cmd+=(--distill_ref_traj_as_original_stage)
+    [ "$distill_mix_original" = true ] && cmd+=(--distill_mix_original --distill_original_sample_ratio "$distill_original_sample_ratio")
     [ "$difix_use_original_traj_ref" = true ] && cmd+=(--difix_use_original_traj_ref)
     [ "$difix_trust_remote_code" = true ] && cmd+=(--difix_trust_remote_code)
     [ "$skip_final_fix_ckpt" = true ] && cmd+=(--skip_final_fix_ckpt)
 fi
 
 CUDA_VISIBLE_DEVICES="${gpu}" "${cmd[@]}"
+
+if [ "$eval_original_traj_after_distill" = true ] && [ "$skip_final_fix_ckpt" = false ]; then
+    if [[ "${final_fix_ckpt}" = /* ]]; then
+        final_ckpt_path="${final_fix_ckpt}"
+    else
+        final_ckpt_path="$(dirname "${ckpt_path}")/${final_fix_ckpt}"
+    fi
+    if [ ! -f "${final_ckpt_path}" ]; then
+        echo "ERROR: final checkpoint not found: ${final_ckpt_path}"
+        exit 1
+    fi
+    gpu="${gpu}" \
+    ckpt_path="${final_ckpt_path}" \
+    eval_postfix="${eval_postfix}" \
+    render_full="${eval_render_full}" \
+    render_test="${eval_render_test}" \
+    bash scripts/qcraft/cal_new_traj_pref.sh
+fi
