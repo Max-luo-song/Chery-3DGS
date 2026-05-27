@@ -144,11 +144,15 @@ Experiments with SDS and DDS are described [here](./docs/2d_experiments.md)
 If you find this paper useful, please consider citing our paper:
 
 ```bibtex
-@article{skorokhodov2025d3dr,
-  title={D3DR: Lighting-aware object insertion in Gaussian splatting},
-  author={Skorokhodov, Vsevolod and Durasov, Nikita and Fua, Pascal},
-  journal={arXiv preprint arXiv:2503.06740},
-  year={2025}
+@article{
+skorokhodov2026diffusion,
+title={Diffusion Models are Secretly Zero-Shot 3{DGS} Harmonizers},
+author={Vsevolod Skorokhodov and Nikita Durasov and Pascal Fua},
+journal={Transactions on Machine Learning Research},
+issn={2835-8856},
+year={2026},
+url={https://openreview.net/forum?id=1jjIitxVmM},
+note={}
 }
 ```
 
