@@ -2,13 +2,13 @@
 
 > TL;DR: D3DR inserts a 3DGS object into a 3DGS scene and harmonizes appearance and shadows using diffusion models.
 
-## [Project Page](http://norange.io/projects/diff_relight/) | [ArXiv](https://arxiv.org/abs/2503.06740) | [Dataset](https://zenodo.org/records/19220048) | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/11w4TPohPkSPjNijeKm2y9Nxgl5WmnVRO?usp=sharing)
+## [Project Page](http://nikitadurasov.github.io/projects/diff_relight/) | [ArXiv](https://arxiv.org/abs/2503.06740) | [Dataset](https://zenodo.org/records/19220048) | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/11w4TPohPkSPjNijeKm2y9Nxgl5WmnVRO?usp=sharing)
 
 <p align="center">
   <img src="./docs/method.jpg" alt="Method" width="70%">
 </p>
 
-[`Vsevolod Skorokhodov`](https://sevashasla.github.io), [`Nikita Durasov`](https://www.norange.io/about/), [`Pascal Fua`](https://people.epfl.ch/pascal.fua)
+[`Vsevolod Skorokhodov`](https://sevashasla.github.io), [`Nikita Durasov`](https://nikitadurasov.github.io/about/), [`Pascal Fua`](https://people.epfl.ch/pascal.fua)
 
 We present **D3DR**, a method for inserting a 3D Gaussian Splatting (3DGS) object into a 3DGS scene while correcting lighting, shadows, and other visual inconsistencies. Our approach leverages a **hidden capability** of diffusion models trained on large real-world datasets to implicitly infer plausible lighting. We optimize a diffusion-based DDS-inspired objective to adjust the object's 3D Gaussian parameters for improved visual consistency. We further introduce a diffusion personalization strategy that preserves object texture across diverse lighting conditions. Compared to existing approaches, D3DR improves relighting quality by up to **2.0 dB PSNR**.
 
