@@ -71,6 +71,22 @@ def get_args():
         help="1 - use, 0 - use mean, -1 - ignore",
     )
     parser.add_argument("--num_fixed_train_angles", type=int, default=100)
+    parser.add_argument(
+        "--load_eval_data",
+        type=int,
+        default=1,
+        help="Load obj_scene_eval images and masks; set to 0 for PLY-only training.",
+    )
+    parser.add_argument(
+        "--camera_sampling_mode",
+        choices=("orbit", "trajectory"),
+        default="orbit",
+        help="Use synthetic orbit cameras or real ego-trajectory cameras.",
+    )
+    parser.add_argument("--trajectory_min_distance", type=float, default=2.0)
+    parser.add_argument("--trajectory_max_distance", type=float, default=30.0)
+    parser.add_argument("--trajectory_position_jitter", type=float, default=0.05)
+    parser.add_argument("--trajectory_rotation_jitter_deg", type=float, default=1.0)
 
     parser.add_argument("--optimize_latent_for", type=int, default=16)
     parser.add_argument("--optimize_image_for", type=int, default=64)
@@ -193,6 +209,21 @@ def get_args():
     )
     args.num_fixed_train_angles = scene_info.get(
         "num_fixed_train_angles", args.num_fixed_train_angles
+    )
+    args.camera_sampling_mode = scene_info.get(
+        "camera_sampling_mode", args.camera_sampling_mode
+    )
+    args.trajectory_min_distance = scene_info.get(
+        "trajectory_min_distance", args.trajectory_min_distance
+    )
+    args.trajectory_max_distance = scene_info.get(
+        "trajectory_max_distance", args.trajectory_max_distance
+    )
+    args.trajectory_position_jitter = scene_info.get(
+        "trajectory_position_jitter", args.trajectory_position_jitter
+    )
+    args.trajectory_rotation_jitter_deg = scene_info.get(
+        "trajectory_rotation_jitter_deg", args.trajectory_rotation_jitter_deg
     )
     args.not_visible_const = scene_info.get(
         "not_visible_const", args.not_visible_const
@@ -532,6 +563,12 @@ def perform_voi(
     use_personalization_from: str | None,
     not_visible_const: float,
     num_fixed_train_angles: int,
+    load_eval_data: int,
+    camera_sampling_mode: str,
+    trajectory_min_distance: float,
+    trajectory_max_distance: float,
+    trajectory_position_jitter: float,
+    trajectory_rotation_jitter_deg: float,
 ):
     t_range = t_range_str.replace("(", "").replace(")", "").replace(", ", " ")
     t_range_refine = (
@@ -544,6 +581,13 @@ def perform_voi(
         f"--load_checkpoint {load_ckpt} " if load_ckpt is not None else " "
     )
     vis_wandb = "--vis wandb " if use_wandb != 0 else " "
+    disable_eval_str = (
+        "--steps-per-eval-batch 0 "
+        "--steps-per-eval-image 0 "
+        "--steps-per-eval-all-images 0 "
+        if load_eval_data == 0
+        else ""
+    )
     refine_linear_str = (
         f"--pipeline.model.refine-range-linear {(max_num_iterations - refine_after)} "
         if refine_linear != 0
@@ -631,6 +675,13 @@ def perform_voi(
             + f"--pipeline.datamanager.use_min_for_generation {use_min_for_generation} "
             + f"--pipeline.datamanager.betas_refine {betas_refine_str} "
             + f"--pipeline.datamanager.num_fixed_train_angles {num_fixed_train_angles} "
+            + f"--pipeline.datamanager.load-eval-data {load_eval_data} "
+            + f"--pipeline.datamanager.camera-sampling-mode {camera_sampling_mode} "
+            + f"--pipeline.datamanager.trajectory-min-distance {trajectory_min_distance} "
+            + f"--pipeline.datamanager.trajectory-max-distance {trajectory_max_distance} "
+            + f"--pipeline.datamanager.trajectory-position-jitter {trajectory_position_jitter} "
+            + f"--pipeline.datamanager.trajectory-rotation-jitter-deg {trajectory_rotation_jitter_deg} "
+            + disable_eval_str
             + f"--pipeline.datamanager.voxel-size {voxel_size} "
             + "--viewer.quit-on-train-completion True "
             + f"--max_num_iterations {max_num_iterations} "
@@ -714,6 +765,13 @@ def perform_voi(
             + f"--pipeline.datamanager.use_min_for_generation {use_min_for_generation} "
             + f"--pipeline.datamanager.voxel-size {voxel_size} "
             + f"--pipeline.datamanager.num_fixed_train_angles {num_fixed_train_angles} "
+            + f"--pipeline.datamanager.load-eval-data {load_eval_data} "
+            + f"--pipeline.datamanager.camera-sampling-mode {camera_sampling_mode} "
+            + f"--pipeline.datamanager.trajectory-min-distance {trajectory_min_distance} "
+            + f"--pipeline.datamanager.trajectory-max-distance {trajectory_max_distance} "
+            + f"--pipeline.datamanager.trajectory-position-jitter {trajectory_position_jitter} "
+            + f"--pipeline.datamanager.trajectory-rotation-jitter-deg {trajectory_rotation_jitter_deg} "
+            + disable_eval_str
             + "--viewer.quit-on-train-completion True "
             + f"--max_num_iterations {max_num_iterations} "
         )
@@ -963,6 +1021,12 @@ def main():
             use_personalization_from=args.use_personalization_from,
             not_visible_const=args.not_visible_const,
             num_fixed_train_angles=args.num_fixed_train_angles,
+            load_eval_data=args.load_eval_data,
+            camera_sampling_mode=args.camera_sampling_mode,
+            trajectory_min_distance=args.trajectory_min_distance,
+            trajectory_max_distance=args.trajectory_max_distance,
+            trajectory_position_jitter=args.trajectory_position_jitter,
+            trajectory_rotation_jitter_deg=args.trajectory_rotation_jitter_deg,
         )
         print(f"perform_voi() took {time.time() - start_time:.2f} seconds")
 

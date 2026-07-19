@@ -7,6 +7,11 @@ import numpy as np
 parser = argparse.ArgumentParser()
 parser.add_argument("--tr_path", type=str, required=True)
 parser.add_argument("--h", type=int, default=None)
+parser.add_argument(
+    "--opencv-to-nerfstudio",
+    action="store_true",
+    help="Convert OpenCV C2W poses (+Z forward, +Y down) to Nerfstudio/OpenGL C2W.",
+)
 
 parser.add_argument("--save_name", type=str, default="camera_path.json")
 parser.add_argument("--seconds", type=float, default=5.0)
@@ -28,9 +33,12 @@ data_result["seconds"] = args.seconds
 data_result["camera_path"] = []
 
 for f in data_init["frames"]:
+    camera_to_world = np.asarray(f["transform_matrix"], dtype=np.float64)
+    if args.opencv_to_nerfstudio:
+        camera_to_world[:3, 1:3] *= -1
     data_result["camera_path"].append(
         {
-            "camera_to_world": f["transform_matrix"],
+            "camera_to_world": camera_to_world.tolist(),
             "fov": np.rad2deg(data_init["camera_angle_x"]),
         }
     )

@@ -1,0 +1,12 @@
+{
+    "office_2": {
+        "obj_desc": "dumbbell",
+        "scene_desc": "office",
+        "ic_light_prompt": "a dumbbell",
+        "prompt_initial": "a table in a office",
+        "prompt_desired": "a <rare_token> dumbbell on a table in a office",
+        "betas_str_generation": "0.5 0.6",
+        "max_num_iterations_voi": 4000,
+        "refine_after": 2000
+    }
+}

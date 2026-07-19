@@ -82,6 +82,18 @@ class RandomCamerasDataManagerObjSceneConfig(DataManagerConfig):
     """Whether to use min or mean for image generation"""
     seed: int = 42
     """Random seed"""
+    load_eval_data: int = 1
+    """Load obj_scene_eval images and masks. Set to 0 for PLY-only training."""
+    camera_sampling_mode: Literal["orbit", "trajectory"] = "orbit"
+    """Use orbit cameras, or the real ego-camera trajectory from transforms.json."""
+    trajectory_min_distance: float = 2.0
+    """Minimum ego-camera to object-center distance in metres."""
+    trajectory_max_distance: float = 30.0
+    """Maximum ego-camera to object-center distance in metres."""
+    trajectory_position_jitter: float = 0.05
+    """One-sigma local position perturbation, in metres, around a real pose."""
+    trajectory_rotation_jitter_deg: float = 1.0
+    """One-sigma local rotation perturbation, in degrees, around a real pose."""
 
 
 class RandomCamerasDataManagerObjScene(DataManager):  # pylint: disable=abstract-method
@@ -362,29 +374,37 @@ class RandomCamerasDataManagerObjScene(DataManager):  # pylint: disable=abstract
                 .astype(np.float32)
             )
 
-            # find intersections
-            ans = self.voxel_scene.cast_rays(rays)
-            t_hit = ans["t_hit"].numpy()
-            t_hit = np.clip(t_hit, 0.0, 1e6)
-            x_hit = rays[:, :3] + rays[:, 3:] * t_hit.reshape(-1, 1)
+            if self.config.use_min_for_generation == -1:
+                # No scene-surface constraint: sample camera distances directly.
+                # Calling cast_rays on an empty RaycastingScene is both unnecessary
+                # and can stall on some Open3D builds.
+                t_hit = np.random.uniform(
+                    self.dist_range[0], self.dist_range[1], size=rays.shape[0]
+                )
+            else:
+                # find intersections with the scene surface
+                ans = self.voxel_scene.cast_rays(rays)
+                t_hit = ans["t_hit"].numpy()
+                t_hit = np.clip(t_hit, 0.0, 1e6)
+                x_hit = rays[:, :3] + rays[:, 3:] * t_hit.reshape(-1, 1)
 
-            clamped_point = np.maximum(
-                bb_obj_np[0].reshape(1, -1),
-                np.minimum(x_hit, bb_obj_np[1].reshape(1, -1)),
-            )
-            dist_x_hit_obj = np.linalg.norm(x_hit - clamped_point, axis=1)
-            good_mask = dist_x_hit_obj >= self.dist_range[0]
-            # IMPORTANT: Update t_hit
-            t_hit = dist_x_hit_obj / np.linalg.norm(rays[:, 3:], axis=1)
+                clamped_point = np.maximum(
+                    bb_obj_np[0].reshape(1, -1),
+                    np.minimum(x_hit, bb_obj_np[1].reshape(1, -1)),
+                )
+                dist_x_hit_obj = np.linalg.norm(x_hit - clamped_point, axis=1)
+                good_mask = dist_x_hit_obj >= self.dist_range[0]
+                # IMPORTANT: Update t_hit
+                t_hit = dist_x_hit_obj / np.linalg.norm(rays[:, 3:], axis=1)
 
-            # take only poses which are kinda far from the object
-            rays = rays[good_mask]
-            t_hit = t_hit[good_mask]
-            t_hit = np.clip(t_hit, 0, self.dist_range[1])
-            t_hit = t_hit - self.config.shift_from_hit
-            t_hit = self.dist_range[0] + np.random.rand(t_hit.shape[0]) * (
-                t_hit - self.dist_range[0]
-            )
+                # take only poses which are kinda far from the object
+                rays = rays[good_mask]
+                t_hit = t_hit[good_mask]
+                t_hit = np.clip(t_hit, 0, self.dist_range[1])
+                t_hit = t_hit - self.config.shift_from_hit
+                t_hit = self.dist_range[0] + np.random.rand(t_hit.shape[0]) * (
+                    t_hit - self.dist_range[0]
+                )
 
             # get look_at (object), look_from (somewhere in the scene)
             look_at = rays[:, :3]
@@ -420,6 +440,107 @@ class RandomCamerasDataManagerObjScene(DataManager):  # pylint: disable=abstract
         ).to(self.device)
 
         return cameras
+
+    def _load_trajectory_poses(self, transforms: dict) -> None:
+        """Load visible ego-camera poses and convert OpenCV C2W to Nerfstudio C2W."""
+        poses = torch.tensor(
+            [frame["transform_matrix"] for frame in transforms.get("frames", [])],
+            dtype=torch.float32,
+            device=self.device,
+        )
+        if poses.numel() == 0:
+            raise RuntimeError("trajectory camera sampling requires frames in transforms.json")
+
+        # The road reconstruction stores OpenCV camera axes (+Z forward, +Y down).
+        # Nerfstudio expects OpenGL axes (-Z forward, +Y up).
+        poses[:, :3, 1:3] *= -1
+        centers = poses[:, :3, 3]
+        object_center = (self.bb_obj[0] + self.bb_obj[1]) / 2
+        points_camera = torch.einsum(
+            "nij,nj->ni", poses[:, :3, :3].transpose(1, 2), object_center - centers
+        )
+        distances = torch.linalg.norm(points_camera, dim=1)
+
+        # In Nerfstudio/OpenGL coordinates, points in front of the camera have z < 0.
+        z = -points_camera[:, 2]
+        fx = float(transforms["fl_x"])
+        fy = float(transforms.get("fl_y", fx))
+        width = int(transforms["w"])
+        height = int(transforms["h"])
+        cx = float(transforms.get("cx", width / 2))
+        cy = float(transforms.get("cy", height / 2))
+        u = fx * points_camera[:, 0] / z + cx
+        v = fy * points_camera[:, 1] / z + cy
+        margin = 0.05
+        visible = (
+            (z > 0)
+            & (distances >= self.config.trajectory_min_distance)
+            & (distances <= self.config.trajectory_max_distance)
+            & (u >= -margin * width)
+            & (u <= (1 + margin) * width)
+            & (v >= -margin * height)
+            & (v <= (1 + margin) * height)
+        )
+        if not visible.any():
+            raise RuntimeError(
+                "No real trajectory frame sees the object. Adjust its placement or "
+                "increase trajectory_max_distance."
+            )
+
+        self.trajectory_poses = poses[visible, :3, :]
+        self.trajectory_fx = fx
+        self.trajectory_fy = fy
+        self.trajectory_cx = cx
+        self.trajectory_cy = cy
+        self.trajectory_width = width
+        self.trajectory_height = height
+        CONSOLE.print(
+            f"Using {len(self.trajectory_poses)}/{len(poses)} visible real trajectory poses"
+        )
+
+    def generate_trajectory_cameras(self, num_poses: int, jitter: bool = True):
+        """Sample true ego poses, with only a small camera-local perturbation."""
+        ids = torch.randint(
+            len(self.trajectory_poses), (num_poses,), device=self.device
+        )
+        poses = self.trajectory_poses[ids].clone()
+        if jitter:
+            rotation = poses[:, :3, :3]
+            translation_noise = torch.randn(
+                (num_poses, 3), device=self.device
+            ) * self.config.trajectory_position_jitter
+            poses[:, :3, 3] += torch.bmm(
+                rotation, translation_noise.unsqueeze(-1)
+            ).squeeze(-1)
+
+            angles = torch.deg2rad(
+                torch.randn((num_poses, 3), device=self.device)
+                * self.config.trajectory_rotation_jitter_deg
+            )
+            sx, sy, sz = torch.sin(angles).unbind(dim=1)
+            cx, cy, cz = torch.cos(angles).unbind(dim=1)
+            zeros = torch.zeros_like(cx)
+            ones = torch.ones_like(cx)
+            rx = torch.stack(
+                [ones, zeros, zeros, zeros, cx, -sx, zeros, sx, cx], dim=1
+            ).reshape(-1, 3, 3)
+            ry = torch.stack(
+                [cy, zeros, sy, zeros, ones, zeros, -sy, zeros, cy], dim=1
+            ).reshape(-1, 3, 3)
+            rz = torch.stack(
+                [cz, -sz, zeros, sz, cz, zeros, zeros, zeros, ones], dim=1
+            ).reshape(-1, 3, 3)
+            poses[:, :3, :3] = torch.bmm(rotation, torch.bmm(rz, torch.bmm(ry, rx)))
+
+        return Cameras(
+            camera_to_worlds=poses,
+            fx=self.trajectory_fx,
+            fy=self.trajectory_fy,
+            cx=self.trajectory_cx,
+            cy=self.trajectory_cy,
+            width=self.trajectory_width,
+            height=self.trajectory_height,
+        ).to(self.device)
 
     def _load_obj_scene(self):
         curr_obj_scene_datapath = Path(self.obj_scene_datapath)
@@ -578,13 +699,22 @@ class RandomCamerasDataManagerObjScene(DataManager):  # pylint: disable=abstract
         )
         CONSOLE.print(f"center: {self.config.center}")
 
-        scene_pts = scene_gauss_params["means"]
-        scene_pts_width = torch.exp(
-            scene_gauss_params["scales"].max(dim=1).values
-        )
-        self.voxel_scene = self._generate_voxel_scene(
-            scene_pts, scene_pts_width, self.config.voxel_size, device=device
-        )
+        if self.config.camera_sampling_mode == "trajectory":
+            self._load_trajectory_poses(data)
+
+        if self.config.use_min_for_generation == -1:
+            # PLY-only random-camera training samples distances directly, so it
+            # never casts scene rays.  Avoid constructing a potentially huge
+            # Open3D voxel scene merely for that unused operation.
+            self.voxel_scene = None
+        else:
+            scene_pts = scene_gauss_params["means"]
+            scene_pts_width = torch.exp(
+                scene_gauss_params["scales"].max(dim=1).values
+            )
+            self.voxel_scene = self._generate_voxel_scene(
+                scene_pts, scene_pts_width, self.config.voxel_size, device=device
+            )
 
         self.is_lighting_phase = False
         self.is_refining_phase = False
@@ -625,15 +755,26 @@ class RandomCamerasDataManagerObjScene(DataManager):  # pylint: disable=abstract
             self.fixed_directions_train = None
 
         # change devices to cpu
-        cameras = self.generate_random_cameras(
-            num_poses=self.config.num_eval_angles,
-            chunk_size=self.config.num_eval_angles,
-            resolution=self.config.eval_resolution,
-            directions=self.fixed_directions_eval,
-        )
+        if self.config.camera_sampling_mode == "trajectory":
+            cameras = self.generate_trajectory_cameras(
+                num_poses=self.config.num_eval_angles, jitter=False
+            )
+        else:
+            cameras = self.generate_random_cameras(
+                num_poses=self.config.num_eval_angles,
+                chunk_size=self.config.num_eval_angles,
+                resolution=self.config.eval_resolution,
+                directions=self.fixed_directions_eval,
+            )
 
-        # eval dataset it here!
-        self._load_obj_scene()
+        # Random-camera training does not use ground-truth images.  Keep the
+        # original validation behaviour by default, but let PLY-only scenes
+        # start without obj_scene_eval/images or masks.
+        self.has_eval_data = self.config.load_eval_data != 0
+        if self.has_eval_data:
+            self._load_obj_scene()
+        else:
+            self.eval_cameras = cameras
 
         self.train_dataset = TrivialDataset(cameras)
         self.eval_dataset = TrivialDataset(self.eval_cameras)
@@ -662,9 +803,18 @@ class RandomCamerasDataManagerObjScene(DataManager):  # pylint: disable=abstract
         """Returns the next evaluation batch
 
         Returns a Camera instead of raybundle"""
+        if not self.has_eval_data:
+            raise RuntimeError(
+                "Evaluation data was disabled (load_eval_data=0). "
+                "Set all Nerfstudio eval intervals to 0 for PLY-only training."
+            )
         return self.next_eval_image(step=step)
 
     def next_eval_image(self, step: int) -> Tuple[Cameras, Dict]:
+        if not self.has_eval_data:
+            raise RuntimeError(
+                "Evaluation images are unavailable because load_eval_data=0."
+            )
         torch.manual_seed(42)
         self.eval_count += 1
 
@@ -682,12 +832,17 @@ class RandomCamerasDataManagerObjScene(DataManager):  # pylint: disable=abstract
         # torch.manual_seed(42)
         self.train_count += 1
 
-        cameras = self.generate_random_cameras(
-            num_poses=self.config.train_images_per_batch,
-            chunk_size=2,
-            resolution=self.config.train_resolution,
-            directions=self.fixed_directions_train,
-        )
+        if self.config.camera_sampling_mode == "trajectory":
+            cameras = self.generate_trajectory_cameras(
+                num_poses=self.config.train_images_per_batch, jitter=True
+            )
+        else:
+            cameras = self.generate_random_cameras(
+                num_poses=self.config.train_images_per_batch,
+                chunk_size=2,
+                resolution=self.config.train_resolution,
+                directions=self.fixed_directions_train,
+            )
 
         return cameras, {}
 
